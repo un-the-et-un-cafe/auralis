@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+  # M1+ placeholders — not run yet
+  android:
+    name: android (stub)
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - name: Placeholder
+        run: echo "Android CI not yet — reserved for M1+"
+
+  ios:
+    name: ios (stub)
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - name: Placeholder
+        run: echo "iOS CI not yet — reserved for M1+"

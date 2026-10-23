@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crates/omcp-core"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/un-the-et-un-cafe/open-mesh-chat"
