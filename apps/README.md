@@ -10,8 +10,8 @@
 
 ### Implemented vs deferred (this PR)
 
-**Implemented (UI shells):** Chats list, chat thread, security centre, gateway settings, Communities empty (v0.2), Live empty (v0.2), You hub, path chips/banners, EN/FR strings, omcp-core stubs.
+**Implemented (UI shells):** Chats list (empty-state default), chat thread, Contact-add + My QR, security centre, gateway settings (0/500 MB), Communities empty (v0.2), Live empty (v0.2), You hub, path chips/banners, EN/FR strings, omcp-core stubs.
 
-**Deferred:** Onboarding / recovery phrase, QR/NFC, real BLE mesh, MLS, file transfer, JNI/FFI to `crates/omcp-core`, encrypted backup, store listings.
+**Deferred:** Onboarding / recovery phrase, real QR camera / NFC wiring, You→Profile/QR, real BLE mesh, MLS, file transfer, JNI/FFI to `crates/omcp-core`, encrypted backup, store listings.
 
 M2–M4 must land before path indicators and gateway toggles drive real transport state.

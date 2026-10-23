@@ -48,22 +48,31 @@ import chat.omcp.app.ui.components.ChatRowModel
 import chat.omcp.app.ui.components.EmptyState
 import chat.omcp.app.ui.components.PathBanner
 import chat.omcp.app.ui.components.PathChip
+import chat.omcp.app.ui.debug.DesignReviewFlags
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
-/** Placeholder rows matching Designy chats-list mockup (no live mesh yet). */
-private val SampleChats = listOf(
+/**
+ * Designy lock-in: sample rows only when [DesignReviewFlags.showSampleChatsForDesignReview]
+ * is on (off by default). Release/default UI is empty-state only.
+ */
+private val DesignReviewSampleChats = listOf(
     ChatRowModel("1", "Alex Rivera", "See you at the park entrance", "9:38", "AL", true, path = OmcpCoreStub.PathKind.Mesh),
     ChatRowModel("2", "Neighbourhood watch", "Maya: Power’s back on our street", "9:12", "N", false, unread = 3, isGroup = true),
     ChatRowModel("3", "Jules Bernard", "Waiting for mesh… photo.pdf", "8:55", "JB", false, path = OmcpCoreStub.PathKind.Queued),
     ChatRowModel("4", "Sam Kim", "Sent via neighbour’s Internet", "Yesterday", "SK", true, path = OmcpCoreStub.PathKind.Gateway),
 )
 
+private fun visibleChats(): List<ChatRowModel> =
+    if (DesignReviewFlags.showSampleChatsForDesignReview) DesignReviewSampleChats else emptyList()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatsListScreen(
     onOpenChat: (String) -> Unit,
+    onAddContact: () -> Unit,
 ) {
     val status = OmcpCoreStub.meshStatus()
+    val chats = visibleChats()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -72,8 +81,8 @@ fun ChatsListScreen(
                     IconButton(onClick = { /* search shell */ }) {
                         Icon(Icons.Default.Search, contentDescription = "Search")
                     }
-                    IconButton(onClick = { /* add contact shell */ }) {
-                        Icon(Icons.Default.Add, contentDescription = "Add contact")
+                    IconButton(onClick = onAddContact) {
+                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.contact_add_title))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -100,14 +109,14 @@ fun ChatsListScreen(
                     PathChip(OmcpCoreStub.PathKind.Queued, if (status.queuedCount > 0) "${status.queuedCount} queued" else "Core stub")
                 }
             }
-            if (SampleChats.isEmpty()) {
+            if (chats.isEmpty()) {
                 EmptyState(
                     title = stringResource(R.string.chats_empty_title),
                     body = stringResource(R.string.chats_empty_body),
                 )
             } else {
                 LazyColumn {
-                    items(SampleChats, key = { it.id }) { row ->
+                    items(chats, key = { it.id }) { row ->
                         ChatRow(row, onClick = { onOpenChat(row.id) })
                     }
                 }
@@ -123,7 +132,8 @@ fun ChatThreadScreen(
     onBack: () -> Unit,
     onSecurity: () -> Unit,
 ) {
-    val chat = SampleChats.find { it.id == chatId } ?: SampleChats.first()
+    val chat = visibleChats().find { it.id == chatId }
+        ?: ChatRowModel(chatId, "Chat", "", "", "?", false, path = OmcpCoreStub.PathKind.Mesh)
     val c = LocalOmcpColors.current
     var draft by remember { mutableStateOf("") }
     Scaffold(
@@ -185,6 +195,7 @@ fun ChatThreadScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            // Path banner: mesh / gateway / mixed / queued only — no iOS BLE callout here (Designy).
             PathBanner(
                 kind = chat.path ?: OmcpCoreStub.PathKind.Mesh,
                 text = when (chat.path) {
@@ -202,11 +213,13 @@ fun ChatThreadScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item {
-                    Bubble(mine = false, text = chat.preview, meta = "9:30 · Delivered · Mesh")
-                }
-                item {
-                    Bubble(mine = true, text = "Placeholder reply — mesh not linked yet.", meta = "9:32 · Queued")
+                if (chat.preview.isNotEmpty()) {
+                    item {
+                        Bubble(mine = false, text = chat.preview, meta = "9:30 · Delivered · Mesh")
+                    }
+                    item {
+                        Bubble(mine = true, text = "Placeholder reply — mesh not linked yet.", meta = "9:32 · Queued")
+                    }
                 }
             }
         }

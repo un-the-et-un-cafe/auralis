@@ -24,8 +24,10 @@ import chat.omcp.app.R
 import chat.omcp.app.ui.screens.ChatThreadScreen
 import chat.omcp.app.ui.screens.ChatsListScreen
 import chat.omcp.app.ui.screens.CommunitiesHomeScreen
+import chat.omcp.app.ui.screens.ContactAddScreen
 import chat.omcp.app.ui.screens.GatewaySettingsScreen
 import chat.omcp.app.ui.screens.LiveTabScreen
+import chat.omcp.app.ui.screens.MyQrScreen
 import chat.omcp.app.ui.screens.SecurityCentreScreen
 import chat.omcp.app.ui.screens.YouScreen
 
@@ -37,6 +39,8 @@ private object Routes {
     const val Thread = "thread/{chatId}"
     const val Security = "security"
     const val Gateway = "gateway"
+    const val ContactAdd = "contact-add"
+    const val MyQr = "my-qr"
 
     fun thread(id: String) = "thread/$id"
 }
@@ -86,7 +90,10 @@ fun OmcpRoot() {
             modifier = Modifier.padding(padding),
         ) {
             composable(Routes.Chats) {
-                ChatsListScreen(onOpenChat = { nav.navigate(Routes.thread(it)) })
+                ChatsListScreen(
+                    onOpenChat = { nav.navigate(Routes.thread(it)) },
+                    onAddContact = { nav.navigate(Routes.ContactAdd) },
+                )
             }
             composable(Routes.Communities) { CommunitiesHomeScreen() }
             composable(Routes.Live) { LiveTabScreen() }
@@ -109,6 +116,15 @@ fun OmcpRoot() {
             }
             composable(Routes.Gateway) {
                 GatewaySettingsScreen(onBack = { nav.popBackStack() })
+            }
+            composable(Routes.ContactAdd) {
+                ContactAddScreen(
+                    onBack = { nav.popBackStack() },
+                    onMyQr = { nav.navigate(Routes.MyQr) },
+                )
+            }
+            composable(Routes.MyQr) {
+                MyQrScreen(onBack = { nav.popBackStack() })
             }
         }
     }

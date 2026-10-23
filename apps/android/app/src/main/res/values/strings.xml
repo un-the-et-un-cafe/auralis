@@ -27,4 +27,20 @@
     <string name="chats_empty_body">Add someone nearby with QR or NFC.</string>
     <string name="ios_companion_hint">For always-on mesh while phones sleep, an Android companion gateway nearby helps — iOS may pause BLE in the background.</string>
     <string name="mesh_placeholder">Mesh path: placeholder (omcp-core FFI not wired yet)</string>
+    <string name="contact_add_title">Add contact</string>
+    <string name="contact_add_subtitle">Add someone nearby with QR or NFC.</string>
+    <string name="contact_add_scan_qr">Scan QR</string>
+    <string name="contact_add_scan_qr_desc">Point at their Open Mesh Chat QR</string>
+    <string name="contact_add_my_qr">My QR</string>
+    <string name="contact_add_my_qr_desc">Let someone scan you</string>
+    <string name="contact_add_nfc">NFC tap</string>
+    <string name="contact_add_nfc_desc">Hold phones together</string>
+    <string name="contact_add_peer_id">Enter PeerID</string>
+    <string name="contact_add_peer_id_desc">Advanced</string>
+    <string name="my_qr_placeholder">QR payload when mesh identity is wired</string>
+    <string name="my_qr_hint">Others scan this to add you. Safety number shown after scan.</string>
+    <string name="ios_ble_pause_callout">iOS may pause mesh in background — open the app to sync. An always-on Android companion nearby is recommended for gateway duty.</string>
+    <string name="ios_ble_tip_title">Background mesh on iOS</string>
+    <string name="ios_ble_tip_body">iOS may pause BLE when the app is backgrounded. Use Gateway settings, or keep an Android companion nearby for always-on mesh.</string>
+    <string name="ios_ble_tip_dismiss">Got it</string>
 </resources>

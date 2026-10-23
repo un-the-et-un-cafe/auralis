@@ -12,48 +12,85 @@ struct ChatRowModel: Identifiable {
     var isGroup: Bool = false
 }
 
-enum SampleData {
+/// Designy lock-in: sample rows only when [DesignReviewFlags.showSampleChatsForDesignReview]
+/// is on (off by default). Release/default UI is empty-state only.
+enum DesignReviewSampleData {
     static let chats: [ChatRowModel] = [
         .init(id: "1", title: "Alex Rivera", preview: "See you at the park entrance", time: "9:38", initials: "AL", verified: true, path: .mesh),
         .init(id: "2", title: "Neighbourhood watch", preview: "Maya: Power’s back on our street", time: "9:12", initials: "N", verified: false, unread: 3, isGroup: true),
         .init(id: "3", title: "Jules Bernard", preview: "Waiting for mesh… photo.pdf", time: "8:55", initials: "JB", verified: false, path: .queued),
         .init(id: "4", title: "Sam Kim", preview: "Sent via neighbour’s Internet", time: "Yesterday", initials: "SK", verified: true, path: .gateway),
     ]
+
+    static var visibleChats: [ChatRowModel] {
+        DesignReviewFlags.showSampleChatsForDesignReview ? chats : []
+    }
 }
 
 struct ChatsListView: View {
     @Environment(\.omcpColors) private var c
     private let status = OmcpCoreStub.meshStatus()
+    private var chats: [ChatRowModel] { DesignReviewSampleData.visibleChats }
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    HStack(spacing: 8) {
-                        PathChip(kind: .mesh, label: status.nearbyPeers > 0 ? "Mesh · \(status.nearbyPeers) nearby" : "Mesh · placeholder")
-                        PathChip(kind: .queued, label: OmcpCoreStub.coreLinked ? "\(status.queuedCount) queued" : "Core stub")
+            Group {
+                if chats.isEmpty {
+                    VStack(spacing: 0) {
+                        statusStrip
+                        Spacer()
+                        VStack(spacing: 12) {
+                            Text(String(localized: "chats_empty_title"))
+                                .font(.title2.weight(.semibold))
+                            Text(String(localized: "chats_empty_body"))
+                                .font(.subheadline)
+                                .foregroundStyle(c.ink2)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
+                        Spacer()
                     }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
-                }
-                ForEach(SampleData.chats) { row in
-                    NavigationLink(value: row.id) {
-                        ChatRowView(model: row)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(c.bg)
+                } else {
+                    List {
+                        Section {
+                            statusStrip
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+                        }
+                        ForEach(chats) { row in
+                            NavigationLink(value: row.id) {
+                                ChatRowView(model: row)
+                            }
+                        }
                     }
+                    .listStyle(.plain)
+                    .background(c.bg)
                 }
             }
-            .listStyle(.plain)
-            .background(c.bg)
             .navigationTitle(String(localized: "tab_chats"))
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button(action: {}) { Image(systemName: "magnifyingglass") }
-                    Button(action: {}) { Image(systemName: "plus") }
+                    NavigationLink {
+                        ContactAddView()
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel(String(localized: "contact_add_title"))
                 }
             }
             .navigationDestination(for: String.self) { id in
                 ChatThreadView(chatId: id)
             }
+        }
+    }
+
+    private var statusStrip: some View {
+        HStack(spacing: 8) {
+            PathChip(kind: .mesh, label: status.nearbyPeers > 0 ? "Mesh · \(status.nearbyPeers) nearby" : "Mesh · placeholder")
+            PathChip(kind: .queued, label: OmcpCoreStub.coreLinked ? "\(status.queuedCount) queued" : "Core stub")
         }
     }
 }
@@ -114,9 +151,11 @@ struct ChatThreadView: View {
     @State private var draft = ""
 
     private var chat: ChatRowModel {
-        SampleData.chats.first { $0.id == chatId } ?? SampleData.chats[0]
+        DesignReviewSampleData.visibleChats.first { $0.id == chatId }
+            ?? ChatRowModel(id: chatId, title: "Chat", preview: "", time: "", initials: "?", verified: false, path: .mesh)
     }
 
+    /// Path banner copy only — mesh/gateway/mixed/queued. No iOS BLE callout (Designy: that lives on You → Gateway).
     private var bannerText: String {
         switch chat.path {
         case .gateway: return "Sent via neighbour’s Internet · encrypted end-to-end"
@@ -131,8 +170,10 @@ struct ChatThreadView: View {
             PathBanner(kind: chat.path ?? .mesh, text: bannerText)
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    bubble(mine: false, text: chat.preview, meta: "9:30 · Delivered · Mesh")
-                    bubble(mine: true, text: "Placeholder reply — mesh not linked yet.", meta: "9:32 · Queued")
+                    if !chat.preview.isEmpty {
+                        bubble(mine: false, text: chat.preview, meta: "9:30 · Delivered · Mesh")
+                        bubble(mine: true, text: "Placeholder reply — mesh not linked yet.", meta: "9:32 · Queued")
+                    }
                 }
                 .padding(16)
             }

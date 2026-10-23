@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// Jakob: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
+/// Jakob / Designy: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
+/// Cap meter always starts at **0 of 500 MB** — never ship a fake “200 of 500” fill.
+/// iOS BLE pause callout lives here (You → Gateway), next to the Android companion recommendation —
+/// not on the Chats/thread path banner.
 struct GatewaySettingsView: View {
     @Environment(\.omcpColors) private var c
     @State private var gatewayOn = false
@@ -10,7 +13,7 @@ struct GatewaySettingsView: View {
     @State private var showMeteredWarn = false
 
     private let dailyCapMB = 500
-    private let usedMB = 0
+    private let usedMB = 0 // real metering not wired yet; Designy lock-in: 0 used
 
     var body: some View {
         ScrollView {
@@ -78,14 +81,18 @@ struct GatewaySettingsView: View {
                     .padding(.top, 8)
                 }
 
-                Text(String(localized: "ios_companion_hint"))
-                    .font(.caption)
-                    .foregroundStyle(c.ink2)
-
-                // iOS background BLE callout (PROTOCOL §13.4 / Designy §8.2)
-                Text("iOS may pause mesh in background — open the app to sync. An always-on Android companion nearby is recommended for gateway duty.")
-                    .font(.caption)
-                    .foregroundStyle(c.ink2)
+                // Designy: iOS BLE pause + Android companion — together on You → Gateway.
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(String(localized: "ios_companion_hint"))
+                        .font(.caption)
+                        .foregroundStyle(c.ink2)
+                    Text(String(localized: "ios_ble_pause_callout"))
+                        .font(.caption)
+                        .foregroundStyle(c.ink2)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(c.warnSoft.opacity(0.65), in: RoundedRectangle(cornerRadius: 14))
             }
             .padding(16)
         }

@@ -39,9 +39,10 @@ import chat.omcp.app.core.OmcpCoreStub
 import chat.omcp.app.ui.components.PathChip
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
-/** Jakob: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular. */
+/** Jakob / Designy: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
+ * Cap meter always starts at **0 of 500 MB** — never ship a fake “200 of 500” fill. */
 private const val DEFAULT_DAILY_CAP_MB = 500
-private const val SAMPLE_USED_MB = 0
+private const val USED_MB = 0 // real metering not wired yet; Designy lock-in: 0 used
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -146,12 +147,12 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
                 )
                 Text(stringResource(R.string.gateway_cap), style = MaterialTheme.typography.titleSmall)
                 Text(
-                    stringResource(R.string.gateway_cap_desc, SAMPLE_USED_MB, DEFAULT_DAILY_CAP_MB),
+                    stringResource(R.string.gateway_cap_desc, USED_MB, DEFAULT_DAILY_CAP_MB),
                     color = c.ink2,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 LinearProgressIndicator(
-                    progress = { SAMPLE_USED_MB / DEFAULT_DAILY_CAP_MB.toFloat() },
+                    progress = { USED_MB / DEFAULT_DAILY_CAP_MB.toFloat() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp)

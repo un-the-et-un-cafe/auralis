@@ -16,6 +16,8 @@ android {
         versionName = "0.1.0-shell"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        // Designy lock-in: sample chats off by default; enable only for design-review builds.
+        buildConfigField("boolean", "SHOW_SAMPLE_CHATS_FOR_DESIGN_REVIEW", "false")
     }
 
     buildTypes {
