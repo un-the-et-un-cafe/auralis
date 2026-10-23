@@ -92,4 +92,4 @@ Report vulnerabilities privately to the maintainers before public disclosure. Do
 
 ## Licence
 
-[MIT](./LICENSE) © Jakob Michahelles and contributors.
+[MIT](./LICENSE) © OMCP contributors.
