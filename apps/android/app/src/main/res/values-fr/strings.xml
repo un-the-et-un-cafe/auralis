@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Open Mesh Chat</string>
+    <string name="tab_chats">Discussions</string>
+    <string name="tab_communities">Communautés</string>
+    <string name="tab_live">Live</string>
+    <string name="tab_you">Vous</string>
+    <string name="coming_v02_title">Bientôt en v0.2</string>
+    <string name="communities_empty_body">Les communautés (rôles, annonces, sujets) arriveront en v0.2. Vos discussions restent dans Discussions.</string>
+    <string name="live_empty_body">Les lives nécessitent le Wi‑Fi ou Internet. Le mesh n’affiche que le statut. Le Live complet arrive en v0.2.</string>
+    <string name="path_mesh">Via le mesh</string>
+    <string name="path_gateway">Via l’Internet d’un voisin</string>
+    <string name="path_mixed">Chemins mixtes</string>
+    <string name="path_queued">En attente du mesh</string>
+    <string name="gateway_title">Passerelle</string>
+    <string name="gateway_act_as">Agir comme passerelle</string>
+    <string name="gateway_act_as_desc">Relayer les pairs mesh lorsque vous avez Internet</string>
+    <string name="gateway_mobile_data">Autoriser les données mobiles</string>
+    <string name="gateway_mobile_data_desc">Désactivé = Wi‑Fi uniquement. Les plafonds s’appliquent dans les deux cas.</string>
+    <string name="gateway_metered_warn">Vous êtes en données cellulaires mesurées. La passerelle utilisera le forfait — continuez seulement si vous en êtes sûr·e.</string>
+    <string name="gateway_cap">Plafond quotidien</string>
+    <string name="gateway_cap_desc">%1$d Mo utilisés sur %2$d Mo aujourd’hui</string>
+    <string name="security_centre">Centre de sécurité</string>
+    <string name="verified_contact">Contact vérifié</string>
+    <string name="unverified">Non vérifié</string>
+    <string name="chats_empty_title">Aucune discussion</string>
+    <string name="chats_empty_body">Ajoutez quelqu’un à proximité avec QR ou NFC.</string>
+    <string name="ios_companion_hint">Pour un mesh toujours actif, un téléphone Android voisin en passerelle aide — iOS peut suspendre le BLE en arrière-plan.</string>
+    <string name="mesh_placeholder">Chemin mesh : espace réservé (FFI omcp-core pas encore branché)</string>
+    <string name="contact_add_title">Ajouter un contact</string>
+    <string name="contact_add_subtitle">Ajoutez quelqu’un à proximité avec QR ou NFC.</string>
+    <string name="contact_add_scan_qr">Scanner un QR</string>
+    <string name="contact_add_scan_qr_desc">Pointez vers leur QR Open Mesh Chat</string>
+    <string name="contact_add_my_qr">Mon QR</string>
+    <string name="contact_add_my_qr_desc">Laissez quelqu’un vous scanner</string>
+    <string name="contact_add_nfc">Tap NFC</string>
+    <string name="contact_add_nfc_desc">Approchez les téléphones</string>
+    <string name="contact_add_peer_id">Saisir un PeerID</string>
+    <string name="contact_add_peer_id_desc">Avancé</string>
+    <string name="my_qr_placeholder">Charge QR lorsque l’identité mesh sera branchée</string>
+    <string name="my_qr_hint">Les autres scannent ceci pour vous ajouter. Le numéro de sécurité s’affiche après le scan.</string>
+    <string name="ios_ble_pause_callout">iOS peut suspendre le mesh en arrière-plan — rouvrez l’app pour synchroniser. Un compagnon Android toujours actif à proximité est recommandé pour la passerelle.</string>
+    <string name="ios_ble_tip_title">Mesh en arrière-plan sur iOS</string>
+    <string name="ios_ble_tip_body">iOS peut suspendre le BLE lorsque l’app est en arrière-plan. Utilisez Passerelle, ou gardez un compagnon Android à proximité pour un mesh toujours actif.</string>
+    <string name="ios_ble_tip_dismiss">Compris</string>
+</resources>

@@ -31,19 +31,24 @@ jobs:
       - name: Cargo test
         run: cargo test --workspace
 
-  # M1+ placeholders — not run yet
+  # M5 — enable when JDK + SDK image is ready (Pipely). Still skipped.
   android:
     name: android (stub)
     runs-on: ubuntu-latest
     if: false
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "Android CI not yet — reserved for M1+"
+        run: echo "Android CI reserved for M5 — apps/android shell present; enable assembleDebug when SDK available"
 
+  # M6 — needs macOS runner; still skipped.
   ios:
     name: ios (stub)
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     if: false
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "iOS CI not yet — reserved for M1+"
+        run: echo "iOS CI reserved for M6 — apps/ios shell present; enable xcodebuild when macOS pool ready"

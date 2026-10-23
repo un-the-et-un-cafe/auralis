@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OMCP — Gateway settings</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="gateway-settings">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  LTE  ████</span>
+    </div>
+    <div class="nav">
+      <button class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>Gateway</h1>
+      <div style="width:40px;"></div>
+    </div>
+    <div class="content">
+      <div class="scroll">
+        <div class="callout">
+          <strong>Help nearby peers reach the Internet</strong>
+          When on, your phone forwards only encrypted OMCP envelopes. You never see message content. Uses battery and mobile data.
+        </div>
+
+        <div class="card">
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Act as gateway</div>
+              <div class="setting-desc">Bridge mesh peers when you have Internet</div>
+            </div>
+            <div class="toggle on" role="switch" aria-checked="true"></div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Allow on mobile data</div>
+              <div class="setting-desc">Off = Wi‑Fi only. Caps apply either way.</div>
+            </div>
+            <div class="toggle" role="switch" aria-checked="false"></div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Daily data cap</div>
+              <div class="setting-desc">200 MB used of 500 MB today</div>
+            </div>
+          </div>
+          <div class="progress" style="height:6px;margin-top:0;margin-bottom:4px;"><i style="width:40%"></i></div>
+        </div>
+
+        <div class="card">
+          <h2>Battery &amp; privacy</h2>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Battery impact</div>
+              <div class="setting-desc">Gateway mode keeps BLE active and may raise CPU when ferrying traffic. Expect higher drain than chat-only.</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">What others can learn</div>
+              <div class="setting-desc">Nearby peers see that you offer a gateway. Relays see encrypted envelopes and timing — not names or message text.</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Store-and-forward</div>
+              <div class="setting-desc">Hold encrypted envelopes up to 24 h for peers who reconnect. Off by default on mobile.</div>
+            </div>
+            <div class="toggle" role="switch" aria-checked="false"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Path indicators</h2>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="path-chip mesh"><span class="dot"></span>Mesh</span>
+              <span style="font-size:0.8125rem;color:var(--ink-2);">Local BLE only</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="path-chip gateway"><span class="dot"></span>Gateway</span>
+              <span style="font-size:0.8125rem;color:var(--ink-2);">Via a neighbour’s Internet</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="path-chip mixed"><span class="dot"></span>Mixed</span>
+              <span style="font-size:0.8125rem;color:var(--ink-2);">Some via mesh, some via gateway</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="path-chip queue"><span class="dot"></span>Queued</span>
+              <span style="font-size:0.8125rem;color:var(--ink-2);">Waiting for a path</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
