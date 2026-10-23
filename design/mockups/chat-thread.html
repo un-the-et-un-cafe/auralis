@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OMCP — Chat thread</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="chat-thread">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav">
+      <button class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <div style="flex:1;min-width:0;">
+        <h1 style="font-size:1rem;">Alex Rivera <svg class="verified-mark" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:inline;vertical-align:-2px;width:14px;height:14px;"><path d="M12 2l2.4 2.1 3.2-.4 1.2 3 2.9 1.5-1 3.1 1 3.1-2.9 1.5-1.2 3-3.2-.4L12 22l-2.4-2.1-3.2.4-1.2-3-2.9-1.5 1-3.1-1-3.1 2.9-1.5 1.2-3 3.2.4L12 2zm-1.1 13.3l5.3-5.3-1.4-1.4-3.9 3.9-1.8-1.8-1.4 1.4 3.2 3.2z"/></svg></h1>
+        <span class="sub">Nearby · last seen just now</span>
+      </div>
+      <button class="icon-btn" aria-label="Security">
+        <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      </button>
+    </div>
+    <div class="path-banner mesh">
+      <span class="dot" style="width:7px;height:7px;border-radius:50%;background:currentColor;"></span>
+      Via mesh · 2 hops · encrypted end-to-end
+    </div>
+    <div class="content">
+      <div class="messages">
+        <div class="day">Today</div>
+        <div class="bubble them">
+          Are you still near the square? Power’s out on my block.
+          <div class="meta">9:22</div>
+        </div>
+        <div class="bubble me">
+          Yes — about 80 m away. I can relay for you.
+          <div class="meta">9:23 · Delivered</div>
+        </div>
+        <div class="bubble them">
+          Perfect. Sending the checklist.
+          <div class="meta">9:24</div>
+        </div>
+        <div class="bubble them" style="padding:8px;background:transparent;border:none;">
+          <div class="file-card">
+            <div class="file-icon">PDF</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;">outage-checklist.pdf</div>
+              <div style="font-size:0.75rem;color:var(--ink-2);">1.4 MB · received</div>
+              <div class="progress"><i style="width:100%"></i></div>
+            </div>
+          </div>
+          <div class="meta" style="margin-top:6px;">9:25 · Via mesh</div>
+        </div>
+        <div class="bubble me">
+          Got it. See you at the park entrance.
+          <div class="meta">9:38 · Read</div>
+        </div>
+      </div>
+      <div class="composer">
+        <button class="icon-btn" aria-label="Attach" style="width:36px;height:36px;">
+          <svg viewBox="0 0 24 24"><path d="M21.4 11.6l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.2 3.2 0 0 1 4.5 4.5L10 17.4a1.4 1.4 0 1 1-2-2l7.1-7.1"/></svg>
+        </button>
+        <div class="field">Message</div>
+        <button class="send-btn" aria-label="Send">
+          <svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

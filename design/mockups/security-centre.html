@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OMCP — Security centre</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="security-centre">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  LTE  ████</span>
+    </div>
+    <div class="nav">
+      <button class="icon-btn" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h1>Security</h1>
+      <div style="width:40px;"></div>
+    </div>
+    <div class="content">
+      <div class="scroll">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;">
+          <div class="avatar" style="width:56px;height:56px;font-size:1.125rem;">AL</div>
+          <div>
+            <div style="font-weight:700;font-size:1.125rem;">Alex Rivera</div>
+            <div style="font-size:0.8125rem;color:var(--ink-2);margin-top:2px;">omcp1:kx7…m9q</div>
+            <span class="badge ok" style="margin-top:6px;">Verified contact</span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Safety number</h2>
+          <p style="font-size:0.8125rem;color:var(--ink-2);margin-bottom:12px;">Compare these digits in person or over a trusted call. They change only if keys change.</p>
+          <div class="safety-num">
+            48291  03715  66420<br>
+            91833  20574  77106<br>
+            44028  15639  89271<br>
+            30165  72840
+          </div>
+          <div style="display:flex;gap:8px;margin-top:14px;">
+            <button class="btn btn-secondary btn-sm" style="flex:1;">Mark verified</button>
+            <button class="btn btn-secondary btn-sm" style="flex:1;">Scan QR</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Session</h2>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Encryption</div>
+              <div class="setting-desc">End-to-end · Noise hybrid · PQ ready</div>
+            </div>
+            <span class="badge ok">On</span>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Last key refresh</div>
+              <div class="setting-desc">2 days ago · automatic</div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-body">
+              <div class="setting-title">Reset session</div>
+              <div class="setting-desc">Starts a new encrypted session. Past messages stay readable on this device.</div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-block btn-sm" style="margin-top:4px;">Reset session</button>
+        </div>
+
+        <div class="card">
+          <h2>Safety actions</h2>
+          <button class="btn btn-danger btn-block btn-sm">Block contact</button>
+          <p style="font-size:0.75rem;color:var(--ink-3);margin-top:10px;line-height:1.4;">Blocking stops messages and mesh routing through this peer. You can undo later.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

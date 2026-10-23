@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Open Mesh Chat</string>
+    <string name="tab_chats">Chats</string>
+    <string name="tab_communities">Communities</string>
+    <string name="tab_live">Live</string>
+    <string name="tab_you">You</string>
+    <string name="coming_v02_title">Coming in v0.2</string>
+    <string name="communities_empty_body">Communities with roles, announcement channels, and topics will land in v0.2. Your chats stay here in Chats.</string>
+    <string name="live_empty_body">Livestreams need Wi‑Fi or Internet. Mesh can show status only. Full Live arrives in v0.2.</string>
+    <string name="path_mesh">Via mesh</string>
+    <string name="path_gateway">Via neighbour’s Internet</string>
+    <string name="path_mixed">Mixed paths</string>
+    <string name="path_queued">Waiting for mesh</string>
+    <string name="gateway_title">Gateway</string>
+    <string name="gateway_act_as">Act as gateway</string>
+    <string name="gateway_act_as_desc">Bridge mesh peers when you have Internet</string>
+    <string name="gateway_mobile_data">Allow on mobile data</string>
+    <string name="gateway_mobile_data_desc">Off = Wi‑Fi only. Caps apply either way.</string>
+    <string name="gateway_metered_warn">You’re on metered cellular. Gateway will use mobile data — continue only if you’re sure.</string>
+    <string name="gateway_cap">Daily data cap</string>
+    <string name="gateway_cap_desc">%1$d MB used of %2$d MB today</string>
+    <string name="security_centre">Security centre</string>
+    <string name="verified_contact">Verified contact</string>
+    <string name="unverified">Unverified</string>
+    <string name="chats_empty_title">No chats yet</string>
+    <string name="chats_empty_body">Add someone nearby with QR or NFC.</string>
+    <string name="ios_companion_hint">For always-on mesh while phones sleep, an Android companion gateway nearby helps — iOS may pause BLE in the background.</string>
+    <string name="mesh_placeholder">Mesh path: placeholder (omcp-core FFI not wired yet)</string>
+</resources>
