@@ -575,3 +575,14 @@ Then continue Noise splitting / transport key derivation from `ck` as usual.
 |---------|------|-------|
 | 0.1.1 | 2026-10-23 | Wire pins for M1 PR #1 |
 
+
+### 21.7 Handshake field order (OMCP-Noise-Hybrid-v1)
+
+Within each Noise handshake message that carries ML-KEM material:
+
+1. Emit **ML-KEM public fields first** (initiator ephemeral encapsulation key `ek` in message 1; responder ciphertext `ct` in message 2), in cleartext as required by the hybrid construction.
+2. Then emit the **Noise sealed/encrypted payload** (identity proofs, certificates, Hello, etc.).
+
+Rationale: MixHash MUST bind `ek`/`ct` before AEAD seal so an adversary cannot strip or reorder PQ material without failing authentication. Implementations MUST NOT place `ek`/`ct` after the sealed payload.
+
+This matches commit `9e90d33` on PR #1.
