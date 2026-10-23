@@ -9,7 +9,7 @@ Open chat and data-sharing over a Bluetooth mesh. Peers talk without the Interne
 
 ## Status
 
-Milestone **M0** (spec + CI skeleton). Next: **M1** — Noise hybrid handshake + framing unit tests in `omcp-core`.
+Milestone **M1** in progress: Noise hybrid handshake + framing unit tests in `omcp-core` (see PRs). Spec remains v0.1 draft.
 
 ## Licence
 
