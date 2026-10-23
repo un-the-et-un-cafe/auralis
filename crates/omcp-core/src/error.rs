@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Errors returned by framing, negotiation, and handshake APIs.
+/// Errors returned by framing, negotiation, handshake, and BLE transport APIs.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OmcpError {
     #[error("buffer truncated: need at least {need} bytes, have {have}")]
@@ -40,6 +40,15 @@ pub enum OmcpError {
 
     #[error("cryptographic operation failed: {0}")]
     Crypto(&'static str),
+
+    #[error("BLE fragment malformed: {0}")]
+    FragmentMalformed(&'static str),
+
+    #[error("BLE link AEAD failure (tamper or wrong keys)")]
+    LinkAead,
+
+    #[error("application AEAD failure (tamper, wrong keys, or bad UTF-8)")]
+    AppAead,
 }
 
 /// Crate-wide result alias.
