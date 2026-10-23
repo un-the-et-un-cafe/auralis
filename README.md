@@ -42,7 +42,7 @@ This repository holds the **protocol specification**, a **shared reference core*
 ```
 
 1. **Protocol** — [PROTOCOL.md](./PROTOCOL.md) is the source of truth. Independent implementations that pass the stated acceptance criteria are first-class OMCP peers.
-2. **Reference core** — `omcp-core` is a convenience implementation of framing, handshake, crypto helpers, and an in-process BLE loopback chat path (M2). You may use it, fork it, or replace it. It does **not** claim production BLE hardware readiness.
+2. **Reference core** — `omcp-core` is a convenience implementation of framing, handshake, crypto helpers, an in-process BLE loopback chat path (M2), and experimental MLS groups + file chunks (M3). You may use it, fork it, or replace it. It does **not** claim production BLE hardware readiness or production MLS/PQ maturity.
 3. **Reference app** — The Android and iOS clients in this project demonstrate the protocol (mesh chat, gateway toggle, communities/livestream *targets* per §20). They are **examples**, not the exclusive interface to the network.
 
 Third parties may ship their own apps, bots, gateways, and desktop clients under any licence compatible with the MIT protocol text and their own code, so long as they do not misrepresent unofficial software as the sole “official” OMCP client.
@@ -55,7 +55,7 @@ Third parties may ship their own apps, bots, gateways, and desktop clients under
 | --- | --- |
 | [PROTOCOL.md](./PROTOCOL.md) | Full specification (identity, crypto, BLE, gateways, wire pins §21) |
 | [apps/REQUIREMENTS.md](./apps/REQUIREMENTS.md) | Reference app MVP checklist |
-| [extensions/mls-pq.md](./extensions/mls-pq.md) | MLS post-quantum extension stub |
+| [extensions/mls-pq.md](./extensions/mls-pq.md) | MLS post-quantum extension (provisional M3 wire + mix) |
 | [design/](./design/) | Reference UI design pack (when present) |
 
 ---
@@ -67,7 +67,7 @@ Third parties may ship their own apps, bots, gateways, and desktop clients under
 | **M0** | Spec + CI skeleton |
 | **M1** | `omcp-core` Noise hybrid + envelope framing ([PR #1](https://github.com/un-the-et-un-cafe/open-mesh-chat/pull/1)) |
 | **M2** | BLE transport loopback + two-device text chat (in-process GATT pipe in `omcp-core`; not production phone BLE) |
-| **M3** | MLS groups + file chunks |
+| **M3** | MLS groups + file chunks (OpenMLS + chunk crypto in `omcp-core`; **not production-ready**, PQ extension provisional — see [extensions/mls-pq.md](./extensions/mls-pq.md)) |
 | **M4** | Gateway role + optional rendezvous |
 | **M5–M6** | Android / iOS reference betas |
 | **M7** | External crypto review |
