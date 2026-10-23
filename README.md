@@ -1,22 +1,16 @@
 # Open Mesh Chat Protocol (OMCP)
 
-An open mesh chat protocol for interoperable, mesh-friendly messaging.
+Open chat and data-sharing over a Bluetooth mesh. Peers talk without the Internet; any peer with connectivity can bridge others. Designed for outages and strong cryptography (Noise hybrid + MLS + post-quantum KEMs).
 
-**Licence:** [MIT](./LICENSE) (SPDX: MIT)
+- **Protocol:** [PROTOCOL.md](./PROTOCOL.md) (v0.1 draft, includes §20 communities & livestreams target)
+- **Apps checklist:** [apps/REQUIREMENTS.md](./apps/REQUIREMENTS.md) (Android 12+ / iOS 17+)
+- **Core:** Rust shared library [`crates/omcp-core`](./crates/omcp-core) (`omcp-core`)
+- **Extensions:** [extensions/mls-pq.md](./extensions/mls-pq.md)
 
 ## Status
 
-M0 repository and CI skeleton. The M0 protocol / specification package lands next (see upcoming `PROTOCOL.md`).
+Milestone **M0** (spec + CI skeleton). Next: **M1** — Noise hybrid handshake + framing unit tests in `omcp-core`.
 
-| Doc | Status |
-| --- | --- |
-| [PROTOCOL.md](./PROTOCOL.md) | Placeholder — Proggy will add the M0 spec |
-| [REQUIREMENTS.md](./REQUIREMENTS.md) | Placeholder — not yet on this branch |
+## Licence
 
-## Workspace
-
-Minimal Rust workspace stub so M0 CI has something to run:
-
-- `crates/omcp-core` — trivial library crate (fmt / clippy / test gate)
-
-Android and iOS CI jobs are stubs for M1+.
+[MIT](./LICENSE) © Jakob Michahelles
