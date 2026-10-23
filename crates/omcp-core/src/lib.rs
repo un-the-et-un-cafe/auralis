@@ -1,16 +1,25 @@
-//! OMCP core stub for M0 CI. Spec and real types land with M0 protocol push.
+//! Open Mesh Chat Protocol (`omcp-core`) — M1 core library.
+//!
+//! Provides:
+//! - Canonical [`framing::EnvelopeV1`] encode/decode (PROTOCOL §10.1, §21.1–§21.4)
+//! - Version / suite negotiation hooks (PROTOCOL §5.2, §10.3)
+//! - Noise_IK + ML-KEM-768 hybrid (`OMCP-Noise-Hybrid-v1`, PROTOCOL §21.5)
+//!
+//! Not in scope for M1: BLE transport, MLS groups, apps, gateway.
 
-/// Trivial identity helper so CI has a public API and unit test to exercise.
-pub fn ping() -> &'static str {
-    "omcp"
-}
+#![forbid(unsafe_code)]
+#![allow(missing_docs)] // field-level docs filled as API stabilizes post-M1
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod error;
+pub mod framing;
+pub mod handshake;
+pub mod negotiate;
+pub mod suite;
 
-    #[test]
-    fn ping_returns_omcp() {
-        assert_eq!(ping(), "omcp");
-    }
-}
+pub use error::{OmcpError, Result};
+pub use framing::EnvelopeV1;
+pub use handshake::{
+    HybridInitiator, HybridResponder, HybridSessionKeys, StaticIdentity, HYBRID_PROTOCOL_NAME,
+};
+pub use negotiate::{negotiate, Hello, Negotiated};
+pub use suite::{SUITE_OMCP_2026_A, SUITE_OMCP_2026_A_NAME};
