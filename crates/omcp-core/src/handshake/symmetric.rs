@@ -132,15 +132,22 @@ impl SymmetricState {
         self.h
     }
 
-    /// Split into two 32-byte transport keys (Noise §5.2), returning `(k1, k2, ck)`.
-    pub(crate) fn split(self) -> ([u8; 32], [u8; 32], [u8; HASHLEN]) {
-        let (k1_full, k2_full) = hkdf_noise(&self.ck, &[], 2);
-        let mut k1 = [0u8; 32];
-        let mut k2 = [0u8; 32];
-        k1.copy_from_slice(&k1_full[..32]);
-        k2.copy_from_slice(&k2_full[..32]);
-        (k1, k2, self.ck)
+    /// Current Noise chaining key (before or after classical MixKey steps).
+    pub(crate) fn chaining_key(&self) -> [u8; HASHLEN] {
+        self.ck
     }
+}
+
+/// Noise Split transport keys from an arbitrary chaining key.
+///
+/// Used after the PROTOCOL §21.5 hybrid mix replaces `ck` with a 32-byte `ck'`.
+pub(crate) fn split_transport_keys(chaining_key: &[u8]) -> ([u8; 32], [u8; 32]) {
+    let (k1_full, k2_full) = hkdf_noise(chaining_key, &[], 2);
+    let mut k1 = [0u8; 32];
+    let mut k2 = [0u8; 32];
+    k1.copy_from_slice(&k1_full[..32]);
+    k2.copy_from_slice(&k2_full[..32]);
+    (k1, k2)
 }
 
 fn hash(data: &[u8]) -> [u8; HASHLEN] {

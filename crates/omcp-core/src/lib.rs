@@ -1,9 +1,9 @@
 //! Open Mesh Chat Protocol (`omcp-core`) — M1 core library.
 //!
 //! Provides:
-//! - Canonical [`framing::EnvelopeV1`] encode/decode (PROTOCOL §10.1)
+//! - Canonical [`framing::EnvelopeV1`] encode/decode (PROTOCOL §10.1, §21.1–§21.4)
 //! - Version / suite negotiation hooks (PROTOCOL §5.2, §10.3)
-//! - Noise_IK + ML-KEM-768 hybrid handshake for suite `OMCP-2026-A` (PROTOCOL §5.1)
+//! - Noise_IK + ML-KEM-768 hybrid (`OMCP-Noise-Hybrid-v1`, PROTOCOL §21.5)
 //!
 //! Not in scope for M1: BLE transport, MLS groups, apps, gateway.
 

@@ -1,9 +1,6 @@
-//! Cipher suite identifiers for OMCP (PROTOCOL §5).
+//! Cipher suite identifiers for OMCP (PROTOCOL §5, §21.1).
 
-/// Suite id for mandatory suite `OMCP-2026-A` (PROTOCOL §5.1).
-///
-/// Spec ambiguity: PROTOCOL.md names the suite but does not assign a numeric
-/// `suite_id`. M1 uses `0x0001` until Writey pins registry values.
+/// Suite id for mandatory suite `OMCP-2026-A` (PROTOCOL §21.1).
 pub const SUITE_OMCP_2026_A: u16 = 0x0001;
 
 /// Human-readable name for [`SUITE_OMCP_2026_A`].

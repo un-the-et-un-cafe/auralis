@@ -508,3 +508,70 @@ Update `apps/REQUIREMENTS.md` milestones:
 2. Start a livestream with Internet SFU; a member on another network watches with E2EE (keys never logged by SFU test harness).
 3. BLE-only peers see live *announcement* but not video, with an explicit UI reason.
 
+
+---
+
+## 21. Normative wire pins (v0.1.1) — answers to M1 open questions
+
+These pins supersede ambiguous wording in §§5, 10, and 17 for implementers. Update this section only via PR; bump the document patch version when changing a pin.
+
+### 21.1 Suite ID
+
+| suite_id | Name | Status |
+|----------|------|--------|
+| `0x0001` | `OMCP-2026-A` | Mandatory for v0.1 |
+
+Unknown `suite_id` → `UNSUPPORTED_SUITE` with the peer’s supported list.
+
+### 21.2 Envelope endianness
+
+All multi-byte integer fields in `EnvelopeV1` (§10.1) are **big-endian (network byte order)**.
+
+### 21.3 Envelope flag bits (`flags` u16)
+
+Bit 0 = LSB.
+
+| Bit | Name | Meaning when set |
+|-----|------|------------------|
+| 0 | `RELAY_OK` | Intermediate peers MAY gossip/relay this envelope |
+| 1 | `STORE_OK` | Store-and-forward peers MAY retain until expiry / retention policy |
+| 2 | `PRIORITY` | Prefer earlier scheduling on constrained relays (no content privilege) |
+| 3–15 | Reserved | MUST be 0 on send; ignore on receive |
+
+### 21.4 Maximum `ciphertext_len`
+
+- Transport envelope ciphertext (AEAD ciphertext + tag): **1 048 576 bytes (1 MiB)** maximum.
+- Envelopes larger than this MUST be rejected before decrypt.
+- Application files larger than this use the chunked blob path (§7); each chunk is its own envelope under this limit.
+
+### 21.5 Noise hybrid construction — `OMCP-Noise-Hybrid-v1`
+
+**Pin (normative for suite `0x0001`):** pattern **Noise_IK** with classical DH **X25519**, AEAD **ChaCha20-Poly1305**, hash **BLAKE2b**, plus an ML-KEM-768 (FIPS 203) ephemeral encapsulation mixed into the Noise chaining key.
+
+**Shared-secret mixing (answers §5.1 / Q6):**  
+`X25519_ss` in the informal §5.1 text means the **Noise chaining-key state after the classical DH MixKey steps**, not a raw DH output concatenated outside Noise. After the classical Noise_IK DH contributions have been mixed into `ck` per the Noise spec, both parties compute:
+
+```
+ck' = HKDF-SHA-384(
+        salt = ck,
+        ikm  = mlkem_shared_secret,   // 32-byte ML-KEM-768 ss
+        info = "OMCP-Noise-Hybrid-v1",
+        L    = 32
+      )
+ck ← ck'
+```
+
+Then continue Noise splitting / transport key derivation from `ck` as usual.
+
+**ML-KEM transcript binding:** The initiator’s ML-KEM public key (and the responder’s ciphertext) are included in the Noise handshake messages as cleartext handshake payloads (or dedicated handshake fields) and are covered by subsequent `MixHash` so they cannot be stripped without failing authentication.
+
+**Wire compatibility:** `OMCP-Noise-Hybrid-v1` is **OMCP-defined**. It is **not** claimed wire-compatible with `snow` HFS names such as `Noise_XXhfs_25519+MLKEM768_*` or with libp2p `/noise-mlkem768-hfs/*`. A future suite (`0x0002+`) MAY adopt a finalized Noise HFS / community KAT set; until then interop tests use OMCP KATs only.
+
+**References (informative):** Noise Protocol Framework; FIPS 203 ML-KEM; TLS hybrid practice in RFC 9954 / draft-ietf-tls-ecdhe-mlkem (concatenated secrets in TLS — different combiner; do not copy TLS concat into Noise without this section’s HKDF mix).
+
+### 21.6 Document control addendum
+
+| Version | Date | Notes |
+|---------|------|-------|
+| 0.1.1 | 2026-10-23 | Wire pins for M1 PR #1 |
+

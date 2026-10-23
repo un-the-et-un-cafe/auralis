@@ -1,7 +1,6 @@
-//! Canonical envelope framing (PROTOCOL §10.1).
+//! Canonical envelope framing (PROTOCOL §10.1, §21.1–§21.4).
 //!
-//! All multi-byte integers are **big-endian**. PROTOCOL.md does not specify
-//! endianness; M1 pins BE and documents it for Writey confirmation.
+//! All multi-byte integers are **big-endian** (PROTOCOL §21.2).
 
 use crate::error::{OmcpError, Result};
 use crate::suite::{is_supported_suite, ENVELOPE_VERSION_V1};
@@ -16,17 +15,18 @@ pub const ENVELOPE_V1_FIXED_LEN: usize = 41;
 
 /// Maximum accepted ciphertext length (bytes), inclusive of AEAD tag.
 ///
-/// Spec ambiguity: PROTOCOL §10.1 has no max; M1 rejects above 1 MiB to bound
-/// memory and DoS surface on decode (§11 replay/abuse posture).
-pub const MAX_CIPHERTEXT_LEN: u32 = 1024 * 1024;
+/// PROTOCOL §21.4: 1_048_576 bytes (1 MiB) maximum.
+pub const MAX_CIPHERTEXT_LEN: u32 = 1_048_576;
 
-/// Flag bits for [`EnvelopeV1::flags`] (bit positions not pinned in spec).
+/// Flag bits for [`EnvelopeV1::flags`] (PROTOCOL §21.3; bit 0 = LSB).
+///
+/// Bits 3–15 are reserved and MUST be 0 on send.
 pub mod flags {
-    /// Envelope may be relayed by mesh peers.
+    /// Envelope may be relayed by mesh peers (bit 0).
     pub const RELAY_OK: u16 = 1 << 0;
-    /// Envelope may be stored for later delivery.
+    /// Envelope may be stored for later delivery (bit 1).
     pub const STORE_OK: u16 = 1 << 1;
-    /// Preferential forwarding / scheduling hint.
+    /// Preferential forwarding / scheduling hint (bit 2).
     pub const PRIORITY: u16 = 1 << 2;
 }
 
