@@ -56,6 +56,9 @@ pub enum OmcpError {
     #[error("MLS-PQ extension malformed: {0}")]
     MlsPqMalformed(&'static str),
 
+    #[error("file too large: {size} bytes exceeds max {max} bytes")]
+    FileTooLarge { size: u64, max: u64 },
+
     #[error("file chunk protocol error: {0}")]
     File(&'static str),
 

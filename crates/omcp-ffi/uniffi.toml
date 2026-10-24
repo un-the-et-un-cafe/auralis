@@ -1,0 +1,3 @@
+[bindings.kotlin]
+package_name = "chat.omcp.ffi"
+cdylib_name = "omcp_ffi"

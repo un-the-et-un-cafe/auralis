@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/omcp-core"]
+members = ["crates/omcp-core", "crates/omcp-ffi"]
 
 [workspace.package]
 edition = "2021"

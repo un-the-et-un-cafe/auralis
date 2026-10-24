@@ -40,5 +40,8 @@ openmls_basic_credential = "=0.6.0"
 # OpenMLS already pulls in; default features off (keys built from getrandom bytes).
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "zeroize"] }
 
+# M5: 24-word recovery phrase (BIP39 English wordlist, 256-bit entropy).
+bip39 = { version = "=2.1.0", default-features = false, features = ["std"] }
+
 [dev-dependencies]
 hex = "=0.4.3"
