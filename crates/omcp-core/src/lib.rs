@@ -13,13 +13,20 @@
 //!   pinning, store-and-forward) and an in-memory rendezvous reference
 //!   (PROTOCOL §8.4, §9) — **experimental (M4)**
 //!
+//! - Scalable sync and data efficiency (PROTOCOL §22): rotating mailbox tags,
+//!   cuckoo interest digests, spray-and-wait, range reconciliation, watermarks,
+//!   lazy media, padded compression, receipts batching, Plumtree, relay budgets —
+//!   **experimental (v0.2)**
+//!
 //! Not in scope yet: real phone BLE bindings, real TLS/QUIC gateway transport, production hardware,
 //! full OpenMLS PQ extension registration on the wire.
 
 #![forbid(unsafe_code)]
 #![allow(missing_docs)] // field-level docs filled as API stabilizes
 
+pub mod backup;
 pub mod ble;
+pub mod burn;
 pub mod error;
 pub mod files;
 pub mod framing;
@@ -27,8 +34,11 @@ pub mod gateway;
 pub mod handshake;
 pub mod mls;
 pub mod negotiate;
+pub mod recovery;
 pub mod rendezvous;
+pub mod safety;
 pub mod suite;
+pub mod sync;
 
 pub use error::{OmcpError, Result};
 pub use framing::EnvelopeV1;

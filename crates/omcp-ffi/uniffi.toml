@@ -1,0 +1,9 @@
+[bindings.kotlin]
+package_name = "chat.omcp.ffi"
+cdylib_name = "omcp_ffi"
+
+[bindings.swift]
+module_name = "OmcpFFI"
+ffi_module_name = "omcp_ffiFFI"
+ffi_module_filename = "omcp_ffiFFI"
+generate_module_map = true

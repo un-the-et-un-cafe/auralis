@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Source of truth for Hopla iOS EN/FR strings. Writes Resources/{en,fr}.lproj/Localizable.strings
+(app) and NotificationService/{en,fr}.lproj. `--check` verifies every key used in Swift exists in
+both languages."""
+import os, re, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+IOS = os.path.dirname(HERE)
+S = {
+ "app_name": ("Hopla", "Hopla"),
+ "tab_chats": ("Chats", "Discussions"), "tab_communities": ("Communities", "Communautés"),
+ "tab_live": ("Live", "Direct"), "tab_you": ("You", "Moi"),
+ "coming_v02_title": ("Coming in v0.2", "Arrive en v0.2"),
+ "communities_empty_body": ("Communities with roles, announcement channels, and topics will land in v0.2. Your chats stay here in Chats.", "Les communautés avec rôles, canaux d’annonces et sujets arrivent en v0.2. Vos discussions restent dans Discussions."),
+ "live_empty_body": ("Livestreams need Wi‑Fi or Internet. Mesh can show status only. Full Live arrives in v0.2.", "Les directs nécessitent le Wi‑Fi ou Internet. Le mesh n’affiche que le statut. Le Direct complet arrive en v0.2."),
+ "path_mesh": ("Via mesh", "Via le mesh"), "path_gateway": ("Via neighbour’s Internet", "Via l’Internet d’un voisin"),
+ "path_mixed": ("Mixed paths", "Chemins mixtes"), "path_queued": ("Waiting for mesh", "En attente du mesh"),
+ "status_nearby": ("Mesh · %ld nearby", "Mesh · %ld à proximité"), "status_queued": ("%ld queued", "%ld en attente"),
+ "gateway_title": ("Gateway", "Passerelle"), "gateway_act_as": ("Act as gateway", "Servir de passerelle"),
+ "gateway_act_as_desc": ("Bridge mesh peers when you have Internet", "Relier les pairs du mesh quand vous avez Internet"),
+ "gateway_mobile_data": ("Allow on mobile data", "Autoriser sur données mobiles"),
+ "gateway_mobile_data_desc": ("Off = Wi‑Fi only. Caps apply either way.", "Désactivé = Wi‑Fi uniquement. Les plafonds s’appliquent toujours."),
+ "gateway_metered_warn": ("You’re on metered cellular. Gateway will use mobile data — continue only if you’re sure.", "Vous êtes sur un réseau mobile facturé. La passerelle utilisera vos données — continuez seulement si vous êtes sûr."),
+ "gateway_cap": ("Daily data cap", "Plafond quotidien"),
+ "gateway_row_desc": ("Wi‑Fi-only default · daily cap", "Wi‑Fi uniquement par défaut · plafond quotidien"),
+ "gateway_bridging": ("Bridging now", "Relais actif"), "gateway_not_bridging": ("Not bridging on this network", "Pas de relais sur ce réseau"),
+ "security_centre": ("Security centre", "Centre de sécurité"), "verified_contact": ("Verified contact", "Contact vérifié"),
+ "unverified": ("Unverified", "Non vérifié"), "session": ("Session", "Session"),
+ "chats_empty_title": ("No chats yet", "Aucune discussion"), "chats_empty_body": ("Add someone nearby with QR or NFC.", "Ajoutez quelqu’un à proximité par QR ou NFC."),
+ "ios_companion_hint": ("For always-on mesh while phones sleep, an Android companion gateway nearby helps — iOS may pause BLE in the background.", "Pour un mesh toujours actif quand les téléphones dorment, une passerelle Android à proximité aide — iOS peut suspendre le BLE en arrière-plan."),
+ "ios_ble_pause_callout": ("iOS may pause mesh in background — open the app to sync. An always-on Android companion nearby is recommended for gateway duty.", "iOS peut suspendre le mesh en arrière-plan — ouvrez l’app pour synchroniser. Un compagnon Android toujours actif est recommandé comme passerelle."),
+ "ios_ble_tip_title": ("Background mesh on iOS", "Mesh en arrière-plan sur iOS"),
+ "ios_ble_tip_body": ("iOS may pause BLE when the app is backgrounded. Use Gateway settings, or keep an Android companion nearby for always-on mesh.", "iOS peut suspendre le BLE quand l’app est en arrière-plan. Utilisez les réglages Passerelle, ou gardez un compagnon Android à proximité."),
+ "ios_ble_tip_dismiss": ("Got it", "Compris"),
+ "contact_add_title": ("Add contact", "Ajouter un contact"), "contact_add_subtitle": ("Add someone nearby with QR or NFC.", "Ajoutez quelqu’un à proximité par QR ou NFC."),
+ "contact_add_scan_qr": ("Scan QR", "Scanner un QR"), "contact_add_scan_qr_desc": ("Point at their Hopla QR", "Visez son QR Hopla"),
+ "contact_add_my_qr": ("My QR", "Mon QR"), "contact_add_my_qr_desc": ("Let someone scan you", "Laissez quelqu’un vous scanner"),
+ "my_qr_title": ("My QR code", "Mon QR code"), "my_qr_a11y": ("Your Hopla contact QR code", "Votre QR code contact Hopla"),
+ "my_qr_copy": ("Copy full PeerID", "Copier le PeerID complet"),
+ "my_qr_brightness": ("Screen brightness is raised while this code is shown. Ask them to scan from Hopla › Add contact.", "La luminosité est augmentée pendant l’affichage du code. Demandez-lui de scanner depuis Hopla › Ajouter un contact."),
+ "my_qr_privacy": ("Your code contains only your public PeerID — no phone number or location.", "Votre code ne contient que votre PeerID public — ni numéro ni position."),
+ "scan_hint": ("Point at their Hopla QR code. It scans automatically.", "Visez le QR code Hopla. Le scan est automatique."),
+ "scan_not_omcp_title": ("Not a Hopla contact code", "Ce n’est pas un code contact Hopla"),
+ "scan_not_omcp_body": ("This QR isn’t an OMCP identity code. Ask them to open Add contact › Show my QR code.", "Ce QR n’est pas un code d’identité OMCP. Demandez-lui d’ouvrir Ajouter un contact › Afficher mon QR code."),
+ "viewfinder_a11y": ("Camera viewfinder", "Viseur de l’appareil photo"),
+ "camera_off_title": ("Camera access is off", "L’accès à l’appareil photo est désactivé"),
+ "open_settings": ("Open Settings", "Ouvrir les Réglages"), "show_my_qr_instead": ("Show my QR code instead", "Afficher plutôt mon QR code"),
+ "sn_section": ("Safety number", "Numéro de sécurité"),
+ "sn_compare": ("Compare these 60 digits with the number on %@’s screen. If they match, nobody is in the middle.", "Comparez ces 60 chiffres avec le numéro affiché chez %@. S’ils correspondent, personne ne s’est interposé."),
+ "sn_verify_chat": ("Numbers match — Verify & chat", "Les numéros correspondent — Vérifier et discuter"),
+ "sn_chat_unverified": ("Chat without verifying", "Discuter sans vérifier"),
+ "sn_mismatch_title": ("Safety numbers don’t match", "Les numéros de sécurité ne correspondent pas"),
+ "sn_mismatch_body": ("This code is different from the one saved for %@. Their identity may have changed, or someone may be impersonating them. Check in person before chatting.", "Ce code diffère de celui enregistré pour %@. Son identité a peut-être changé, ou quelqu’un se fait passer pour lui/elle. Vérifiez en personne avant de discuter."),
+ "sn_scan_again": ("Scan again", "Scanner à nouveau"), "sn_dont_trust": ("Don’t trust this code", "Ne pas faire confiance"),
+ "sn_group_a11y": ("Group %ld: %@", "Groupe %ld : %@"),
+ "sn_mark_verified": ("Mark as verified", "Marquer comme vérifié"), "sn_unverify": ("Remove verification", "Retirer la vérification"),
+ "cancel": ("Cancel", "Annuler"), "close": ("Close", "Fermer"), "copy": ("Copy", "Copier"), "send": ("Send", "Envoyer"),
+ "chat_info": ("Chat info", "Infos de la discussion"), "attach_file": ("Attach file", "Joindre un fichier"),
+ "composer_placeholder": ("Message", "Message"), "send_failed": ("Couldn’t queue the message.", "Impossible de mettre le message en file."),
+ "send_burn": ("Send, burn after read", "Envoyer, autodestruction après lecture"),
+ "burn_long_press_hint": ("Long-press to toggle burn after read", "Appui long pour l’autodestruction après lecture"),
+ "burn_toggle_on": ("Burn after read", "Autodestruction après lecture"), "burn_toggle_off": ("Don’t burn", "Ne pas détruire"),
+ "msg_queued": ("Queued", "En attente"), "msg_sent": ("Sent", "Envoyé"), "msg_received": ("Received", "Reçu"),
+ "burn_title": ("Burn after read", "Autodestruction après lecture"), "burn_preview": ("🔥 Message", "🔥 Message"),
+ "burn_sent": ("Burn after read", "Autodestruction après lecture"), "burn_open": ("Open", "Ouvert"),
+ "burn_tap_to_read": ("Tap to read", "Touchez pour lire"), "burn_tap_view_once": ("Tap to view once", "Touchez pour voir une fois"),
+ "burn_photo_opened": ("🔥 Photo opened", "🔥 Photo ouverte"), "burn_countdown": ("Burns in %ld s", "Détruit dans %ld s"),
+ "burn_honest": ("Burn after read can’t stop someone photographing the screen with another device.", "L’autodestruction ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil."),
+ "burn_unread": ("Delete unopened after", "Supprimer non ouvert après"),
+ "burn_ttl_1h": ("1 hour", "1 heure"), "burn_ttl_24h": ("24 hours", "24 heures"), "burn_ttl_7d": ("7 days", "7 jours"),
+ "burn_opt_-1": ("Off", "Désactivé"), "burn_opt_0": ("On open", "À l’ouverture"), "burn_opt_10": ("10 seconds", "10 secondes"),
+ "burn_opt_60": ("1 minute", "1 minute"), "burn_opt_3600": ("1 hour", "1 heure"),
+ "file_send_title": ("Send file to %@?", "Envoyer le fichier à %@ ?"), "file_size": ("Size", "Taille"),
+ "file_size_of_max": ("%@ MB of %@ max", "%@ Mo sur %@ max"), "file_route": ("Route", "Itinéraire"),
+ "file_mesh_hint": ("Via mesh is slower for large files. It keeps sending in the background and resumes if %@ moves out of range.", "Via le mesh, les gros fichiers sont plus lents. L’envoi continue en arrière-plan et reprend si %@ s’éloigne."),
+ "file_queue_hint": ("%@ isn’t reachable now. The file will send when they’re back in range.", "%@ n’est pas joignable. Le fichier partira à son retour à portée."),
+ "file_queue": ("Queue", "Mettre en file"), "file_too_large_title": ("File is too large", "Fichier trop volumineux"),
+ "file_too_large_body": ("%@ MB is over the %@ limit. Hopla can send files up to %@. Try a shorter clip or compress it first.", "%@ Mo dépasse la limite de %@. Hopla envoie des fichiers jusqu’à %@. Essayez un extrait plus court ou compressez-le."),
+ "file_choose_another": ("Choose another", "Choisir un autre"),
+ "file_state_received": ("%@ MB · Received", "%@ Mo · Reçu"),
+ "file_integrity_checked": ("Integrity checked", "Intégrité vérifiée"),
+ "file_state_sending": ("Sending · %@ of %@ MB", "Envoi · %@ sur %@ Mo"),
+ "file_state_sent": ("%@ MB · Sent", "%@ Mo · Envoyé"),
+ "file_state_receiving": ("Receiving · %@ of %@ MB", "Réception · %@ sur %@ Mo"),
+ "file_state_paused": ("Paused · out of range · %@ of %@ MB", "En pause · hors de portée · %@ sur %@ Mo"),
+ "file_paused_meta": ("Waiting for mesh · resumes automatically", "En attente du mesh · reprise automatique"),
+ "file_state_queued": ("Queued · %@ MB · next in line", "En file d’attente · %@ Mo · prochain envoi"),
+ "file_state_failed": ("Couldn’t finish — will retry on mesh", "Échec — nouvel essai via le mesh"),
+ "file_state_integrity": ("File didn’t match — ask %@ to resend", "Le fichier ne correspond pas — demandez à %@ de le renvoyer"),
+ "file_cancel_a11y": ("Cancel sending %@", "Annuler l’envoi de %@"),
+ "file_cancel_receive_a11y": ("Cancel receiving %@", "Annuler la réception de %@"),
+ "file_open_a11y": ("Open %@", "Ouvrir %@"),
+ "file_delete": ("Delete", "Supprimer"),
+ "file_progress_a11y": ("%ld percent", "%ld pour cent"),
+ "file_read_error": ("Couldn’t read that file. Try another.", "Impossible de lire ce fichier. Essayez-en un autre."),
+ "notif_title": ("Notifications", "Notifications"), "notif_row_desc": ("Sender and preview shown by default", "Expéditeur et aperçu affichés par défaut"),
+ "notif_private": ("Private notifications", "Notifications privées"),
+ "notif_private_footer": ("When on, notifications show only “Hopla · New message”: no sender, no preview, no picture.", "Activées, les notifications n’affichent que « Hopla · Nouveau message » : ni expéditeur, ni aperçu, ni photo."),
+ "notif_private_on": ("Private in this chat", "Privées dans cette discussion"), "notif_private_off": ("Not private in this chat", "Non privées dans cette discussion"),
+ "notif_follow_global_on": ("Like all chats (private)", "Comme toutes les discussions (privées)"),
+ "notif_follow_global_off": ("Like all chats (sender and preview)", "Comme toutes les discussions (expéditeur et aperçu)"),
+ "notif_hide_lock": ("Hide on lock screen", "Masquer sur l’écran verrouillé"), "notif_preview": ("Preview", "Aperçu"),
+ "notif_sample_text": ("See you at the market?", "On se voit au marché ?"),
+ "notif_new_message": ("New message", "Nouveau message"), "notif_incoming_call": ("Incoming call", "Appel entrant"),
+ "privacy_title": ("Privacy", "Confidentialité"), "privacy_row_desc": ("Screenshots are blocked", "Captures d’écran bloquées"),
+ "privacy_screens_blocked": ("Screenshots and screen recordings of Hopla are always blank.", "Les captures et enregistrements d’écran de Hopla sont toujours vides."),
+ "privacy_second_camera": ("Hopla can’t stop someone photographing the screen with a second camera.", "Hopla ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil."),
+ "capture_cover_title": ("Screen recording is on", "Enregistrement d’écran actif"),
+ "capture_cover_body": ("Hopla hides your chats while the screen is recorded or mirrored.", "Hopla masque vos discussions pendant l’enregistrement ou la recopie de l’écran."),
+ "about": ("About", "À propos"), "about_desc": ("Hopla · OMCP · MIT", "Hopla · OMCP · MIT"),
+ "backup_title": ("Backup and restore", "Sauvegarde et restauration"), "backup_row_desc": ("iCloud, Google Drive, recovery phrase", "iCloud, Google Drive, phrase de récupération"),
+ "backup_banner": ("Secure your account: add a backup within 24 hours.", "Sécurisez votre compte : ajoutez une sauvegarde sous 24 heures."),
+ "backup_required_title": ("Back up to continue", "Sauvegardez pour continuer"),
+ "backup_required_body": ("Your 24 hours are up. Add one backup method to keep using Hopla.", "Les 24 heures sont écoulées. Ajoutez une méthode de sauvegarde pour continuer."),
+ "backup_status": ("Backups", "Sauvegardes"), "backup_none": ("None yet", "Aucune"), "backup_last": ("Last cloud backup", "Dernière sauvegarde cloud"),
+ "backup_password_section": ("Backup password", "Mot de passe de sauvegarde"),
+ "backup_add": ("Back up now", "Sauvegarder maintenant"), "backup_now_change": ("Back up again / change password", "Resauvegarder / changer le mot de passe"),
+ "backup_delete": ("Delete cloud backup", "Supprimer la sauvegarde cloud"),
+ "backup_delete_confirm": ("Delete this cloud backup? You’ll need another method to restore.", "Supprimer cette sauvegarde cloud ? Il vous faudra une autre méthode pour restaurer."),
+ "backup_failed": ("Backup failed. It will be retried when you’re online.", "Échec de la sauvegarde. Nouvel essai une fois en ligne."),
+ "backup_view_phrase": ("View recovery phrase", "Voir la phrase de récupération"),
+ "backup_view_phrase_reason": ("Show your recovery phrase", "Afficher votre phrase de récupération"),
+ "method_icloud": ("iCloud", "iCloud"), "method_drive": ("Google Drive", "Google Drive"), "method_written": ("Written down", "Notée"),
+ "ob_welcome_body": ("Chat with people nearby, even without Internet. No account, phone number or email needed.", "Discutez avec les gens autour de vous, même sans Internet. Ni compte, ni numéro, ni e-mail."),
+ "ob_get_started": ("Get started", "Commencer"), "ob_restore_with_phrase": ("I have a recovery phrase", "J’ai une phrase de récupération"),
+ "ob_profile_title": ("Your profile", "Votre profil"), "ob_display_name": ("Display name (optional)", "Nom affiché (facultatif)"),
+ "ob_profile_footer": ("Your identity is created on this phone. Only people you add see your name.", "Votre identité est créée sur ce téléphone. Seules les personnes ajoutées voient votre nom."),
+ "ob_next": ("Next", "Suivant"), "ob_secure_title": ("Secure your account", "Sécurisez votre compte"),
+ "ob_secure_body": ("Pick at least one way to get your account back if you lose this phone.", "Choisissez au moins un moyen de récupérer votre compte si vous perdez ce téléphone."),
+ "ob_secure_honest": ("Anyone with access to your cloud account and your backup password can restore your identity. If you forget the password, you need the written phrase.", "Toute personne ayant accès à votre compte cloud et au mot de passe de sauvegarde peut restaurer votre identité. Si vous oubliez le mot de passe, il vous faut la phrase notée."),
+ "ob_icloud": ("iCloud", "iCloud"), "ob_drive": ("Google Drive", "Google Drive"), "ob_write_down": ("Write it down", "La noter"),
+ "ob_icloud_unavailable": ("Sign in to iCloud in Settings to use this.", "Connectez-vous à iCloud dans Réglages pour l’utiliser."),
+ "ob_drive_unavailable": ("Google Drive isn’t set up in this beta.", "Google Drive n’est pas configuré dans cette bêta."),
+ "ob_use_password": ("Protect with a password", "Protéger par mot de passe"),
+ "ob_icloud_nopw_footer": ("No password: the backup key is kept in your iCloud Keychain, end-to-end encrypted by Apple.", "Sans mot de passe : la clé est gardée dans votre trousseau iCloud, chiffré de bout en bout par Apple."),
+ "ob_icloud_pw_footer": ("At least 8 characters and hard to guess.", "Au moins 8 caractères et difficile à deviner."),
+ "ob_backup_password": ("Backup password", "Mot de passe de sauvegarde"),
+ "ob_pw_too_short": ("At least 8 characters.", "Au moins 8 caractères."), "ob_pw_weak": ("Too easy to guess.", "Trop facile à deviner."),
+ "ob_backup_icloud": ("Back up to iCloud", "Sauvegarder sur iCloud"), "ob_backup_drive": ("Back up to Google Drive", "Sauvegarder sur Google Drive"),
+ "ob_backup_done": ("Backed up", "Sauvegardé"), "ob_show_words": ("Show my 24 words", "Afficher mes 24 mots"),
+ "ob_continue": ("Continue", "Continuer"), "ob_remind_later": ("Remind me later", "Me le rappeler plus tard"),
+ "ob_remind_footer": ("You can use Hopla for 24 hours, then you’ll need a backup to continue.", "Vous pouvez utiliser Hopla 24 heures, puis une sauvegarde sera nécessaire."),
+ "ob_words_footer": ("Write these words on paper, in order. Never share them.", "Notez ces mots sur papier, dans l’ordre. Ne les partagez jamais."),
+ "ob_wrote_it_down": ("I wrote them down", "Je les ai notés"), "ob_back": ("Back", "Retour"),
+ "ob_quiz_title": ("Check 3 words", "Vérifiez 3 mots"), "ob_quiz_word": ("Word #%ld", "Mot n°%ld"),
+ "ob_quiz_wrong": ("That’s not the right word.", "Ce n’est pas le bon mot."), "ob_check": ("Check", "Vérifier"),
+ "ob_done_title": ("You’re all set", "C’est prêt"), "ob_done_body": ("Show this code so people nearby can add you.", "Montrez ce code pour que les gens autour de vous vous ajoutent."),
+ "ob_start_chatting": ("Start chatting", "Commencer à discuter"),
+ "ob_restore_title": ("Welcome back", "Bon retour"), "ob_restore_found": ("We found a Hopla backup in %@. Restore it?", "Nous avons trouvé une sauvegarde Hopla sur %@. La restaurer ?"),
+ "ob_restore_honest": ("Forgot the password? Use your 24-word phrase instead.", "Mot de passe oublié ? Utilisez plutôt votre phrase de 24 mots."),
+ "ob_restore": ("Restore", "Restaurer"), "ob_use_phrase": ("Use my 24 words", "Utiliser mes 24 mots"),
+ "ob_start_fresh": ("Start fresh", "Repartir de zéro"), "ob_restore_locked": ("Too many tries. Wait %ld s.", "Trop d’essais. Attendez %ld s."),
+ "ob_phrase_footer": ("Enter your 24 words in order, separated by spaces.", "Saisissez vos 24 mots dans l’ordre, séparés par des espaces."),
+ "ob_error_identity": ("Couldn’t create your identity. Try again.", "Impossible de créer votre identité. Réessayez."),
+ "ob_error_backup": ("Backup failed. Check your connection and try again.", "Échec de la sauvegarde. Vérifiez la connexion et réessayez."),
+ "ob_error_wrongpw": ("Wrong backup password.", "Mot de passe de sauvegarde incorrect."),
+ "ob_error_restore": ("Couldn’t restore this backup.", "Impossible de restaurer cette sauvegarde."),
+ "ob_error_nokey": ("The iCloud Keychain key isn’t on this device yet. Turn on iCloud Keychain or use your 24 words.", "La clé du trousseau iCloud n’est pas encore sur cet appareil. Activez le trousseau iCloud ou utilisez vos 24 mots."),
+ "ob_error_badphrase": ("These words don’t form a valid 24-word phrase. Check the order.", "Ces mots ne forment pas une phrase valide de 24 mots. Vérifiez l’ordre."),
+}
+NSE = ["notif_new_message"]
+
+def esc(s): return s.replace("\\", "\\\\").replace('"', '\\"')
+
+def write(dir_, keys):
+    for i, lang in enumerate(["en", "fr"]):
+        d = os.path.join(dir_, f"{lang}.lproj"); os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "Localizable.strings"), "w") as f:
+            f.write("/* Generated by apps/ios/scripts/strings.py, edit there. */\n")
+            for k in keys: f.write(f'"{k}" = "{esc(S[k][i])}";\n')
+
+def check():
+    used = set(); bad = []
+    for root in ["OpenMeshChat", "NotificationService"]:
+        for dp, _, fs in os.walk(os.path.join(IOS, root)):
+            for fn in fs:
+                if fn.endswith(".swift"):
+                    src = open(os.path.join(dp, fn)).read()
+                    for call in re.findall(r'(?:\bL|localized:|NSLocalizedString)\((.*)', src):
+                        used.update(re.findall(r'"([a-z][a-z0-9_]*_[a-z0-9]+[a-z0-9_]*|about|cancel|close|copy|send|session|unverified)"', call))
+    for k in sorted(used):
+        if k not in S and not k.endswith("_"): bad.append(k)
+    for k, (en, fr) in S.items():
+        if en.count("%") != fr.count("%"): bad.append(k + " (format args)")
+    dyn = ["ob_error_" + e for e in ["identity", "backup", "wrongpw", "restore", "nokey", "badphrase"]] + \
+          ["method_" + m for m in ["icloud", "drive", "written"]] + ["burn_opt_" + o for o in ["-1", "0", "10", "60", "3600"]]
+    bad += [k for k in dyn if k not in S]
+    if bad: print("missing/invalid strings:", bad); sys.exit(1)
+    print(f"strings OK: {len(S)} keys, en+fr, {len(used)} used statically")
+
+if __name__ == "__main__":
+    if "--check" in sys.argv: check()
+    else:
+        write(os.path.join(IOS, "OpenMeshChat/Resources"), list(S))
+        write(os.path.join(IOS, "NotificationService"), NSE)
+        check()

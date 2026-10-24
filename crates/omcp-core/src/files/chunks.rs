@@ -9,8 +9,8 @@ use crate::files::wrap::{
     generate_content_key, seal_content_key, ContentKey, RecipientFileKeys, WrappedContentKey,
 };
 
-/// Default plaintext chunk size: 16 KiB (PROTOCOL §7).
-pub const DEFAULT_CHUNK_PLAINTEXT_LEN: usize = 16 * 1024;
+/// Default plaintext chunk size: 64 KiB (PROTOCOL §7, §22.7(7)) for all blobs.
+pub const DEFAULT_CHUNK_PLAINTEXT_LEN: usize = 64 * 1024;
 
 /// One encrypted file chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +73,21 @@ fn chunk_nonce(chunk_index: u32) -> [u8; 12] {
 }
 
 /// Encrypt `plaintext` into [`FileMeta`] + chunks; wrap Content Key to `recipients`.
+/// Maximum plaintext file size: 50 MB, decimal (50 000 000 bytes) —
+/// PROTOCOL §13.2 default; the app's "too large" copy says "50 MB".
+pub const MAX_FILE_BYTES: u64 = 50_000_000;
+
+/// Fail fast with [`OmcpError::FileTooLarge`] before any encryption/chunking.
+pub fn check_file_size(size: u64) -> Result<()> {
+    if size > MAX_FILE_BYTES {
+        return Err(OmcpError::FileTooLarge {
+            size,
+            max: MAX_FILE_BYTES,
+        });
+    }
+    Ok(())
+}
+
 pub fn encrypt_file(
     plaintext: &[u8],
     name: &str,
@@ -80,6 +95,7 @@ pub fn encrypt_file(
     recipients: &[RecipientFileKeys],
     chunk_plaintext_len: usize,
 ) -> Result<(FileMeta, ContentKey, Vec<FileChunk>)> {
+    check_file_size(plaintext.len() as u64)?;
     if chunk_plaintext_len == 0 {
         return Err(OmcpError::File("chunk size zero"));
     }
@@ -201,6 +217,24 @@ pub fn wrapped_key_for<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_files_over_50_mb_before_encrypting() {
+        assert_eq!(MAX_FILE_BYTES, 50_000_000);
+        assert!(check_file_size(MAX_FILE_BYTES).is_ok());
+        assert_eq!(
+            check_file_size(MAX_FILE_BYTES + 1),
+            Err(OmcpError::FileTooLarge {
+                size: MAX_FILE_BYTES + 1,
+                max: MAX_FILE_BYTES
+            })
+        );
+        let big = vec![0u8; (MAX_FILE_BYTES + 1) as usize];
+        let err = encrypt_file(&big, "big.bin", "application/octet-stream", &[], 16 * 1024)
+            .err()
+            .unwrap();
+        assert!(matches!(err, OmcpError::FileTooLarge { .. }));
+    }
     use crate::files::wrap::FileRecipientSecrets;
 
     #[test]

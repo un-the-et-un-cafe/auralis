@@ -51,23 +51,29 @@ fn app_nonce(counter: u64) -> Nonce {
     Nonce::from(n)
 }
 
-/// Seal a UTF-8 text chat message into an [`EnvelopeV1`].
-///
-/// `send_transport_key` is the directional Noise key this peer uses to send
-/// (`k_i2r` for initiator, `k_r2i` for responder). `app_nonce_counter` is
-/// incremented on success.
-pub fn seal_text_envelope(
+/// Content type `0x02` — OMCP inner message v1 (PROTOCOL §19.1): the plaintext is
+/// `InnerV1` (optional encrypted `burn` header + inner content type + body). Every
+/// message type (text, burn, `OPENED` control) uses this one outer value, so relays
+/// can't tell them apart.
+pub const CONTENT_TYPE_INNER_V1: u8 = 0x02;
+
+fn random_envelope_id() -> Result<[u8; 16]> {
+    let mut id = [0u8; 16];
+    getrandom::getrandom(&mut id).map_err(|_| OmcpError::Crypto("getrandom"))?;
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_with(
     send_transport_key: &[u8; 32],
     sender_peer_id: &[u8; 32],
-    plaintext_utf8: &str,
+    envelope_id: [u8; 16],
+    content_type: u8,
+    plaintext: &[u8],
     created_ms: u64,
     app_nonce_counter: &mut u64,
     ttl_hops: u8,
 ) -> Result<EnvelopeV1> {
-    let mut envelope_id = [0u8; 16];
-    getrandom::getrandom(&mut envelope_id).map_err(|_| OmcpError::Crypto("getrandom"))?;
-
-    let content_type = CONTENT_TYPE_TEXT_PLAIN;
     let aad = application_aad(
         SUITE_OMCP_2026_A,
         sender_peer_id,
@@ -82,7 +88,7 @@ pub fn seal_text_envelope(
         .encrypt(
             &app_nonce(*app_nonce_counter),
             Payload {
-                msg: plaintext_utf8.as_bytes(),
+                msg: plaintext,
                 aad: &aad,
             },
         )
@@ -104,25 +110,19 @@ pub fn seal_text_envelope(
     })
 }
 
-/// Open a text envelope sealed by [`seal_text_envelope`].
-///
-/// `recv_transport_key` is the directional key the **sender** used (i.e. the
-/// receiver's recv direction key).
-pub fn open_text_envelope(
+fn open_with(
     recv_transport_key: &[u8; 32],
     sender_peer_id: &[u8; 32],
     envelope: &EnvelopeV1,
+    content_type: u8,
     app_nonce_counter: &mut u64,
-) -> Result<String> {
-    if envelope.header_aad.first().copied() != Some(CONTENT_TYPE_TEXT_PLAIN) {
-        return Err(OmcpError::AppAead);
-    }
+) -> Result<Vec<u8>> {
     let aad = application_aad(
         envelope.suite_id,
         sender_peer_id,
         &envelope.envelope_id,
         envelope.created_ms,
-        CONTENT_TYPE_TEXT_PLAIN,
+        content_type,
     );
     let app_key = derive_app_key(recv_transport_key)?;
     let cipher =
@@ -139,7 +139,100 @@ pub fn open_text_envelope(
     *app_nonce_counter = app_nonce_counter
         .checked_add(1)
         .ok_or(OmcpError::Crypto("nonce overflow"))?;
-    String::from_utf8(plaintext).map_err(|_| OmcpError::AppAead)
+    Ok(plaintext)
+}
+
+/// Seal a UTF-8 text chat message into an [`EnvelopeV1`] (legacy content type `0x01`).
+///
+/// `send_transport_key` is the directional Noise key this peer uses to send
+/// (`k_i2r` for initiator, `k_r2i` for responder). `app_nonce_counter` is
+/// incremented on success.
+pub fn seal_text_envelope(
+    send_transport_key: &[u8; 32],
+    sender_peer_id: &[u8; 32],
+    plaintext_utf8: &str,
+    created_ms: u64,
+    app_nonce_counter: &mut u64,
+    ttl_hops: u8,
+) -> Result<EnvelopeV1> {
+    seal_with(
+        send_transport_key,
+        sender_peer_id,
+        random_envelope_id()?,
+        CONTENT_TYPE_TEXT_PLAIN,
+        plaintext_utf8.as_bytes(),
+        created_ms,
+        app_nonce_counter,
+        ttl_hops,
+    )
+}
+
+/// Open a text envelope sealed by [`seal_text_envelope`].
+///
+/// `recv_transport_key` is the directional key the **sender** used (i.e. the
+/// receiver's recv direction key).
+pub fn open_text_envelope(
+    recv_transport_key: &[u8; 32],
+    sender_peer_id: &[u8; 32],
+    envelope: &EnvelopeV1,
+    app_nonce_counter: &mut u64,
+) -> Result<String> {
+    if envelope.header_aad.first().copied() != Some(CONTENT_TYPE_TEXT_PLAIN) {
+        return Err(OmcpError::AppAead);
+    }
+    let p = open_with(
+        recv_transport_key,
+        sender_peer_id,
+        envelope,
+        CONTENT_TYPE_TEXT_PLAIN,
+        app_nonce_counter,
+    )?;
+    String::from_utf8(p).map_err(|_| OmcpError::AppAead)
+}
+
+/// Seal an `InnerV1` plaintext (see [`crate::burn::encode_app`]) with a caller-chosen
+/// `envelope_id` (needed so `OPENED` receipts can reference it).
+pub fn seal_inner_envelope(
+    send_transport_key: &[u8; 32],
+    sender_peer_id: &[u8; 32],
+    envelope_id: [u8; 16],
+    inner: &[u8],
+    created_ms: u64,
+    app_nonce_counter: &mut u64,
+    ttl_hops: u8,
+) -> Result<EnvelopeV1> {
+    seal_with(
+        send_transport_key,
+        sender_peer_id,
+        envelope_id,
+        CONTENT_TYPE_INNER_V1,
+        inner,
+        created_ms,
+        app_nonce_counter,
+        ttl_hops,
+    )
+}
+
+/// Open an application envelope. Returns the outer content type and plaintext:
+/// `0x01` = UTF-8 text (legacy), `0x02` = `InnerV1`.
+pub fn open_app_envelope(
+    recv_transport_key: &[u8; 32],
+    sender_peer_id: &[u8; 32],
+    envelope: &EnvelopeV1,
+    app_nonce_counter: &mut u64,
+) -> Result<(u8, Vec<u8>)> {
+    let ct = match envelope.header_aad.first().copied() {
+        Some(c @ (CONTENT_TYPE_TEXT_PLAIN | CONTENT_TYPE_INNER_V1)) => c,
+        _ => return Err(OmcpError::AppAead),
+    };
+    let p = open_with(
+        recv_transport_key,
+        sender_peer_id,
+        envelope,
+        ct,
+        app_nonce_counter,
+    )?;
+    Ok((ct, p))
 }
 
 #[cfg(test)]

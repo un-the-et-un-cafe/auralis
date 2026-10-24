@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,7 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 data class ChatRowModel(
@@ -33,7 +33,7 @@ data class ChatRowModel(
     val initials: String,
     val verified: Boolean,
     val unread: Int = 0,
-    val path: OmcpCoreStub.PathKind? = null,
+    val path: PathKind? = null,
     val isGroup: Boolean = false,
 )
 
@@ -66,14 +66,7 @@ fun ChatRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(model.title, style = MaterialTheme.typography.titleMedium)
                 if (model.verified) {
-                    Icon(
-                        Icons.Default.VerifiedUser,
-                        contentDescription = "Verified contact",
-                        tint = c.ok,
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .size(16.dp),
-                    )
+                    VerifiedBadge()
                 }
             }
             Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
@@ -96,13 +89,13 @@ fun ChatRow(
                         )
                     }
                 }
-                model.path != null && model.path != OmcpCoreStub.PathKind.Mesh -> {
+                model.path != null && model.path != PathKind.Mesh -> {
                     PathChip(
                         kind = model.path,
                         label = when (model.path) {
-                            OmcpCoreStub.PathKind.Gateway -> "Gateway"
-                            OmcpCoreStub.PathKind.Mixed -> "Mixed"
-                            OmcpCoreStub.PathKind.Queued -> "Queued"
+                            PathKind.Gateway -> "Gateway"
+                            PathKind.Mixed -> "Mixed"
+                            PathKind.Queued -> "Queued"
                             else -> "Mesh"
                         },
                         micro = true,
@@ -112,4 +105,17 @@ fun ChatRow(
             }
         }
     }
+}
+
+/** Small verified check badge next to a name (shown only for verified contacts). */
+@Composable
+fun VerifiedBadge(modifier: Modifier = Modifier) {
+    Icon(
+        Icons.Default.Verified,
+        contentDescription = "Verified contact",
+        tint = LocalOmcpColors.current.ok,
+        modifier = modifier
+            .padding(start = 4.dp)
+            .size(16.dp),
+    )
 }

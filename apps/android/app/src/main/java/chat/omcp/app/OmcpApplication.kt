@@ -1,5 +1,44 @@
 package chat.omcp.app
 
 import android.app.Application
+import chat.omcp.app.backup.CloudBackupStore
+import chat.omcp.app.backup.DriveAppDataBackupStore
+import chat.omcp.app.backup.InMemoryCloudBackupStore
+import chat.omcp.app.core.RustOmcpCore
+import chat.omcp.app.data.MeshRepository
+import chat.omcp.app.data.PrefsAppStore
 
-class OmcpApplication : Application()
+class OmcpApplication : Application() {
+    lateinit var repository: MeshRepository
+        private set
+
+    /** Consent screens requested by background Drive calls; shown by MainActivity. */
+    val driveConsent = chat.omcp.app.backup.DriveConsentBroker()
+
+    /**
+     * Google Drive appDataFolder store. Live when the build has GOOGLE_OAUTH_CLIENT_ID; debug
+     * builds without one use an in-memory simulation (BuildConfig.SIMULATED_DRIVE_BACKUP).
+     */
+    val cloudBackup: CloudBackupStore by lazy {
+        if (BuildConfig.SIMULATED_DRIVE_BACKUP) {
+            InMemoryCloudBackupStore()
+        } else {
+            val tokens = chat.omcp.app.backup.GoogleDriveTokenProvider(this, driveConsent)
+            DriveAppDataBackupStore(BuildConfig.GOOGLE_OAUTH_CLIENT_ID) { interactive ->
+                chat.omcp.app.backup.DriveAppDataClient(
+                    chat.omcp.app.backup.UrlConnectionTransport(), { tokens.token(interactive) }, tokens::invalidate,
+                )
+            }
+        }
+    }
+
+    val receivedFiles by lazy { chat.omcp.app.files.ReceivedFiles(this) }
+
+    override fun onCreate() {
+        super.onCreate()
+        registerActivityLifecycleCallbacks(chat.omcp.app.security.ScreenSecurity.Callbacks())
+        repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this))
+        repository.fileSink = receivedFiles
+        runCatching { repository.restore() }
+    }
+}

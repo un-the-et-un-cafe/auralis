@@ -1,5 +1,8 @@
 package chat.omcp.app.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
@@ -12,24 +15,48 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import chat.omcp.app.R
+import chat.omcp.app.notify.NotificationPolicy
+import chat.omcp.app.backup.CloudBackupStore
+import chat.omcp.app.data.BackupGate
+import chat.omcp.app.data.MeshRepository
+import chat.omcp.app.mesh.MeshPermissions
+import chat.omcp.app.mesh.MeshService
+import chat.omcp.app.ui.screens.BackupSettingsScreen
 import chat.omcp.app.ui.screens.ChatThreadScreen
 import chat.omcp.app.ui.screens.ChatsListScreen
 import chat.omcp.app.ui.screens.CommunitiesHomeScreen
 import chat.omcp.app.ui.screens.ContactAddScreen
 import chat.omcp.app.ui.screens.GatewaySettingsScreen
 import chat.omcp.app.ui.screens.LiveTabScreen
+import chat.omcp.app.ui.screens.MyQrBlock
 import chat.omcp.app.ui.screens.MyQrScreen
+import chat.omcp.app.ui.screens.OnboardingFlow
 import chat.omcp.app.ui.screens.SecurityCentreScreen
 import chat.omcp.app.ui.screens.YouScreen
+import chat.omcp.app.ui.vm.BackupSettingsViewModel
+import chat.omcp.app.ui.vm.ChatThreadViewModel
+import chat.omcp.app.ui.vm.ChatsViewModel
+import chat.omcp.app.ui.vm.ContactAddViewModel
+import chat.omcp.app.ui.vm.GatewayViewModel
+import chat.omcp.app.ui.vm.OnboardingStep
+import chat.omcp.app.ui.vm.OnboardingViewModel
 
 private object Routes {
     const val Chats = "chats"
@@ -37,16 +64,60 @@ private object Routes {
     const val Live = "live"
     const val You = "you"
     const val Thread = "thread/{chatId}"
-    const val Security = "security"
+    const val Security = "security/{chatId}"
     const val Gateway = "gateway"
     const val ContactAdd = "contact-add"
     const val MyQr = "my-qr"
+    const val Backup = "backup"
 
     fun thread(id: String) = "thread/$id"
+    fun security(id: String) = "security/$id"
 }
 
 @Composable
-fun OmcpRoot() {
+private inline fun <reified VM : androidx.lifecycle.ViewModel> vm(key: String? = null, crossinline make: () -> VM): VM =
+    viewModel(key = key, factory = viewModelFactory { initializer { make() } })
+
+@Composable
+fun OmcpRoot(
+    repo: MeshRepository,
+    cloud: CloudBackupStore,
+    secureWindow: (Boolean) -> Unit,
+    requestDeviceAuth: ((() -> Unit) -> Unit),
+) {
+    val ctx = LocalContext.current
+    val onboarded by repo.onboarded.collectAsState()
+    val contacts by repo.contacts.collectAsState()
+    // Re-evaluate the backup gate whenever contacts change or we recompose after onboarding.
+    val gateTick = remember { mutableIntStateOf(0) }
+    val gate = remember(onboarded, contacts, gateTick.intValue) { repo.backupGate() }
+
+    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (MeshPermissions.hasBle(ctx)) MeshService.start(ctx)
+    }
+    val requestMesh = { perms.launch(MeshPermissions.BLE + Manifest.permission.POST_NOTIFICATIONS) }
+    LaunchedEffect(onboarded) { if (onboarded && MeshPermissions.hasBle(ctx)) MeshService.start(ctx) }
+
+    if (!onboarded || gate == BackupGate.Required) {
+        // O6: after 24 h without a backup method, the Secure step is mandatory.
+        val ovm = vm { OnboardingViewModel(repo, cloud) }
+        if (onboarded && gate == BackupGate.Required) {
+            LaunchedEffect(Unit) { if (ovm.state.value.step == OnboardingStep.Welcome) ovm.getStarted(); ovm.profileNext() }
+        }
+        OnboardingFlow(
+            vm = ovm,
+            myQr = {
+                val id = repo.core.identity()
+                if (id != null) MyQrBlock(repo.core.qrPayload(), id.displayName, id.peerIdHex)
+            },
+            onFindNearby = requestMesh,
+            secureWindow = secureWindow,
+        )
+        val st by ovm.state.collectAsState()
+        LaunchedEffect(st.step) { if (st.step == OnboardingStep.Done) gateTick.intValue++ }
+        return
+    }
+
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
@@ -56,75 +127,90 @@ fun OmcpRoot() {
         bottomBar = {
             if (showBar) {
                 NavigationBar {
-                    NavigationBarItem(
-                        selected = route == Routes.Chats,
-                        onClick = { nav.tab(Routes.Chats) },
-                        icon = { Icon(Icons.Default.Chat, null) },
-                        label = { Text(stringResource(R.string.tab_chats)) },
-                    )
-                    NavigationBarItem(
-                        selected = route == Routes.Communities,
-                        onClick = { nav.tab(Routes.Communities) },
-                        icon = { Icon(Icons.Default.Groups, null) },
-                        label = { Text(stringResource(R.string.tab_communities)) },
-                    )
-                    NavigationBarItem(
-                        selected = route == Routes.Live,
-                        onClick = { nav.tab(Routes.Live) },
-                        icon = { Icon(Icons.Default.LiveTv, null) },
-                        label = { Text(stringResource(R.string.tab_live)) },
-                    )
-                    NavigationBarItem(
-                        selected = route == Routes.You,
-                        onClick = { nav.tab(Routes.You) },
-                        icon = { Icon(Icons.Default.Person, null) },
-                        label = { Text(stringResource(R.string.tab_you)) },
-                    )
+                    NavigationBarItem(route == Routes.Chats, { nav.tab(Routes.Chats) }, { Icon(Icons.Default.Chat, null) }, label = { Text(stringResource(R.string.tab_chats)) })
+                    NavigationBarItem(route == Routes.Communities, { nav.tab(Routes.Communities) }, { Icon(Icons.Default.Groups, null) }, label = { Text(stringResource(R.string.tab_communities)) })
+                    NavigationBarItem(route == Routes.Live, { nav.tab(Routes.Live) }, { Icon(Icons.Default.LiveTv, null) }, label = { Text(stringResource(R.string.tab_live)) })
+                    NavigationBarItem(route == Routes.You, { nav.tab(Routes.You) }, { Icon(Icons.Default.Person, null) }, label = { Text(stringResource(R.string.tab_you)) })
                 }
             }
         },
     ) { padding ->
-        NavHost(
-            navController = nav,
-            startDestination = Routes.Chats,
-            modifier = Modifier.padding(padding),
-        ) {
+        NavHost(navController = nav, startDestination = Routes.Chats, modifier = Modifier.padding(padding)) {
             composable(Routes.Chats) {
                 ChatsListScreen(
+                    vm = vm { ChatsViewModel(repo) },
+                    backupGate = gate,
                     onOpenChat = { nav.navigate(Routes.thread(it)) },
                     onAddContact = { nav.navigate(Routes.ContactAdd) },
+                    onBackup = { nav.navigate(Routes.Backup) },
                 )
             }
             composable(Routes.Communities) { CommunitiesHomeScreen() }
             composable(Routes.Live) { LiveTabScreen() }
             composable(Routes.You) {
                 YouScreen(
+                    identity = repo.core.identity(),
+                    suiteLabel = repo.core.suiteLabel,
+                    privateNotifications = repo.appStore.privateNotifications,
+                    onSetPrivateNotifications = { repo.appStore.privateNotifications = it },
+                    hideOnLockScreen = repo.appStore.hideOnLockScreen,
+                    onSetHideOnLockScreen = { repo.appStore.hideOnLockScreen = it },
                     onGateway = { nav.navigate(Routes.Gateway) },
-                    onSecurity = { nav.navigate(Routes.Security) },
-                )
-            }
-            composable(Routes.Thread) { entry ->
-                val id = entry.arguments?.getString("chatId") ?: "1"
-                ChatThreadScreen(
-                    chatId = id,
-                    onBack = { nav.popBackStack() },
-                    onSecurity = { nav.navigate(Routes.Security) },
-                )
-            }
-            composable(Routes.Security) {
-                SecurityCentreScreen(onBack = { nav.popBackStack() })
-            }
-            composable(Routes.Gateway) {
-                GatewaySettingsScreen(onBack = { nav.popBackStack() })
-            }
-            composable(Routes.ContactAdd) {
-                ContactAddScreen(
-                    onBack = { nav.popBackStack() },
+                    onSecurity = { contacts.firstOrNull()?.let { nav.navigate(Routes.security(it.id)) } },
+                    onBackup = { nav.navigate(Routes.Backup) },
                     onMyQr = { nav.navigate(Routes.MyQr) },
                 )
             }
+            composable(Routes.Thread) { entry ->
+                val id = entry.arguments?.getString("chatId") ?: return@composable
+                ChatThreadScreen(
+                    vm = vm(key = "thread-$id") { ChatThreadViewModel(repo, id) },
+                    onBack = { nav.popBackStack() },
+                    onSecurity = { nav.navigate(Routes.security(id)) },
+                )
+            }
+            composable(Routes.Security) { entry ->
+                val id = entry.arguments?.getString("chatId")
+                SecurityCentreScreen(
+                    contact = contacts.firstOrNull { it.id == id },
+                    suiteLabel = repo.core.suiteLabel,
+                    onSetVerified = { v -> id?.let { repo.setVerified(it, v) } },
+                    privateNotifications = id != null && NotificationPolicy.isPrivate(repo.appStore, id),
+                    onSetPrivateNotifications = { v -> id?.let { NotificationPolicy.setChatPrivate(repo.appStore, it, v) } },
+                    burnOption = id?.let { repo.appStore.burnChats[it] } ?: -1,
+                    burnUnreadTtl = id?.let { repo.appStore.burnUnreadTtl[it] } ?: chat.omcp.app.burn.BurnSpec.UNREAD_7D,
+                    onSetBurn = { o, t -> id?.let { repo.setChatBurn(it, o, t) } },
+                    onBack = { nav.popBackStack() },
+                )
+            }
+            composable(Routes.Gateway) {
+                GatewaySettingsScreen(vm = vm { GatewayViewModel(repo) }, onBack = { nav.popBackStack() })
+            }
+            composable(Routes.ContactAdd) {
+                ContactAddScreen(
+                    vm = vm { ContactAddViewModel(repo) },
+                    onBack = { nav.popBackStack() },
+                    onMyQr = { nav.navigate(Routes.MyQr) },
+                    onOpenChat = { id ->
+                        nav.navigate(Routes.thread(id)) { popUpTo(Routes.Chats) }
+                        if (!MeshPermissions.hasBle(ctx)) requestMesh()
+                    },
+                )
+            }
             composable(Routes.MyQr) {
-                MyQrScreen(onBack = { nav.popBackStack() })
+                MyQrScreen(
+                    vm = vm { ContactAddViewModel(repo) },
+                    onBack = { nav.popBackStack() },
+                    onScanTheirs = { nav.navigate(Routes.ContactAdd) { popUpTo(Routes.Chats) } },
+                )
+            }
+            composable(Routes.Backup) {
+                BackupSettingsScreen(
+                    vm = vm { BackupSettingsViewModel(repo, cloud) },
+                    requestDeviceAuth = requestDeviceAuth,
+                    secureWindow = secureWindow,
+                    onBack = { gateTick.intValue++; nav.popBackStack() },
+                )
             }
         }
     }

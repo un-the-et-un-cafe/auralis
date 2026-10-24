@@ -19,22 +19,22 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 @Composable
 fun PathChip(
-    kind: OmcpCoreStub.PathKind,
+    kind: PathKind,
     label: String,
     modifier: Modifier = Modifier,
     micro: Boolean = false,
 ) {
     val c = LocalOmcpColors.current
     val (fg, bg) = when (kind) {
-        OmcpCoreStub.PathKind.Mesh -> c.pathMesh to c.pathMeshSoft
-        OmcpCoreStub.PathKind.Gateway -> c.pathGateway to c.pathGatewaySoft
-        OmcpCoreStub.PathKind.Mixed -> c.pathMixed to c.pathMixedSoft
-        OmcpCoreStub.PathKind.Queued -> c.pathQueue to c.pathQueueSoft
+        PathKind.Mesh -> c.pathMesh to c.pathMeshSoft
+        PathKind.Gateway -> c.pathGateway to c.pathGatewaySoft
+        PathKind.Mixed -> c.pathMixed to c.pathMixedSoft
+        PathKind.Queued -> c.pathQueue to c.pathQueueSoft
     }
     val padH = if (micro) 7.dp else 10.dp
     val padV = if (micro) 2.dp else 5.dp
@@ -65,16 +65,16 @@ fun PathChip(
 
 @Composable
 fun PathBanner(
-    kind: OmcpCoreStub.PathKind,
+    kind: PathKind,
     text: String,
     modifier: Modifier = Modifier,
 ) {
     val c = LocalOmcpColors.current
     val (fg, bg) = when (kind) {
-        OmcpCoreStub.PathKind.Mesh -> c.pathMesh to c.pathMeshSoft
-        OmcpCoreStub.PathKind.Gateway -> c.pathGateway to c.pathGatewaySoft
-        OmcpCoreStub.PathKind.Mixed -> c.pathMixed to c.pathMixedSoft
-        OmcpCoreStub.PathKind.Queued -> c.pathQueue to c.pathQueueSoft
+        PathKind.Mesh -> c.pathMesh to c.pathMeshSoft
+        PathKind.Gateway -> c.pathGateway to c.pathGatewaySoft
+        PathKind.Mixed -> c.pathMixed to c.pathMixedSoft
+        PathKind.Queued -> c.pathQueue to c.pathQueueSoft
     }
     Row(
         modifier = modifier
