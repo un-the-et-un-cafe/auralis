@@ -1,6 +1,6 @@
-# OMCP App Design Pack v0.1.7 — Hopla
+# OMCP App Design Pack v0.1.8 — Hopla
 
-**Date:** 2026-10-24 (Europe/Paris) · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
+**Date:** 2026-10-24 (Europe/Paris) · v0.1.7 2026-10-24 · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
 **App name:** Hopla (consumer app) · **Protocol:** OMCP. Logo: approved `brand/hopla-v2/icon.svg` (inlined in welcome, done, restore mockups).  
 **Audience:** Proggy (Android/iOS implementers), Pipely (release), the maintainer / Writey (product)  
 **Source of truth for product rules:** `../PROTOCOL.md` §13, §20 and `../apps/REQUIREMENTS.md`  
@@ -106,7 +106,9 @@ design/
     nearby-profile.html (+ .png, --dark, --ios, --fr)  v0.3
     nearby-discover.html (+ .png, --swiping, --reduced-motion, --dark, --ios, --empty, --limit, --fr)  v0.3
     nearby-match.html (+ .png, --dark, --ios, --reduced-motion, --fr)  v0.3 (refined v0.1.5)
-    nearby-session.html (+ .png, --live, --ios-live-activity, --ios-live-activity-private, --ios-island, --ios-island-private, --ios-island-expanded, --ios-island-expanded-private, --android-ongoing, --android-ongoing-cap, --android-ongoing-private, --android-ongoing-dark, --dark, --ios, --fr, --fr-live-activity, --fr-live-activity-private, --android-ongoing-cap-fr)  v0.3 / pack v0.1.5, private + cap v0.1.7
+    nearby-session.html (+ .png, --live, --paused, --dark, --ios, --fr, --ios-live-activity[-paused-motion|-paused-night|-paused-battery][-private], --android-ongoing[-paused-…][-private], --ios-island, --ios-island-private, --ios-island-paused, --ios-island-expanded, --ios-island-expanded-paused, --android-ongoing-dark, --android-ongoing-paused-motion-dark, --fr-live-activity, --fr-live-activity-paused-night, --fr-android-ongoing-paused-battery)  v0.3 / rebuilt v0.1.8
+    nearby-checkin.html (+ .png, --android, --in-app, --in-app-dark, --in-app-ios, --turned-off, --turned-off-dark, --turned-off-notif, --fr, --in-app-fr, --turned-off-fr)  v0.3 / pack v0.1.8
+    settings-nearby.html (+ .png, --dark, --ios, --fr)  v0.3 / pack v0.1.8
     nearby-area.html (+ .png, --sheet, --dark, --ios, --fr)  v0.3 / pack v0.1.5
     nearby-radar.html (+ .png, --dark, --reduced-motion, --live, --ios, --fr)  v0.3 / pack v0.1.5
     nearby-skeleton.html (+ .png, --blurhash, --resolved, --dark, --blurhash-dark)  v0.3 / pack v0.1.5

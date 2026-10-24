@@ -1,17 +1,37 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.8 — 2026-10-24
+
+Nearby stays on until the user turns it off (REQUIREMENTS Decision 4 + D6). `DESIGN_SPEC.md` §5J (§5.75–5.80).
+
+### Added
+- `nearby-checkin`: 4 h check-in notification (iOS, Android) and in-app prompt with Yes / Turn off; turned-off-after-no-answer note and notification.
+- `settings-nearby`: Visible nearby toggle, auto-pause rules, check-in, indicator explanation.
+- `nearby-session` indicator states: active and paused (no motion 2 h, night 01:00–07:00, battery < 20 %) for iOS Live Activity, Dynamic Island and Android ongoing notification, normal and Private, light/dark, EN/FR.
+
+### Changed
+- Go Nearby sheet: no duration choice; explains auto-pause and check-in. Status chip: “Live nearby” / “Paused” / “Area mode”; no countdown copy anywhere. Radar CTA “Go Nearby”.
+- `nearby-discover`, `nearby-radar`, `nearby-area`, `nearby-skeleton`, `nearby-tab` regenerated.
+- Older session-length notes reworded in this changelog.
+
+### Removed
+- Duration picker, extension action and countdown copy; their PNGs deleted from the pack and mirror.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
 ## v0.1.7 — 2026-10-24
 
 maintainer approved the pending proposals; REQUIREMENTS Decision 5 / SS1 updated. `DESIGN_SPEC.md` §5I (§5.71–5.74).
 
 ### Changed
 - `settings-privacy`: copy aligned to REQUIREMENTS (“On by default”; “Burn-after-read and view-once content is always protected”; second-camera line in On and Off). All 12 frames re-rendered.
-- `nearby-session`: Private notifications hide counts on Live Activity, Dynamic Island and Android ongoing notification; +30 min hidden at 120 min total.
+- `nearby-session`: Private notifications hide counts on Live Activity, Dynamic Island and Android ongoing notification.
 - `app-switcher-cover`: toggle-off states (normal preview) for iOS and Android.
 - §12: Q4–Q10 resolved (2026-10-24); new Q11 (SS2 wording).
 
 ### Added
-- PNGs: `nearby-session--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-cap`, `--android-ongoing-cap-fr`, `--android-ongoing-private`, `--fr-live-activity-private`; `app-switcher-cover--ios-off`, `--android-off`.
+- PNGs: `nearby-session--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-private`, `--fr-live-activity-private`; `app-switcher-cover--ios-off`, `--android-off`.
 - Generator `/workspace/omcp-v017/gen.py`.
 
 ### Constraints observed
@@ -38,7 +58,7 @@ the maintainer’s decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24).
 
 ### Added
 - `settings-privacy` (Screenshot protection · Always on, honest second-camera line), `app-switcher-cover` (iOS blurred brand cover, Android black FLAG_SECURE card, iOS recording/mirroring cover).
-- Nearby v0.3: `nearby-session` (Go Nearby 30/60/120, iOS Live Activity, Dynamic Island compact + expanded, Android ongoing notification), `nearby-area`, `nearby-radar` (live radar empty, reduced motion), `nearby-skeleton` (0 / 300 / 900 ms timing). Status chip (“Live nearby · 42 min left” / “Area mode”). Motion table with durations + easing.
+- Nearby v0.3: `nearby-session` (Go Nearby, iOS Live Activity, Dynamic Island compact + expanded, Android ongoing notification), `nearby-area`, `nearby-radar` (live radar empty, reduced motion), `nearby-skeleton` (0 / 300 / 900 ms timing). Status chip (“Live nearby · 42 min left” / “Area mode”). Motion table with durations + easing.
 - `chat-info-notifications--opt-out` (+`-dark`, `-ios`, `-fr`).
 
 ### Changed

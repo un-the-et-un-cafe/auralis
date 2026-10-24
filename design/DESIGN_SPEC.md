@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.7
+# OMCP Smartphone Apps — Design Spec v0.1.8
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -876,10 +876,10 @@ Generator `/workspace/omcp-v015/gen.py` (supersedes v0.1.4 generator; same helpe
 
 ### 5.58 Nearby premium — session, area mode, radar, instant start (Decision 4) — v0.3
 **Go Nearby session** — `nearby-session` (+`--live`, `--ios-live-activity`, `--ios-island`, `--ios-island-expanded`, `--android-ongoing`, `--android-ongoing-dark`, `--dark`, `--ios`, `--fr`, `--fr-live-activity`)
-- Sheet: radar glyph, “Go Nearby”, 30 / **60** / 120 min segmented, “No GPS, no exact location. The session ends on its own.”, **Start · 60 min**. One tap from the radar empty state skips the sheet with the last duration.
-- iOS Live Activity (lock screen): Hopla icon, “Live nearby · 42 min left · ends 10:23”, two tiles (people nearby, new likes), progress bar, End. Dynamic Island compact: ripple glyph (leading) + “5 ♥2” (trailing); minimal: ripple only; expanded: counts + progress. Counts only — never names or photos (lock screen is public).
-- Android: foreground service (`connectedDevice`) ongoing notification — “Live nearby · 42 min left” / “5 people nearby · 2 new likes”, progress, actions Open · +30 min · End. Respects Private notifications (then: “Hopla · Nearby is on”).
-- In-app **status chip** (header, right): green dot “Live nearby · 42 min left” or pin “Area mode”. Tap → session/area sheet. No OS-limitation warnings anywhere.
+- Sheet (rev. v0.1.8): radar glyph, “Go Nearby”, “You stay visible until you turn Nearby off”, auto-pause rules, **Go Nearby**. See §5.75.
+- iOS Live Activity / Dynamic Island: see §5.75 (active and paused states; counts only, never names or photos).
+- Android: foreground service (`connectedDevice`) ongoing notification — see §5.75 (actions Open · Turn off).
+- In-app **status chip** (header, right): green dot “Live nearby”, grey “Paused”, or pin “Area mode”. Tap → Nearby sheet. No OS-limitation warnings anywhere.
 
 **Area mode** — `nearby-area` (+`--sheet`, `--dark`, `--ios`, `--fr`): outside a session, gateway + coarse geohash cell; sheet explains in one sentence, Area mode toggle, radius (< 1 km / < 5 km / Area), Go Nearby. Matches/likes arrive as normal notifications (NX3 ≤ 5 min).
 
@@ -914,9 +914,9 @@ Card (refined): 28 px radius, photo 372 px with page bars, frosted flag button, 
 ### 5.60 Copy (EN / FR) — v0.1.5 keys
 | Key | EN | FR |
 |---|---|---|
-| chip.live | Live nearby · 42 min left | En direct · encore 42 min |
+| chip.live / paused | Live nearby / Paused | Visible à proximité / En pause |
 | chip.area | Area mode | Mode secteur |
-| go.title / start | Go Nearby / Start · 60 min | Go Nearby / Démarrer · 60 min |
+| go.title / cta | Go Nearby / Go Nearby | Go Nearby / Go Nearby |
 | go.body | Discover people around you live, even with your phone locked. | Découvrez les gens autour de vous en direct, même téléphone verrouillé. |
 | la.counts | people nearby · new likes | personnes autour · nouveaux likes |
 | radar | Nobody nearby yet · We’re quietly looking around you. New profiles will appear here. · Widen radius | Personne pour l’instant · On cherche en douceur autour de vous. Les nouveaux profils apparaîtront ici. · Élargir le rayon |
@@ -924,7 +924,7 @@ Card (refined): 28 px radius, photo 372 px with page bars, frosted flag button, 
 | ice | Break the ice | Pour briser la glace |
 | privacy.ss | Screenshot protection · Always on | Protection contre les captures · Toujours active |
 
-A11y: chip is `role=status`; Live Activity/Island read “Live nearby, 42 minutes left, 5 people nearby, 2 new likes”; skeleton is `aria-busy` with “Loading nearby profiles”; radar has a text alternative.
+A11y: chip is `role=status`; Live Activity/Island read “Live nearby, 5 people nearby, 2 new likes”; skeleton is `aria-busy` with “Loading nearby profiles”; radar has a text alternative.
 
 ## 5H. v0.1.6 — Moderation & reputation (PROTOCOL §23, **v0.2**) and Block-screenshots toggle
 
@@ -1004,12 +1004,56 @@ Generator `/workspace/omcp-v017/gen.py`.
 | **Off** | Normal preview (system snapshot) | Normal preview |
 Open burn/view-once screens keep `FLAG_SECURE` / secure layer, so their snapshot stays black/blank even when Off.
 
-### 5.73 Nearby session — Private notifications and +30 cap — `nearby-session`
-- With **Private notifications on**, the Live Activity, Dynamic Island and Android ongoing notification **hide the counts**: “Nearby is on · 42 min left” only; compact Island shows ripple + remaining time. Frames: `--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-private`, `--fr-live-activity-private`.
-- **+30 min** extends the session but is capped at **120 min total** (start + extensions). At the cap the action is **hidden** (not greyed, so no dead target) and a line reads “Maximum session length reached (120 min)” / « Durée maximale atteinte (120 min) ». Frames: `--android-ongoing-cap`, `--android-ongoing-cap-fr`. Same rule for any future iOS Live Activity “+30” button.
+### 5.73 Nearby indicator — Private notifications — `nearby-session`
+With **Private notifications on**, the Live Activity, Dynamic Island and Android ongoing notification **hide the counts** (“Nearby is on · Visible until you turn it off”). Pause reasons are still shown (they reveal nothing about other people). Session-length rules: superseded by §5.75.
 
 ### 5.74 Moderation confirmations
 Confirmed (unchanged since v0.1.6): Reported and Restricted follow PROTOCOL §23.4 exactly (§5.63); Under review is shown to **admins only**; reputation uses **four word levels**, no number (§5.62).
+
+## 5J. v0.1.8 — Nearby stays on until turned off (REQUIREMENTS Decision 4 + D6) — v0.3
+
+Generator `/workspace/omcp-v018/gen.py`. Mockups: `nearby-session` (rebuilt), `nearby-checkin` (new), `settings-nearby` (new); `nearby-discover`, `nearby-radar`, `nearby-area`, `nearby-skeleton`, `nearby-tab` regenerated with the new chip / CTA.
+
+### 5.75 Visibility model
+- One tap on **Go Nearby** makes you visible **until you turn it off**. No duration picker, no extension action, no countdown anywhere.
+- **Auto-pause** (quiet, no alert, within 60 s of the condition — D6) and **auto-resume**:
+| Reason | Indicator title | Sub-line | Icon |
+|---|---|---|---|
+| 2 h without motion | Paused: no motion for 2 h | Resumes when you move | standing figure |
+| 01:00–07:00 local | Paused: night (01:00–07:00) | Resumes at 07:00 | moon |
+| Battery < 20 % | Paused: battery below 20% | Resumes when charging or above 20% | battery |
+While paused nothing is broadcast; the indicator stays (greyed), so the user always knows Nearby is on.
+- **Check-in** every 4 h of *visible* time (paused time doesn’t count): notification + in-app prompt “Still up for meeting people?” with **Yes** / **Turn off**. No answer within 15 min → Nearby turns off; a quiet notification and an in-app note say so (“You didn’t answer the check-in, so we turned it off. Your matches and chats are kept.”), with **Turn back on**.
+- **Persistent indicator** whenever Nearby is on (active or paused) — D6: iOS Live Activity + Dynamic Island; Android foreground-service ongoing notification (non-dismissible), actions Open · Turn off.
+
+### 5.76 Indicator states — `nearby-session--…`
+| State | iOS Live Activity | Dynamic Island compact | Android ongoing |
+|---|---|---|---|
+| Active | ripple + “Live nearby · Visible until you turn it off”, tiles (people nearby, new likes), Turn off | ripple · “5 ♥2” | “Live nearby” / “5 people nearby · 2 new likes” |
+| Active + Private | “Nearby is on”, no tiles, “counts hidden” line | ripple only | “Hopla · Nearby is on” / “Visible until you turn it off” |
+| Paused (any reason, normal or Private) | reason icon (grey) + reason title + resume line | reason icon · “Paused” | reason title / resume line (Private: prefixed “Hopla ·”) |
+Frames: `--ios-live-activity[-paused-{motion,night,battery}][-private]`, `--android-ongoing[-paused-…][-private]`, `--ios-island[-private|-paused]`, `--ios-island-expanded[-paused]`, dark and FR variants; `--live` / `--paused` chip frames.
+Platform: iOS Live Activities are ended by the system after 8 h (12 h on the lock screen); the app restarts the activity on each check-in “Yes” and on resume, so the indicator never lapses (D6). Android uses `FOREGROUND_SERVICE_CONNECTED_DEVICE`, `setOngoing(true)`, low-importance channel “Nearby status”.
+
+### 5.77 Check-in — `nearby-checkin` (+`--android`, `--in-app`, `--in-app-dark`, `--in-app-ios`, `--turned-off`, `--turned-off-dark`, `--turned-off-notif`, `--fr`, `--in-app-fr`, `--turned-off-fr`)
+Notification with actions Yes / Turn off and line “No answer in 15 min turns Nearby off.” In-app `alertdialog`: Yes, stay visible (primary, default focus) / Turn off Nearby; time it turns off shown as a plain time (not a ticking countdown; `aria-live=off`). Under Private notifications the check-in body is still generic (no names), so it’s shown as is.
+
+### 5.78 Settings › Nearby — `settings-nearby` (+`--dark`, `--ios`, `--fr`)
+Visible nearby toggle (“Stays on until you turn it off”), Auto-pause list (3 rules + check-in), indicator explanation, My profile, Area mode, Safety tips. Rules are informational (not user-configurable in v0.3).
+
+### 5.79 Copy (EN / FR)
+| Key | EN | FR |
+|---|---|---|
+| go.body | You stay visible until you turn Nearby off. An indicator is always shown while you are. | Vous restez visible jusqu’à ce que vous désactiviez À proximité. Un indicateur reste toujours affiché. |
+| active.sub | Visible until you turn it off | Visible jusqu’à ce que vous désactiviez |
+| pause.motion | Paused: no motion for 2 h · Resumes when you move | Pause : pas de mouvement depuis 2 h · Reprend dès que vous bougez |
+| pause.night | Paused: night (01:00–07:00) · Resumes at 07:00 | Pause : nuit (01:00–07:00) · Reprend à 07:00 |
+| pause.battery | Paused: battery below 20% · Resumes when charging or above 20% | Pause : batterie sous 20 % · Reprend en charge ou au-dessus de 20 % |
+| checkin | Still up for meeting people? · Yes · Turn off · No answer in 15 min turns Nearby off. | Toujours partant·e pour faire des rencontres ? · Oui · Désactiver · Sans réponse sous 15 min, À proximité se désactive. |
+| off | Nearby is off: no answer to the check-in. · Turn back on | À proximité est désactivé : pas de réponse au point de contrôle. · Réactiver |
+
+### 5.80 Accessibility
+Indicator is `role=status`; state changes (paused/resumed) announced politely once, never on a timer. Pause reason is in text, icons are decorative. Check-in prompt traps focus, Yes first; actions ≥ 48 px. Reduced motion: radar/ripple static in paused state; no pulsing indicator dot.
 
 ## 6. Path indicator component (normative UX)
 
@@ -1141,13 +1185,15 @@ Resolved in v0.1.5 by the maintainer (REQUIREMENTS § Decisions): Q4 calls → �
 Resolved 2026-10-24 (maintainer approved; REQUIREMENTS Decision 5 / SS1 updated by Writey):
 - ~~Q4 Live Activity on Private notifications~~ → counts hidden (§5.73).
 - ~~Q5 Android recents~~ → black when Block screenshots is on, normal preview when off (§5.72).
-- ~~Q6 Session battery / +30 min~~ → capped at 120 min total; action hidden at cap (§5.73).
+- ~~Q6 Session length~~ → superseded 2026-10-24: no time limit; auto-pause + 4 h check-in (§5.75).
 - ~~Q7 Block-screenshots toggle vs REQUIREMENTS~~ → REQUIREMENTS now has the toggle, on by default; burn/view-once always protected (§5.71).
 - ~~Q8 Restricted text~~ → follow §23 (§5.63).
 - ~~Q9 Under review visibility~~ → admins only.
 - ~~Q10 Reputation display~~ → four word levels.
 
 Open:
+12. **Area mode and D6:** area mode (gateway, outside Go Nearby) also broadcasts your card. Does D6’s “never visible without the persistent indicator” apply to area mode too? Mockups show no indicator in area mode.
+13. **Check-in while paused:** mockups assume the 4 h counts visible time only and no check-in fires while paused (e.g. overnight). Confirm.
 11. **SS2 wording vs toggle Off:** REQUIREMENTS SS2 still says “the app switcher never shows chat content”, but the approved Off state shows a normal preview. SS2 should read “with the toggle on”. Also Burn § Device-side protection line 130 still says “blocked app-wide”.
 
 ---
@@ -1160,7 +1206,8 @@ Open:
 | 0.1.1 | 2026-10-24 | Hopla naming; §5.14–5.24 onboarding, contact add, file transfer; 11 new mockups (17 PNG frames); resolved v0.1.0 questions |
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
-| 0.1.7 | 2026-10-24 | Approved decisions §5.71–5.74: toggle copy aligned to REQUIREMENTS, private Live Activity/Island, recents by toggle, +30 cap; §12 Q4–Q10 resolved |
+| 0.1.8 | 2026-10-24 | Nearby stays on until turned off: auto-pause, 4 h check-in, persistent indicator §5.75–5.80; `nearby-checkin`, `settings-nearby` new |
+| 0.1.7 | 2026-10-24 | Approved decisions §5.71–5.74: toggle copy aligned to REQUIREMENTS, private Live Activity/Island, recents by toggle, session length; §12 Q4–Q10 resolved |
 | 0.1.6 | 2026-10-24 | Moderation & reputation (§23, v0.2) §5.61–5.69; Block screenshots toggle §5.70; 7 new + 1 updated mockups; §12 Q7–Q10 |
 | 0.1.5 | 2026-10-24 | the maintainer decisions: §5.56–5.60 (calls, per-chat opt-out, Android lock, no screenshots, Nearby session/area/radar/skeleton/motion); 6 new mockups; screenshot notices removed |
 | 0.1.4 | 2026-10-24 | Notifications §5.36–5.40; Hopla Nearby dating (v0.3) §5.41–5.49; Burn after read §5.50–5.55; 14 new mockups (96 PNG frames); §12 Q4–Q8 |
