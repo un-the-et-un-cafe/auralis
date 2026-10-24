@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.16
+# OMCP Smartphone Apps — Design Spec v0.1.18
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -31,9 +31,10 @@ Implemented in `mockups/tokens.css` as CSS custom properties. Map 1:1 into nativ
 | `--surface` | `#ffffff` | `#151d28` | Bars, cards, bubbles (them) |
 | `--surface-2` | `#eef1f5` | `#1c2633` | Inputs, secondary fills |
 | `--ink` | `#0f1b2d` (≥12:1 on bg) | `#e8eef5` (≥12:1) | Primary text |
-| `--ink-2` | `#4a5b70` (≥4.7:1) | `#a3b1c2` (≥4.7:1) | Secondary text |
-| `--ink-3` | `#6b7c90` | `#7a8a9c` | Tertiary / timestamps |
-| `--line` | `#d8dee8` | `#2a3646` | Dividers |
+| `--ink-2` | `#3b495a` (9.2:1 on surface, ≥7.8:1 on every light tint, v0.1.18) | `#b4c0ce` (≥6.2:1 on every dark tint, v0.1.17) | Secondary text |
+| `--ink-3` | `#515e6d` (6.6:1 on surface, ≥5.6:1 on every light tint and hatch, v0.1.18) | `#95a3b4` (≥4.7:1 on every dark tint and hatch, v0.1.17) | Tertiary / timestamps |
+| `--line` | `#73849a` (3.8:1 on surface, ≥3.25:1 on every light tint, v0.1.18) | `#687990` (≥3:1 on bg/surface/surface-2, v0.1.17) | Dividers, input / control boundaries |
+| `--line-strong` | `#617289` (4.9:1 on surface, v0.1.18) | `#7a8ba1` (v0.1.17) | Toggle off-track, checkbox and field borders |
 | `--brand` | `#0b6e6a` (white on brand ≥4.5:1) | `#3dbdb6` | Primary actions, active tab |
 | `--brand-soft` | `#e0f3f1` | `#143836` | Sent bubble, soft fills |
 | `--ok` / soft | `#0f6b3a` / `#e3f4ea` | `#5dca8e` / `#143525` | Verified |
@@ -271,14 +272,14 @@ Shared rules for every screen below:
 | Default | Stepper 1/4, Hopla logo (`brand/hopla-v2/icon.svg`, 88 pt, inlined), app name, tagline, body, reassurance callout, Get started, Restore, footnote |
 | Backup detected | Not shown — §5.31 replaces this screen |
 
-| Copy | EN | FR |
-|------|----|----|
-| Tagline | Chat over Bluetooth mesh. Internet optional. | Discutez via le mesh Bluetooth. Internet facultatif. |
-| Body | No account, phone number or email needed. Your identity is created on this phone. | Pas de compte, de numéro de téléphone ni d’e-mail. Votre identité est créée sur ce téléphone. |
-| Reassurance | Nobody can read your messages — not even gateways. | Personne ne peut lire vos messages — pas même les passerelles. |
-| Primary | Get started | Commencer |
-| Secondary | Restore | Restaurer |
-| Footnote | Built on the open OMCP protocol | Basé sur le protocole ouvert OMCP |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Tagline | Chat over Bluetooth mesh. Internet optional. | Discutez via le mesh Bluetooth. Internet facultatif. | צ׳אט ברשת Mesh בבלוטות׳. אינטרנט לא חובה. |
+| Body | No account, phone number or email needed. Your identity is created on this phone. | Pas de compte, de numéro de téléphone ni d’e-mail. Votre identité est créée sur ce téléphone. | בלי חשבון, בלי מספר טלפון ובלי אימייל. הזהות שלך נוצרת בטלפון הזה. |
+| Reassurance | Nobody can read your messages — not even gateways. | Personne ne peut lire vos messages — pas même les passerelles. | אף אחד לא יכול לקרוא את ההודעות שלך — גם לא השערים (gateways). |
+| Primary | Get started | Commencer | בואו נתחיל |
+| Secondary | Restore | Restaurer | שחזור |
+| Footnote | Built on the open OMCP protocol | Basé sur le protocole ouvert OMCP | מבוסס על פרוטוקול OMCP הפתוח |
 
 **A11y:** logo `role=img` “Hopla logo”; heading level 1 = “Hopla”. Focus order: heading → body → Get started → Restore.
 **Android:** edge-to-edge, no toolbar; system back exits app. **iOS:** no nav bar; swipe-back disabled on this root.
@@ -296,15 +297,15 @@ Shared rules for every screen below:
 
 Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional long-press-to-enable is out of v0.1.1 mockups.
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Recovery phrase | Phrase de récupération |
-| Headline | Write these 24 words down and keep them private. | Notez ces 24 mots et gardez-les privés. |
-| Body | On paper, in order. They are the only way to restore your identity on a new phone. Hopla never uploads them. | Sur papier, dans l’ordre. C’est le seul moyen de restaurer votre identité sur un nouveau téléphone. Hopla ne les envoie jamais. |
-| Warning | Don’t take a screenshot — screenshots can sync to cloud photo backups. | Ne faites pas de capture d’écran — elles peuvent être synchronisées avec vos sauvegardes photo en ligne. |
-| Checkbox | I wrote it down and stored it somewhere safe. | Je l’ai notée et rangée en lieu sûr. |
-| Disabled hint | Tick the box to continue | Cochez la case pour continuer |
-| CTA | Continue | Continuer |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Recovery phrase | Phrase de récupération | ביטוי שחזור |
+| Headline | Write these 24 words down and keep them private. | Notez ces 24 mots et gardez-les privés. | רשמו את 24 המילים האלה ושמרו אותן בסוד. |
+| Body | On paper, in order. They are the only way to restore your identity on a new phone. Hopla never uploads them. | Sur papier, dans l’ordre. C’est le seul moyen de restaurer votre identité sur un nouveau téléphone. Hopla ne les envoie jamais. | על נייר, לפי הסדר. הן הדרך היחידה לשחזר את הזהות שלך בטלפון חדש. Hopla אף פעם לא מעלה אותן. |
+| Warning | Don’t take a screenshot — screenshots can sync to cloud photo backups. | Ne faites pas de capture d’écran — elles peuvent être synchronisées avec vos sauvegardes photo en ligne. | לא לצלם מסך — צילומי מסך עלולים להסתנכרן לגיבוי התמונות בענן. |
+| Checkbox | I wrote it down and stored it somewhere safe. | Je l’ai notée et rangée en lieu sûr. | רשמתי ושמרתי במקום בטוח. |
+| Disabled hint | Tick the box to continue | Cochez la case pour continuer | סמנו את התיבה כדי להמשיך |
+| CTA | Continue | Continuer | המשך |
 
 **A11y:** grid `role=list`, each word read as “Word 1, anchor”; TalkBack/VoiceOver reads in numeric order (column-major visual reading is not used — row-major 1-2-3). Checkbox is a single target including its label. Continue disabled hint is announced.
 **Android:** `WindowManager.LayoutParams.FLAG_SECURE` on this screen (blocks screenshots and recents thumbnail) — the warning is still shown for photos taken with another device. **iOS:** cannot block screenshots; hide words in app switcher snapshot (blur overlay on `sceneWillResignActive`). *(v0.1.5: superseded by §5.57 — app-wide secure layer on iOS too; keep the warning, reword to “Don’t photograph these words with another device” in a future pass.)*
@@ -320,15 +321,15 @@ Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional lo
 | All correct | Confirm enabled → Permissions |
 | 3 failed attempts | Callout suggests “Show phrase again” (no lockout; phrase still on device) |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Check your phrase | Vérifiez votre phrase |
-| Headline | Enter 3 words from your list | Saisissez 3 mots de votre liste |
-| Body | Positions are random each time. This proves the phrase is written down correctly. | Les positions changent à chaque fois. Cela confirme que la phrase est bien notée. |
-| Field label | Word #{n} | Mot n° {n} |
-| Error | That’s not word #{n}. Check your paper copy. | Ce n’est pas le mot n° {n}. Vérifiez votre copie papier. |
-| Secondary | Show phrase again | Revoir la phrase |
-| CTA | Confirm | Confirmer |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Check your phrase | Vérifiez votre phrase | בדיקת הביטוי |
+| Headline | Enter 3 words from your list | Saisissez 3 mots de votre liste | הזינו 3 מילים מהרשימה שלכם |
+| Body | Positions are random each time. This proves the phrase is written down correctly. | Les positions changent à chaque fois. Cela confirme que la phrase est bien notée. | המיקומים אקראיים בכל פעם. כך מוודאים שהביטוי נרשם נכון. |
+| Field label | Word #{n} | Mot n° {n} | מילה מס׳ {n} |
+| Error | That’s not word #{n}. Check your paper copy. | Ce n’est pas le mot n° {n}. Vérifiez votre copie papier. | זו לא מילה מס׳ {n}. בדקו בעותק הכתוב. |
+| Secondary | Show phrase again | Revoir la phrase | להציג שוב את הביטוי |
+| CTA | Confirm | Confirmer | אישור |
 
 **A11y:** errors `role=alert` / `announceForAccessibility`; chips are buttons “Suggestion: fossil”. Keyboard: `autocorrect off`, `autocapitalize none`, `textContentType`/`importantForAutofill = no`, incognito keyboard flag on Android (`IME_FLAG_NO_PERSONALIZED_LEARNING`).
 
@@ -345,13 +346,13 @@ Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional lo
 | Paste | Pasting 24 space-separated words fills all slots; clipboard cleared after 60 s (Android 13+ also hides clipboard preview via `EXTRA_IS_SENSITIVE`) |
 | Restoring | Full-screen progress “Restoring identity…” then “Restored 14 contacts” |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Restore identity | Restaurer l’identité |
-| Headline | Enter your 24 words | Saisissez vos 24 mots |
-| Body | Type each word in order. Suggestions come from the standard word list only. | Saisissez chaque mot dans l’ordre. Les suggestions viennent uniquement de la liste standard. |
-| Backup note | If a local encrypted backup is found, contacts and verification states are restored too. | Si une sauvegarde chiffrée locale est trouvée, les contacts et leurs états de vérification sont aussi restaurés. | *(v0.1.14: your own verifications of others are restored, but every contact must re-verify **you**, because your safety number changes on restore, §5.98.)*
-| CTA | Restore | Restaurer |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Restore identity | Restaurer l’identité | שחזור זהות |
+| Headline | Enter your 24 words | Saisissez vos 24 mots | הזינו את 24 המילים שלכם |
+| Body | Type each word in order. Suggestions come from the standard word list only. | Saisissez chaque mot dans l’ordre. Les suggestions viennent uniquement de la liste standard. | הקלידו כל מילה לפי הסדר. ההצעות מגיעות רק מרשימת המילים הסטנדרטית. |
+| Backup note | Your 24 words restore your identity and contacts, not your chats. To get your chats back, restore from your Google Drive or iCloud backup. | Vos 24 mots restaurent votre identité et vos contacts, pas vos discussions. Pour retrouver vos discussions, restaurez depuis votre sauvegarde Google Drive ou iCloud. | 24 המילים משחזרות את הזהות ואנשי הקשר, לא את הצ׳אטים. כדי לקבל בחזרה את הצ׳אטים, שחזרו מהגיבוי ב-Google Drive או ב-iCloud. | *(v0.1.17: replaces the “local encrypted backup” wording; only the cloud backup holds chats.)* *(v0.1.14: your own verifications of others are restored, but every contact must re-verify **you**, because your safety number changes on restore, §5.98.)*|
+| CTA | Restore | Restaurer | שחזור |
 
 **A11y:** slot labels “Word 7 of 24, invalid”; progress announced “13 of 24 words entered”. Same keyboard flags as §5.16.
 
@@ -366,16 +367,16 @@ Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional lo
 | Bluetooth denied | Replace screen with blocking explainer: icon, reason, how-to path, Open Settings / Try again. Continue unavailable — user can’t reach mesh features |
 | Bluetooth off (radio) | Same explainer, CTA “Turn on Bluetooth” (Android `ACTION_REQUEST_ENABLE`) |
 
-| Copy | EN | FR |
-|------|----|----|
-| Headline | Let Hopla reach people nearby | Laissez Hopla joindre les personnes à proximité |
-| Sub | We explain each one before your phone asks. | Nous expliquons chaque autorisation avant que votre téléphone ne la demande. |
-| Bluetooth | Needed to send and receive messages over the mesh. Required. | Nécessaire pour envoyer et recevoir des messages via le mesh. Obligatoire. |
-| Notifications | Know when a message arrives. Previews stay off: you’ll see “New Hopla message”, not the content. Change in Settings. | Soyez averti à l’arrivée d’un message. Les aperçus restent désactivés : vous verrez « Nouveau message Hopla », pas le contenu. Modifiable dans les réglages. |
-| Local network | iOS only. Lets Hopla find phones on the same Wi‑Fi for faster transfers later. | iOS uniquement. Permet à Hopla de trouver les téléphones sur le même Wi‑Fi pour des transferts plus rapides. |
-| Denied title | Hopla needs Bluetooth to work | Hopla a besoin du Bluetooth pour fonctionner |
-| Denied body | Messages travel phone-to-phone over Bluetooth. Without it, you can’t join the mesh or add contacts nearby. | Les messages passent de téléphone à téléphone via Bluetooth. Sans lui, impossible de rejoindre le mesh ou d’ajouter des contacts à proximité. |
-| Denied CTAs | Open Settings · Try again | Ouvrir les réglages · Réessayer |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Headline | Let Hopla reach people nearby | Laissez Hopla joindre les personnes à proximité | אפשרו ל-Hopla להגיע לאנשים בסביבה |
+| Sub | We explain each one before your phone asks. | Nous expliquons chaque autorisation avant que votre téléphone ne la demande. | נסביר כל הרשאה לפני שהטלפון יבקש אותה. |
+| Bluetooth | Needed to send and receive messages over the mesh. Required. | Nécessaire pour envoyer et recevoir des messages via le mesh. Obligatoire. | נדרש כדי לשלוח ולקבל הודעות ברשת ה-Mesh. חובה. |
+| Notifications | Know when a message arrives. Previews stay off: you’ll see “New Hopla message”, not the content. Change in Settings. | Soyez averti à l’arrivée d’un message. Les aperçus restent désactivés : vous verrez « Nouveau message Hopla », pas le contenu. Modifiable dans les réglages. | לדעת כשמגיעה הודעה. התצוגה המקדימה כבויה: יופיע ״הודעה חדשה ב-Hopla״, בלי התוכן. אפשר לשנות בהגדרות. |
+| Local network | iOS only. Lets Hopla find phones on the same Wi‑Fi for faster transfers later. | iOS uniquement. Permet à Hopla de trouver les téléphones sur le même Wi‑Fi pour des transferts plus rapides. | ב-iOS בלבד. מאפשר ל-Hopla למצוא טלפונים באותה רשת Wi‑Fi להעברות מהירות יותר בהמשך. |
+| Denied title | Hopla needs Bluetooth to work | Hopla a besoin du Bluetooth pour fonctionner | Hopla צריכה בלוטות׳ כדי לעבוד |
+| Denied body | Messages travel phone-to-phone over Bluetooth. Without it, you can’t join the mesh or add contacts nearby. | Les messages passent de téléphone à téléphone via Bluetooth. Sans lui, impossible de rejoindre le mesh ou d’ajouter des contacts à proximité. | ההודעות עוברות מטלפון לטלפון בבלוטות׳. בלעדיו אי אפשר להצטרף לרשת ה-Mesh או להוסיף אנשי קשר בסביבה. |
+| Denied CTAs | Open Settings · Try again | Ouvrir les réglages · Réessayer | פתיחת ההגדרות · לנסות שוב |
 
 **A11y:** each card is a group with heading; badges read as text (“Required”). Denied screen title is the focused heading on appear.
 **Android:** request `BLUETOOTH_SCAN` (`neverForLocation`), `BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE` together (Nearby devices); `POST_NOTIFICATIONS` on 13+; after 2 denials the OS stops prompting → go straight to explainer + `ACTION_APPLICATION_DETAILS_SETTINGS`. Foreground-service notification (§8.1) starts after BLE granted. **iOS:** `NSBluetoothAlwaysUsageDescription`, `NSLocalNetworkUsageDescription`; Bluetooth denial is final until Settings → explainer path `Settings › Hopla › Bluetooth`; notification request uses `.alert, .badge, .sound` with `UNNotificationContent` showing generic body (previews off).
@@ -384,14 +385,14 @@ Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional lo
 
 Full-screen cover from Chats “+”. Four options; Enter PeerID grouped under **Advanced**.
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Add contact | Ajouter un contact |
-| Intro | Meet in person for the strongest check. Each option shows a safety number before you chat. | Rencontrez-vous en personne pour la vérification la plus sûre. Chaque option affiche un numéro de sécurité avant de discuter. |
-| Scan | Scan QR code — Point your camera at their Hopla code | Scanner un QR code — Visez le code Hopla de votre contact |
-| My QR | Show my QR code — Let them scan you | Afficher mon QR code — Laissez-le vous scanner |
-| NFC | Tap phones (NFC) — Hold the backs of both phones together | Toucher les téléphones (NFC) — Collez le dos des deux téléphones |
-| PeerID | Enter PeerID — Paste an omcp1:… ID. You’ll need to compare safety numbers separately. | Saisir un PeerID — Collez un identifiant omcp1:… Vous devrez comparer les numéros de sécurité séparément. |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Add contact | Ajouter un contact | הוספת איש קשר |
+| Intro | Meet in person for the strongest check. Each option shows a safety number before you chat. | Rencontrez-vous en personne pour la vérification la plus sûre. Chaque option affiche un numéro de sécurité avant de discuter. | הכי בטוח לבדוק פנים אל פנים. כל אפשרות מציגה מספר בטיחות לפני שמתחילים לשוחח. |
+| Scan | Scan QR code — Point your camera at their Hopla code | Scanner un QR code — Visez le code Hopla de votre contact | סריקת קוד QR — כוונו את המצלמה לקוד ה-Hopla של איש הקשר |
+| My QR | Show my QR code — Let them scan you | Afficher mon QR code — Laissez-le vous scanner | הצגת קוד ה-QR שלי — שיסרקו אתכם |
+| NFC | Tap phones (NFC) — Hold the backs of both phones together | Toucher les téléphones (NFC) — Collez le dos des deux téléphones | הצמדת טלפונים (NFC) — הצמידו את הגב של שני הטלפונים |
+| PeerID | Enter PeerID — Paste an omcp1:… ID. You’ll need to compare safety numbers separately. | Saisir un PeerID — Collez un identifiant omcp1:… Vous devrez comparer les numéros de sécurité séparément. | הזנת PeerID — הדביקו מזהה ‎omcp1:…‎. תצטרכו להשוות מספרי בטיחות בנפרד. |
 
 **States:** NFC row hidden when hardware absent; on iOS NFC row shows only if reader session available (iPhone reads; HCE emulation is Android-only → on iOS, NFC = read-only, other phone must be Android). **A11y:** rows are buttons with combined label+description.
 
@@ -407,13 +408,13 @@ Full-screen cover from Chats “+”. Four options; Enter PeerID grouped under *
 
 Valid code = URI `omcp:` / `omcp1:` PeerID + SAS payload (PROTOCOL §3.3). Anything else (URLs, Wi‑Fi, other apps) → not-OMCP error; **never** open URLs from scanned codes.
 
-| Copy | EN | FR |
-|------|----|----|
-| Hint | Point at their Hopla QR code. It scans automatically. | Visez le QR code Hopla. Le scan est automatique. |
-| Low light | Too dark? Turn on the torch. | Trop sombre ? Allumez la lampe. |
-| Error title | Not a Hopla contact code | Ce n’est pas un code contact Hopla |
-| Error body | This QR isn’t an OMCP identity code. Ask them to open Add contact › Show my QR code. | Ce QR n’est pas un code d’identité OMCP. Demandez-lui d’ouvrir Ajouter un contact › Afficher mon QR code. |
-| Buttons | Torch · From photo · My code | Lampe · Depuis une photo · Mon code |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Hint | Point at their Hopla QR code. It scans automatically. | Visez le QR code Hopla. Le scan est automatique. | כוונו לקוד ה-QR של Hopla. הסריקה אוטומטית. |
+| Low light | Too dark? Turn on the torch. | Trop sombre ? Allumez la lampe. | חשוך מדי? הדליקו את הפנס. |
+| Error title | Not a Hopla contact code | Ce n’est pas un code contact Hopla | זה לא קוד איש קשר של Hopla |
+| Error body | This QR isn’t an OMCP identity code. Ask them to open Add contact › Show my QR code. | Ce QR n’est pas un code d’identité OMCP. Demandez-lui d’ouvrir Ajouter un contact › Afficher mon QR code. | קוד ה-QR הזה אינו קוד זהות של OMCP. בקשו מאיש הקשר לפתוח הוספת איש קשר › הצגת קוד ה-QR שלי. |
+| Buttons | Torch · From photo · My code | Lampe · Depuis une photo · Mon code | פנס · מתמונה · הקוד שלי |
 
 **A11y:** viewfinder `role=img` “Camera viewfinder”; error announced as alert; VoiceOver hint “Move phone slowly over the code”. **Android:** CameraX + ML Kit barcode (bundled model, no Play-services download dependency for de-Googled devices — fallback ZXing). **iOS:** `AVCaptureMetadataOutput` `.qr`; `DataScannerViewController` acceptable on iOS 17.
 
@@ -426,12 +427,12 @@ Valid code = URI `omcp:` / `omcp1:` PeerID + SAS payload (PROTOCOL §3.3). Anyth
 | Brightness | Raise to max on appear, restore on leave; hint callout |
 | Actions | Share (system share sheet: text `omcp1:…` + QR PNG), Scan theirs |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | My QR code | Mon QR code |
-| Brightness hint | Screen brightness is raised while this code is shown. Ask them to scan from Hopla › Add contact. | La luminosité est augmentée pendant l’affichage du code. Demandez-lui de scanner depuis Hopla › Ajouter un contact. |
-| Privacy note | Your code contains only your public PeerID — no phone number or location. | Votre code ne contient que votre PeerID public — ni numéro ni position. |
-| Actions | Share · Scan theirs · Copy full PeerID | Partager · Scanner le sien · Copier le PeerID complet |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | My QR code | Mon QR code | קוד ה-QR שלי |
+| Brightness hint | Screen brightness is raised while this code is shown. Ask them to scan from Hopla › Add contact. | La luminosité est augmentée pendant l’affichage du code. Demandez-lui de scanner depuis Hopla › Ajouter un contact. | בהירות המסך מוגברת בזמן שהקוד מוצג. בקשו מאיש הקשר לסרוק מ-Hopla › הוספת איש קשר. |
+| Privacy note | Your code contains only your public PeerID — no phone number or location. | Votre code ne contient que votre PeerID public — ni numéro ni position. | הקוד שלך כולל רק את ה-PeerID הציבורי — בלי מספר טלפון ובלי מיקום. |
+| Actions | Share · Scan theirs · Copy full PeerID | Partager · Scanner le sien · Copier le PeerID complet | שיתוף · סריקת הקוד שלהם · העתקת ה-PeerID המלא |
 
 **A11y:** QR `role=img` “Your Hopla contact QR code”; PeerID read character-grouped. **Android:** `window.attributes.screenBrightness = 1f`. **iOS:** `UIScreen.main.brightness` save/restore.
 
@@ -445,15 +446,15 @@ Bottom sheet over the camera after a scan/NFC hit.
 | Mismatch (known contact, number changed) | Danger badge + callout, differing groups underlined + danger; actions Scan again / Don’t trust this code / Cancel. No “chat” action |
 | Verified | Success haptic → thread opens with verified mark |
 
-| Copy | EN | FR |
-|------|----|----|
-| Section | Safety number | Numéro de sécurité |
-| Compare | Compare these 60 digits with the number on {name}’s screen. If they match, nobody is in the middle. | Comparez ces 60 chiffres avec le numéro affiché chez {name}. S’ils correspondent, personne ne s’est interposé. |
-| Primary | Numbers match — Verify & chat | Les numéros correspondent — Vérifier et discuter |
-| Secondary | Chat without verifying | Discuter sans vérifier |
-| Mismatch title | Safety numbers don’t match | Les numéros de sécurité ne correspondent pas |
-| Mismatch body | This code is different from the one saved for {name}. Their identity may have changed, or someone may be impersonating them. Check in person before chatting. | Ce code diffère de celui enregistré pour {name}. Son identité a peut-être changé, ou quelqu’un se fait passer pour lui/elle. Vérifiez en personne avant de discuter. |
-| Mismatch actions | Scan again · Don’t trust this code | Scanner à nouveau · Ne pas faire confiance |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Section | Safety number | Numéro de sécurité | מספר בטיחות |
+| Compare | Compare these 60 digits with the number on {name}’s screen. If they match, nobody is in the middle. | Comparez ces 60 chiffres avec le numéro affiché chez {name}. S’ils correspondent, personne ne s’est interposé. | השוו את 60 הספרות האלה למספר שמופיע במסך של {name}. אם הם זהים, אף אחד לא נמצא באמצע. |
+| Primary | Numbers match — Verify & chat | Les numéros correspondent — Vérifier et discuter | המספרים תואמים — אימות וצ׳אט |
+| Secondary | Chat without verifying | Discuter sans vérifier | צ׳אט בלי אימות |
+| Mismatch title | Safety numbers don’t match | Les numéros de sécurité ne correspondent pas | מספרי הבטיחות לא תואמים |
+| Mismatch body | This code is different from the one saved for {name}. Their identity may have changed, or someone may be impersonating them. Check in person before chatting. | Ce code diffère de celui enregistré pour {name}. Son identité a peut-être changé, ou quelqu’un se fait passer pour lui/elle. Vérifiez en personne avant de discuter. | הקוד הזה שונה מזה ששמור עבור {name}. ייתכן שהזהות שלו השתנתה, או שמישהו מתחזה. בדקו פנים אל פנים לפני שמשוחחים. |
+| Mismatch actions | Scan again · Don’t trust this code | Scanner à nouveau · Ne pas faire confiance | סריקה חוזרת · לא לסמוך על הקוד הזה |
 
 **A11y:** safety number read group-by-group (“Group 1: 3 3 7 6 6”), each group a focusable element; at 200 % the grid reflows to 2 columns (never horizontal scroll). Mismatched groups announced “differs”. Sheet is modal; focus trapped; Escape/back = Cancel. **Android:** `ModalBottomSheet`, `skipPartiallyExpanded=true`. **iOS:** `.sheet` with `.presentationDetents([.large])`.
 
@@ -468,14 +469,14 @@ After the system picker (Android `ACTION_OPEN_DOCUMENT` / Photo Picker; iOS `PHP
 | Route = queue | Callout: “{name} isn’t reachable now. The file will send when they’re back in range.” Send label → “Queue” |
 | Too large (> 50 MB) | Danger file card, callout with exact size; Send replaced by “Choose another”. Checked **before** any encryption/chunking |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Send file to {name}? | Envoyer le fichier à {name} ? |
-| Size row | {x} MB of 50 MB max | {x} Mo sur 50 Mo max |
-| Mesh hint | Via mesh is slower for large files. It keeps sending in the background and resumes if {name} moves out of range. | Via le mesh, les gros fichiers sont plus lents. L’envoi continue en arrière-plan et reprend si {name} s’éloigne. |
-| Too-large title | File is too large | Fichier trop volumineux |
-| Too-large body | {x} MB is over the 50 MB limit. Hopla can send files up to 50 MB. Try a shorter clip or compress it first. | {x} Mo dépasse la limite de 50 Mo. Hopla envoie des fichiers jusqu’à 50 Mo. Essayez un extrait plus court ou compressez-le. |
-| Actions | Cancel · Send · Choose another | Annuler · Envoyer · Choisir un autre |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Send file to {name}? | Envoyer le fichier à {name} ? | לשלוח קובץ ל{name}? |
+| Size row | {x} MB of 50 MB max | {x} Mo sur 50 Mo max | {x} מ״ב מתוך 50 מ״ב לכל היותר |
+| Mesh hint | Via mesh is slower for large files. It keeps sending in the background and resumes if {name} moves out of range. | Via le mesh, les gros fichiers sont plus lents. L’envoi continue en arrière-plan et reprend si {name} s’éloigne. | דרך Mesh איטי יותר לקבצים גדולים. השליחה ממשיכה ברקע ומתחדשת אם {name} יוצא/ת מהטווח. |
+| Too-large title | File is too large | Fichier trop volumineux | הקובץ גדול מדי |
+| Too-large body | {x} MB is over the 50 MB limit. Hopla can send files up to 50 MB. Try a shorter clip or compress it first. | {x} Mo dépasse la limite de 50 Mo. Hopla envoie des fichiers jusqu’à 50 Mo. Essayez un extrait plus court ou compressez-le. | {x} מ״ב חורג מהמגבלה של 50 מ״ב. Hopla יכולה לשלוח קבצים עד 50 מ״ב. נסו קטע קצר יותר או דחסו אותו קודם. |
+| Actions | Cancel · Send · Choose another | Annuler · Envoyer · Choisir un autre | ביטול · שליחה · בחירת קובץ אחר |
 
 Estimated time: core supplies throughput estimate; show “~{n} min nearby” only when ≥ 1 min, otherwise hide row. Units: decimal MB (1 MB = 10⁶ B) — 50 MB limit is 50 000 000 B to match core; confirm with Proggy (see Q).
 **A11y:** sheet heading is title; Route chip label “Route: mesh, local Bluetooth only”.
@@ -511,7 +512,7 @@ Welcome (1) → Profile (2) → Secure your account (3) ─┬─ cloud: passwor
 Fresh install with a backup found → Restore on reinstall (replaces Welcome)
 ```
 
-**Security claims allowed in copy (and only these):** phrase is encrypted on the phone before upload; the provider (Google/Apple) can’t read it; anyone with the cloud account **and** the backup password can restore; forgotten password ⇒ written phrase needed; backups use only the platform cloud over the Internet, never mesh/gateways; offline ⇒ queued and retried. Do **not** claim “zero-knowledge”, “unhackable”, “military grade”, or that a cloud backup can’t be restored by anyone else.
+**Security claims allowed in copy (and only these):** phrase is encrypted on the phone before upload; the provider (Google/Apple) can’t read it; the cloud backup holds the recovery phrase **and all chats** (text; media only if media backup is on); the written phrase alone restores identity and contacts, **not chats**; anyone with the cloud account **and** the backup password can restore; forgotten password ⇒ written phrase needed; backups use only the platform cloud over the Internet, never mesh/gateways; offline ⇒ queued and retried. Do **not** claim “zero-knowledge”, “unhackable”, “military grade”, or that a cloud backup can’t be restored by anyone else.
 
 ### 5.25 Profile — `onboarding-profile` (+ `--filled`)
 
@@ -521,15 +522,15 @@ Fresh install with a backup found → Restore on reinstall (replaces Welcome)
 | Filled | Initials or photo, primary **Continue**, footnote shows PeerID short form |
 | Key-gen failed | Callout danger “Couldn’t create your identity. Try again.” (same as §5.14) |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Your profile | Votre profil |
-| Heading | How should contacts see you? | Comment vos contacts vous verront-ils ? |
-| Sub | Both are optional. You can change them later. | Les deux sont facultatifs. Vous pourrez les modifier plus tard. |
-| Photo | Add photo / Change photo | Ajouter une photo / Changer la photo |
-| Field | Display name · Your name (optional) | Nom affiché · Votre nom (facultatif) |
-| Privacy | Your name and photo are shared only with your contacts — never with a server or people nearby you haven’t added. | Votre nom et votre photo ne sont partagés qu’avec vos contacts — jamais avec un serveur ni avec des personnes à proximité que vous n’avez pas ajoutées. |
-| Primary | Skip / Continue | Passer / Continuer |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Your profile | Votre profil | הפרופיל שלך |
+| Heading | How should contacts see you? | Comment vos contacts vous verront-ils ? | איך אנשי הקשר יראו אותך? |
+| Sub | Both are optional. You can change them later. | Les deux sont facultatifs. Vous pourrez les modifier plus tard. | שניהם אופציונליים. אפשר לשנות אחר כך. |
+| Photo | Add photo / Change photo | Ajouter une photo / Changer la photo | הוספת תמונה / החלפת תמונה |
+| Field | Display name · Your name (optional) | Nom affiché · Votre nom (facultatif) | שם תצוגה · השם שלך (אופציונלי) |
+| Privacy | Your name and photo are shared only with your contacts — never with a server or people nearby you haven’t added. | Votre nom et votre photo ne sont partagés qu’avec vos contacts — jamais avec un serveur ni avec des personnes à proximité que vous n’avez pas ajoutées. | השם והתמונה שלך משותפים רק עם אנשי הקשר שלך — אף פעם לא עם שרת או עם אנשים בסביבה שלא הוספת. |
+| Primary | Skip / Continue | Passer / Continuer | דילוג / המשך |
 
 **A11y:** photo button label “Add profile photo, optional”; field label “Display name, optional”. Footnote is `aria-live=polite` so “Your ID is ready” is announced.  
 **Android:** Photo Picker (`PickVisualMedia`), no storage permission. **iOS:** `PhotosPicker`, no library permission prompt.
@@ -550,28 +551,28 @@ Multi-select list (`BackupMethodOption`, checkbox, 72 pt min). At least one meth
 | Failure — auth/quota | Same layout; body “{service} said no: {reason}.” e.g. “Your Google Drive is full.” No queueing |
 | Write it down selected | Continue opens §5.27 |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Secure your account | Sécurisez votre compte |
-| Heading | Don’t lose your identity | Ne perdez pas votre identité |
-| Sub | Pick one or more ways to back up your 24-word recovery phrase. | Choisissez une ou plusieurs façons de sauvegarder votre phrase de récupération de 24 mots. |
-| Drive (Android) | Google Drive · Encrypted on this phone with a backup password before upload. Google can’t read it. | Google Drive · Chiffrée sur ce téléphone avec un mot de passe de sauvegarde avant l’envoi. Google ne peut pas la lire. |
-| Drive (iOS) | Google Drive · Also available on iPhone. Needs a backup password. | Google Drive · Aussi disponible sur iPhone. Nécessite un mot de passe de sauvegarde. |
-| iCloud | iCloud · Encrypted on this phone before upload. Apple can’t read it. | iCloud · Chiffrée sur ce téléphone avant l’envoi. Apple ne peut pas la lire. |
-| Write it down | See your 24 words, then answer a quick 3-word check. | Affichez vos 24 mots, puis répondez à une vérification rapide de 3 mots. |
-| Badge | Recommended | Recommandé |
-| Honest note | Anyone with your {Google/iCloud} account **and** your backup password can restore your identity. If you forget the password, you’ll need the written phrase. | Toute personne ayant accès à votre compte {Google/iCloud} **et** à votre mot de passe de sauvegarde peut restaurer votre identité. Si vous oubliez le mot de passe, il vous faudra la phrase écrite. |
-| Actions | Continue · Remind me later | Continuer · Me le rappeler plus tard |
-| Sheet title | Create a backup password | Créez un mot de passe de sauvegarde |
-| Sheet body (Drive) | Your phrase is encrypted with this password on your phone, then saved in a hidden Hopla folder in your Google Drive. | Votre phrase est chiffrée avec ce mot de passe sur votre téléphone, puis enregistrée dans un dossier Hopla masqué de votre Google Drive. |
-| Sheet body (iCloud) | …then saved in iCloud. | …puis enregistrée dans iCloud. |
-| No password | No password — protect with a key in iCloud Keychain instead | Sans mot de passe — protéger avec une clé dans le trousseau iCloud |
-| Hint | At least 8 characters. Hopla can’t reset it for you. | Au moins 8 caractères. Hopla ne peut pas le réinitialiser. |
-| Strength | Too weak · Strong password | Trop faible · Mot de passe robuste |
-| CTA | Back up to {service} | Sauvegarder sur {service} |
-| Success | Backed up to {service} · Encrypted on this phone before upload. | Sauvegardé sur {service} · Chiffré sur ce téléphone avant l’envoi. |
-| Failure | Backup didn’t finish · We couldn’t reach {service}. Nothing was uploaded. · You’re offline. Your encrypted backup is queued and will upload automatically when you’re back online. Hopla never sends backups over the mesh or gateways. | La sauvegarde n’a pas abouti · Impossible de joindre {service}. Rien n’a été envoyé. · Vous êtes hors ligne. Votre sauvegarde chiffrée est en attente et sera envoyée automatiquement dès votre retour en ligne. Hopla n’envoie jamais de sauvegarde via le mesh ou les passerelles. |
-| Failure actions | Try again · Write it down instead · Continue — retry later | Réessayer · L’écrire plutôt · Continuer — réessayer plus tard |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Secure your account | Sécurisez votre compte | אבטחת החשבון |
+| Heading | Don’t lose your identity | Ne perdez pas votre identité | לא לאבד את הזהות שלך |
+| Sub | Pick one or more ways to back up Hopla. A cloud backup saves your recovery phrase and all your chats. | Choisissez une ou plusieurs façons de sauvegarder Hopla. Une sauvegarde cloud enregistre votre phrase de récupération et toutes vos discussions.| בחרו דרך אחת או יותר לגבות את Hopla. גיבוי בענן שומר את ביטוי השחזור ואת כל הצ׳אטים שלך. |
+| Drive (Android) | Google Drive · Encrypted on this phone with a backup password before upload. Google can’t read it. | Google Drive · Chiffrée sur ce téléphone avec un mot de passe de sauvegarde avant l’envoi. Google ne peut pas la lire. | Google Drive · מוצפן בטלפון הזה עם סיסמת גיבוי לפני ההעלאה. Google לא יכולה לקרוא אותו. |
+| Drive (iOS) | Google Drive · Also available on iPhone. Needs a backup password. | Google Drive · Aussi disponible sur iPhone. Nécessite un mot de passe de sauvegarde. | Google Drive · זמין גם ב-iPhone. נדרשת סיסמת גיבוי. |
+| iCloud | iCloud · Encrypted on this phone before upload. Apple can’t read it. | iCloud · Chiffrée sur ce téléphone avant l’envoi. Apple ne peut pas la lire. | iCloud · מוצפן בטלפון הזה לפני ההעלאה. Apple לא יכולה לקרוא אותו. |
+| Write it down | See your 24 words, then answer a quick 3-word check. | Affichez vos 24 mots, puis répondez à une vérification rapide de 3 mots. | הצגת 24 המילים שלך, ואחר כך בדיקה קצרה של 3 מילים. |
+| Badge | Recommended | Recommandé | מומלץ |
+| Honest note | Anyone with your {Google/iCloud} account **and** your backup password can restore your identity and all your chats. If you forget the password, your written phrase still restores your identity and contacts, but not your chats. | Toute personne ayant accès à votre compte {Google/iCloud} **et** à votre mot de passe de sauvegarde peut restaurer votre identité et toutes vos discussions. Si vous oubliez le mot de passe, votre phrase écrite restaure quand même votre identité et vos contacts, mais pas vos discussions.| כל מי שיש לו גישה לחשבון {Google/iCloud} שלך **וגם** לסיסמת הגיבוי יכול לשחזר את הזהות שלך ואת כל הצ׳אטים. אם שכחת את הסיסמה, הביטוי הכתוב עדיין משחזר את הזהות ואנשי הקשר, אבל לא את הצ׳אטים. |
+| Actions | Continue · Remind me later | Continuer · Me le rappeler plus tard | המשך · להזכיר לי מאוחר יותר |
+| Sheet title | Create a backup password | Créez un mot de passe de sauvegarde | יצירת סיסמת גיבוי |
+| Sheet body (Drive) | Your phrase and chats are encrypted with this password on your phone, then saved in a hidden Hopla folder in your Google Drive. *(iCloud: “…then saved in iCloud.”)* | Votre phrase et vos discussions sont chiffrées avec ce mot de passe sur votre téléphone, puis enregistrées dans un dossier Hopla masqué de votre Google Drive. *(iCloud : « …puis enregistrées dans iCloud. »)*| הביטוי והצ׳אטים שלך מוצפנים עם הסיסמה הזו בטלפון, ואז נשמרים בתיקיית Hopla מוסתרת ב-Google Drive שלך. *(iCloud: ״…ואז נשמרים ב-iCloud.״)* |
+| Sheet body (iCloud) | …then saved in iCloud. | …puis enregistrée dans iCloud. | …ואז נשמרים ב-iCloud. |
+| No password | No password — protect with a key in iCloud Keychain instead | Sans mot de passe — protéger avec une clé dans le trousseau iCloud | בלי סיסמה — הגנה במפתח ב-iCloud Keychain במקום |
+| Hint | At least 8 characters. Hopla can’t reset it for you. | Au moins 8 caractères. Hopla ne peut pas le réinitialiser. | לפחות 8 תווים. Hopla לא יכולה לאפס אותה בשבילך. |
+| Strength | Too weak · Strong password | Trop faible · Mot de passe robuste | חלשה מדי · סיסמה חזקה |
+| CTA | Back up to {service} | Sauvegarder sur {service} | גיבוי ל-{service} |
+| Success | Backed up to {service} · Encrypted on this phone before upload. | Sauvegardé sur {service} · Chiffré sur ce téléphone avant l’envoi. | גובה ל-{service} · הוצפן בטלפון הזה לפני ההעלאה. |
+| Failure | Backup didn’t finish · We couldn’t reach {service}. Nothing was uploaded. · You’re offline. Your encrypted backup is queued and will upload automatically when you’re back online. Hopla never sends backups over the mesh or gateways. | La sauvegarde n’a pas abouti · Impossible de joindre {service}. Rien n’a été envoyé. · Vous êtes hors ligne. Votre sauvegarde chiffrée est en attente et sera envoyée automatiquement dès votre retour en ligne. Hopla n’envoie jamais de sauvegarde via le mesh ou les passerelles. | הגיבוי לא הסתיים · לא הצלחנו להגיע ל-{service}. שום דבר לא הועלה. · אין חיבור לאינטרנט. הגיבוי המוצפן ממתין בתור ויועלה אוטומטית כשהחיבור יחזור. Hopla אף פעם לא שולחת גיבויים דרך רשת ה-Mesh או השערים. |
+| Failure actions | Try again · Write it down instead · Continue — retry later | Réessayer · L’écrire plutôt · Continuer — réessayer plus tard | לנסות שוב · לרשום על נייר במקום · המשך — לנסות שוב אחר כך |
 
 **A11y:** each option is one focusable checkbox: “{title}, {description}, recommended, checked”. Honest note is read after the options, before Continue. Strength meter exposes text (“Strong password”), not colour alone. Password fields support password managers but `autocomplete="new-password"`; no paste block.  
 **Android:** Credential Manager account picker → OAuth scope **`drive.appdata` only**; blob stored in **`appDataFolder`** (hidden from the user’s Drive UI and other apps — copy says “hidden Hopla folder”, never “invisible to Google”). Don’t request full Drive scope. **iOS:** blob in **CloudKit private database** (`OMCPBackup` record). No-password key in **iCloud Keychain** (`kSecAttrSynchronizable`, `kSecAttrAccessibleAfterFirstUnlock`) — “end-to-end encrypted by Apple” is only said of the Keychain key, not of CloudKit. If the user isn’t signed in to iCloud, iCloud option shows “Sign in to iCloud in Settings” and is disabled. Google Drive on iOS uses Google Sign-In.
@@ -580,13 +581,13 @@ Multi-select list (`BackupMethodOption`, checkbox, 72 pt min). At least one meth
 
 Adapts deprecated §5.15/§5.16: same grid, screenshot warning, checkbox and 3-random-word check (autocomplete from BIP-39 list). Changes: stepper fixed at 3/4; heading copy unchanged; body no longer says “Hopla never uploads them” (cloud backup now uploads an *encrypted* copy) → “They can always restore your identity, even without a cloud backup.”; CTA “Check my words”; “Show words again”. No skip on the quiz itself — the way out is Back to §5.26 (choose another method or Remind me later). Success → Done (or back to §5.26 success if a cloud method is also selected).
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Write it down / Check your words | Notez-la / Vérifiez vos mots |
-| Body | On paper, in order. They can always restore your identity, even without a cloud backup. | Sur papier, dans l’ordre. Ils permettent toujours de restaurer votre identité, même sans sauvegarde cloud. |
-| CTA | Check my words | Vérifier mes mots |
-| Quiz | Enter 3 words from your list · Positions are random each time. | Saisissez 3 mots de votre liste · Les positions changent à chaque fois. |
-| Error | That’s not word #{n}. Check your paper copy. | Ce n’est pas le mot n° {n}. Vérifiez votre copie papier. |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Write it down / Check your words | Notez-la / Vérifiez vos mots | לרשום על נייר / בדיקת המילים |
+| Body | On paper, in order. They always restore your identity and contacts, even without a cloud backup. Your chats come back only from a cloud backup. | Sur papier, dans l’ordre. Ils restaurent toujours votre identité et vos contacts, même sans sauvegarde cloud. Vos discussions ne reviennent qu’avec une sauvegarde cloud.| על נייר, לפי הסדר. הן תמיד משחזרות את הזהות ואנשי הקשר שלך, גם בלי גיבוי בענן. הצ׳אטים חוזרים רק מגיבוי בענן. |
+| CTA | Check my words | Vérifier mes mots | בדיקת המילים שלי |
+| Quiz | Enter 3 words from your list · Positions are random each time. | Saisissez 3 mots de votre liste · Les positions changent à chaque fois. | הזינו 3 מילים מהרשימה שלכם · המיקומים אקראיים בכל פעם. |
+| Error | That’s not word #{n}. Check your paper copy. | Ce n’est pas le mot n° {n}. Vérifiez votre copie papier. | זו לא מילה מס׳ {n}. בדקו בעותק הכתוב. |
 
 **A11y / platform:** as §5.15–5.16 (`FLAG_SECURE` on Android; iOS screenshot notification → warning toast). *(v0.1.5: superseded by §5.57.)*
 
@@ -594,12 +595,12 @@ Adapts deprecated §5.15/§5.16: same grid, screenshot warning, checkbox and 3-r
 
 Hopla logo (`brand/hopla-v2/icon.svg`, inlined), “You’re all set”, `MyQrCard` (QR with logo, name, PeerID), `ContactAddOption` “Add someone nearby” (BLE). Bluetooth permission is requested **here, in context** (replaces deprecated §5.18): tapping the nearby option shows the system prompt; deny → `BlockingExplainer` from §5.18. Notifications are asked on first received message. Primary “Start chatting” → Chats.
 
-| Copy | EN | FR |
-|------|----|----|
-| Heading | You’re all set | Tout est prêt |
-| Sub | Show this code so people can add you. | Montrez ce code pour qu’on puisse vous ajouter. |
-| Nearby | Add someone nearby · Find people next to you over Bluetooth. We’ll ask for Bluetooth access first. | Ajouter quelqu’un à proximité · Trouvez les personnes autour de vous via Bluetooth. Nous vous demanderons d’abord l’accès au Bluetooth. |
-| Primary | Start chatting | Commencer à discuter |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Heading | You’re all set | Tout est prêt | הכול מוכן |
+| Sub | Show this code so people can add you. | Montrez ce code pour qu’on puisse vous ajouter. | הציגו את הקוד הזה כדי שיוכלו להוסיף אתכם. |
+| Nearby | Add someone nearby · Find people next to you over Bluetooth. We’ll ask for Bluetooth access first. | Ajouter quelqu’un à proximité · Trouvez les personnes autour de vous via Bluetooth. Nous vous demanderons d’abord l’accès au Bluetooth. | הוספת מישהו בסביבה · למצוא אנשים לידך דרך בלוטות׳. קודם נבקש גישה לבלוטות׳. |
+| Primary | Start chatting | Commencer à discuter | להתחיל לשוחח |
 
 **A11y:** QR `role=img` “Your Hopla contact QR code”; brightness raised as §5.21. **Android:** `BLUETOOTH_SCAN`/`CONNECT`/`ADVERTISE` with `neverForLocation`. **iOS:** `NSBluetoothAlwaysUsageDescription` at first nearby tap.
 
@@ -607,10 +608,10 @@ Hopla logo (`brand/hopla-v2/icon.svg`, inlined), “You’re all set”, `MyQrCa
 
 “Remind me later” goes straight to Done. For 24 h a persistent warn banner sits under the Chats nav (not dismissible; tap → §5.26). After 24 h an `alertdialog` sheet blocks use until a method completes (O6). A queued-but-not-uploaded cloud backup counts as pending (banner text “Waiting for Internet to finish your backup”), not as complete.
 
-| Copy | EN | FR |
-|------|----|----|
-| Banner | Back up your account — {n} h left before Hopla pauses. · Back up | Sauvegardez votre compte — encore {n} h avant que Hopla se mette en pause. · Sauvegarder |
-| Blocking | Back up to keep using Hopla · It’s been 24 hours. Choose a backup method so you can’t lose your identity. Your chats are safe on this phone. · Choose a backup method | Sauvegardez pour continuer à utiliser Hopla · 24 heures se sont écoulées. Choisissez une méthode de sauvegarde pour ne pas perdre votre identité. Vos discussions restent sur ce téléphone. · Choisir une méthode |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Banner | Back up your account — {n} h left before Hopla pauses. · Back up | Sauvegardez votre compte — encore {n} h avant que Hopla se mette en pause. · Sauvegarder | גבו את החשבון — נשארו {n} שע׳ עד ש-Hopla תושהה. · גיבוי |
+| Blocking | Back up to keep using Hopla · It’s been 24 hours. Choose a backup method so you can’t lose your identity. A cloud backup also keeps your chats; until then they’re only on this phone. · Choose a backup method | Sauvegardez pour continuer à utiliser Hopla · 24 heures se sont écoulées. Choisissez une méthode de sauvegarde pour ne pas perdre votre identité. Une sauvegarde cloud garde aussi vos discussions ; d’ici là, elles ne sont que sur ce téléphone. · Choisir une méthode | גבו כדי להמשיך להשתמש ב-Hopla · עברו 24 שעות. בחרו שיטת גיבוי כדי לא לאבד את הזהות שלך. גיבוי בענן שומר גם את הצ׳אטים; עד אז הם נמצאים רק בטלפון הזה. · בחירת שיטת גיבוי |
 
 **A11y:** banner `role=status`; blocking sheet `role=alertdialog`, focus trapped, system back doesn’t dismiss (Android) / no swipe-down (iOS). Incoming messages keep being received while blocked (open question 1).
 
@@ -627,13 +628,15 @@ Entry: Settings › Backup and Security centre (§5.9) row “Backup”.
 | Delete cloud backup | Danger; confirm sheet; deletes the remote record (O5); shows success toast “Backup deleted from {service}” |
 | Honest note | As §5.26 plus “never the mesh or gateways” |
 
-| Copy | EN | FR |
-|------|----|----|
-| Title | Backup | Sauvegarde |
-| Status | Backed up · Waiting for Internet · Last backup: {date} · new backup queued | Sauvegardé · En attente d’Internet · Dernière sauvegarde : {date} · nouvelle sauvegarde en attente |
-| Actions | Back up now · Add or remove a method · Change backup password · View recovery phrase · Delete cloud backup | Sauvegarder maintenant · Ajouter ou retirer une méthode · Changer le mot de passe de sauvegarde · Afficher la phrase de récupération · Supprimer la sauvegarde cloud |
-| Auth | Confirm it’s you · Use your fingerprint or device PIN to show your recovery phrase. · Use PIN | Confirmez votre identité · Utilisez votre empreinte ou le code de l’appareil pour afficher votre phrase de récupération. · Utiliser le code |
-| Delete | Delete Google Drive backup? · The backup is removed from Google Drive. You can still restore with your written phrase. If you have no other method, you’ll need to set one up within 24 hours. · Delete backup · Cancel | Supprimer la sauvegarde Google Drive ? · La sauvegarde est supprimée de Google Drive. Vous pourrez toujours restaurer avec votre phrase écrite. Sans autre méthode, vous devrez en configurer une sous 24 heures. · Supprimer · Annuler |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Title | Backup | Sauvegarde | גיבוי |
+| Status | Backed up · Waiting for Internet · Last backup: {date} · new backup queued | Sauvegardé · En attente d’Internet · Dernière sauvegarde : {date} · nouvelle sauvegarde en attente | מגובה · ממתין לאינטרנט · גיבוי אחרון: {date} · גיבוי חדש בתור |
+| Method lines (v0.1.17) | {Cloud}: Phrase + all chats · {account} · {protection} — Written phrase: Identity + contacts, not chats · {date checked} | {Cloud} : Phrase + toutes les discussions · {compte} · {protection} — Phrase écrite : Identité + contacts, sans les discussions · {date de vérification} | {Cloud}: ביטוי + כל הצ׳אטים · {account} · {protection} — ביטוי כתוב: זהות + אנשי קשר, בלי צ׳אטים · {date checked} |
+| Honest note (v0.1.17) | Anyone with your {service} account **and** backup password can restore your identity and all your chats. Backups use only {provider}’s servers over the Internet — never the mesh or gateways. | Toute personne ayant accès à votre compte {service} **et** à votre mot de passe de sauvegarde peut restaurer votre identité et toutes vos discussions. Les sauvegardes passent uniquement par les serveurs de {provider} via Internet — jamais par le mesh ni les passerelles. | כל מי שיש לו גישה לחשבון {service} שלך **וגם** לסיסמת הגיבוי יכול לשחזר את הזהות שלך ואת כל הצ׳אטים. הגיבויים עוברים רק דרך השרתים של {provider} באינטרנט — אף פעם לא דרך רשת ה-Mesh או השערים. |
+| Actions | Back up now · Add or remove a method · Change backup password · View recovery phrase · Delete cloud backup | Sauvegarder maintenant · Ajouter ou retirer une méthode · Changer le mot de passe de sauvegarde · Afficher la phrase de récupération · Supprimer la sauvegarde cloud | גיבוי עכשיו · הוספה או הסרה של שיטה · שינוי סיסמת הגיבוי · הצגת ביטוי השחזור · מחיקת הגיבוי בענן |
+| Auth | Confirm it’s you · Use your fingerprint or device PIN to show your recovery phrase. · Use PIN | Confirmez votre identité · Utilisez votre empreinte ou le code de l’appareil pour afficher votre phrase de récupération. · Utiliser le code | אימות זהות · השתמשו בטביעת אצבע או בקוד המכשיר כדי להציג את ביטוי השחזור. · שימוש בקוד |
+| Delete | Delete Google Drive backup? · The backup, including your chats, is removed from Google Drive. Your written phrase still restores your identity and contacts, but not your chats. If you have no other method, you’ll need to set one up within 24 hours. · Delete backup · Cancel | Supprimer la sauvegarde Google Drive ? · La sauvegarde, discussions comprises, est supprimée de Google Drive. Votre phrase écrite restaure quand même votre identité et vos contacts, mais pas vos discussions. Sans autre méthode, vous devrez en configurer une sous 24 heures. · Supprimer · Annuler | למחוק את הגיבוי ב-Google Drive? · הגיבוי, כולל הצ׳אטים, יימחק מ-Google Drive. הביטוי הכתוב עדיין משחזר את הזהות ואנשי הקשר, אבל לא את הצ׳אטים. אם אין לכם שיטה אחרת, תצטרכו להגדיר אחת תוך 24 שעות. · מחיקת הגיבוי · ביטול |
 
 **A11y:** status badge text, not colour; destructive row announced “Delete cloud backup, button, destructive”. **Android/iOS:** same layout; iOS shows “iCloud” and “iCloud Keychain key” in the protection line when no password.
 
@@ -650,14 +653,14 @@ On first launch the app checks Drive `appDataFolder` (after Credential Manager a
 | Error | Danger callout (offline / not signed in / record unreadable); Try again · Use my 24 words instead · Start fresh |
 | Start fresh | Confirm: “Start fresh? Your old identity stays in {service} until you delete it.” |
 
-| Copy | EN | FR |
-|------|----|----|
-| Heading | Welcome back | Bon retour |
-| Detected | We found a Hopla backup in your {service}. | Nous avons trouvé une sauvegarde Hopla dans votre {service}. |
-| Actions | Restore from {service} · Use my 24 words instead · Start fresh | Restaurer depuis {service} · Utiliser mes 24 mots · Repartir de zéro |
-| Password | Enter the backup password you chose for this backup. · Forgot it? Hopla can’t reset it. Restore with your 24 words instead. | Saisissez le mot de passe choisi pour cette sauvegarde. · Oublié ? Hopla ne peut pas le réinitialiser. Restaurez plutôt avec vos 24 mots. |
-| Wrong | Wrong password. {n} tries left, then wait 5 minutes. | Mot de passe incorrect. Encore {n} essais, puis patientez 5 minutes. |
-| Error (iOS) | We couldn’t load your iCloud backup. · Check that you’re online and signed in to iCloud with the same Apple Account, then try again. | Impossible de charger votre sauvegarde iCloud. · Vérifiez que vous êtes en ligne et connecté à iCloud avec le même compte Apple, puis réessayez. |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Heading | Welcome back | Bon retour | ברוכים השבים |
+| Detected | We found a Hopla backup in your {service}. | Nous avons trouvé une sauvegarde Hopla dans votre {service}. | מצאנו גיבוי של Hopla ב-{service} שלך. |
+| Actions | Restore from {service} · Use my 24 words instead · Start fresh | Restaurer depuis {service} · Utiliser mes 24 mots · Repartir de zéro | שחזור מ-{service} · שימוש ב-24 המילים שלי במקום · להתחיל מחדש |
+| Password | Enter the backup password you chose for this backup. · Forgot it? Hopla can’t reset it. Restore with your 24 words instead; your chats won’t come back. | Saisissez le mot de passe choisi pour cette sauvegarde. · Oublié ? Hopla ne peut pas le réinitialiser. Restaurez plutôt avec vos 24 mots ; vos discussions ne reviendront pas. | הזינו את סיסמת הגיבוי שבחרתם לגיבוי הזה. · שכחת? ל-Hopla אין אפשרות לאפס אותה. אפשר לשחזר עם 24 המילים במקום; הצ׳אטים לא יחזרו. |
+| Wrong | Wrong password. {n} tries left, then wait 5 minutes. | Mot de passe incorrect. Encore {n} essais, puis patientez 5 minutes. | סיסמה שגויה. נשארו {n} ניסיונות, ואז המתנה של 5 דקות. |
+| Error (iOS) | We couldn’t load your iCloud backup. · Check that you’re online and signed in to iCloud with the same Apple Account, then try again. | Impossible de charger votre sauvegarde iCloud. · Vérifiez que vous êtes en ligne et connecté à iCloud avec le même compte Apple, puis réessayez. | לא הצלחנו לטעון את הגיבוי מ-iCloud. · ודאו שיש חיבור לאינטרנט ושאתם מחוברים ל-iCloud עם אותו Apple Account, ונסו שוב. |
 
 **A11y:** error `role=alert`; cooldown countdown announced once per minute, not every second.
 
@@ -681,7 +684,7 @@ Decision (the maintainer, 2026-10-24): “Chat without verifying” stays on QR/
 
 ### 5.33 Unverified: `VerifyGhostSeal` + `VerifyHintRow` — `chat-thread--unverified` (+`-dark`, `-ios`)
 
-- **Header ghost seal:** same seal outline, dashed (2.6/2), stroke `--ink-3`, check in `--ink-3`, no fill. 16 px, 44/48 hit target. Tap → verify flow (Scan QR / compare safety number, §5.22). A11y: “Not verified yet. Verify to get the badge” / “Pas encore vérifié. Vérifiez pour obtenir le badge”. Contrast `--ink-3` vs surface 4.3:1 light, 4.9:1 dark.
+- **Header ghost seal:** same seal outline, dashed (2.6/2), stroke `--ink-3`, check in `--ink-3`, no fill. 16 px, 44/48 hit target. Tap → verify flow (Scan QR / compare safety number, §5.22). A11y: “Not verified yet. Verify to get the badge” / “Pas encore vérifié. Vérifiez pour obtenir le badge”. Contrast `--ink-3` vs surface 6.6:1 light, 6.6:1 dark (v0.1.18).
 - **List row: nothing.** Chosen over a tiny ghost seal because: (1) at 15 px a dashed outline reads as noise next to the path chips and unread pills; (2) the list then has one meaning — “mint seal = verified” — that users learn faster than a two-state glyph; (3) unverified is a normal state, not something to flag on every row. The invitation lives where the user can act on it (the thread).
 - **Hint row** (below nav, above path banner): `--surface` background, 1 px `--line` bottom, brand shield 18 px, text 13 px `--ink`, `btn-primary btn-sm` “Verify”, ✕ dismiss (36 px glyph, 44/48 target). Neutral background on purpose, so it never looks like the mesh path banner beneath it. `role="note"`.
   - Dismiss: hides for this contact for 30 days (ghost seal stays). Reappears after 30 days or on next in-person proximity, max once.
@@ -698,19 +701,19 @@ Total ≈ 700 ms. **Reduced motion** (Android `ANIMATOR_DURATION_SCALE = 0` / re
 
 ### 5.35 Copy (EN / FR)
 
-| Key | EN | FR |
-|---|---|---|
-| badge.verified.a11y | Verified | Vérifié |
-| badge.verified.header.a11y | Verified. Show safety number | Vérifié. Afficher le numéro de sécurité |
-| badge.ghost.a11y | Not verified yet. Verify to get the badge | Pas encore vérifié. Vérifiez pour obtenir le badge |
-| hint.verify | Verify {name} to get the verified badge | Vérifiez {name} pour obtenir le badge vérifié |
-| hint.verify.cta | Verify | Vérifier |
-| hint.dismiss.a11y | Dismiss | Masquer |
-| toast.verified | {name} is verified | {name} est vérifié·e |
-| sheet.title | Verified contact | Contact vérifié |
-| sheet.body | You and {name} verified this safety number in person on {date} ({method}). | Vous et {name} avez vérifié ce numéro de sécurité en personne le {date} ({method}). |
-| sheet.rescan | Scan {name}’s code again | Scanner à nouveau le code de {name} |
-| sheet.remove | Remove verification | Retirer la vérification |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| badge.verified.a11y | Verified | Vérifié | מאומת |
+| badge.verified.header.a11y | Verified. Show safety number | Vérifié. Afficher le numéro de sécurité | מאומת. הצגת מספר הבטיחות |
+| badge.ghost.a11y | Not verified yet. Verify to get the badge | Pas encore vérifié. Vérifiez pour obtenir le badge | עדיין לא מאומת. אמתו כדי לקבל את התג |
+| hint.verify | Verify {name} to get the verified badge | Vérifiez {name} pour obtenir le badge vérifié | אמתו את {name} כדי לקבל את תג האימות |
+| hint.verify.cta | Verify | Vérifier | אימות |
+| hint.dismiss.a11y | Dismiss | Masquer | סגירה |
+| toast.verified | {name} is verified | {name} est vérifié·e | {name} אומת/ה |
+| sheet.title | Verified contact | Contact vérifié | איש קשר מאומת |
+| sheet.body | You and {name} verified this safety number in person on {date} ({method}). | Vous et {name} avez vérifié ce numéro de sécurité en personne le {date} ({method}). | את/ה ו{name} אימתתם את מספר הבטיחות הזה פנים אל פנים ב-{date} ({method}). |
+| sheet.rescan | Scan {name}’s code again | Scanner à nouveau le code de {name} | סריקה חוזרת של הקוד של {name} |
+| sheet.remove | Remove verification | Retirer la vérification | הסרת האימות |
 
 Platform: Android renders the seal as an `ImageVector` tinted with `MaterialTheme` brand role; iOS as an SF-Symbol-style custom symbol (`hopla.seal.check` / `.dashed`) with `.symbolRenderingMode(.palette)`. Both honour light/dark via tokens.
 
@@ -739,18 +742,18 @@ Groups: **Messages** (Message notifications · Private notifications · Hide on 
 Mute (Off / 1 hour / 8 hours / 1 week / Forever, bottom sheet) · Private notifications (per chat; caption “Follows your default (Off)” or “Overrides your default (Off)”) · Hide on lock screen (per chat) · Preview card. Per-chat setting wins in both directions (v0.1.5, §5.56).
 
 ### 5.39 Copy (EN / FR)
-| Key | EN | FR |
-|---|---|---|
-| notif.private.title / body | Hopla / New message | Hopla / Nouveau message (rendered “Hopla : Nouveau message”) |
-| notif.private.call | Incoming call | Appel entrant |
-| settings.private | Private notifications | Notifications privées |
-| settings.private.desc | Show only “Hopla: New message”. No name, preview or photo. | Affiche seulement « Hopla : Nouveau message ». Ni nom, ni aperçu, ni photo. |
-| settings.hideLock | Hide on lock screen | Masquer sur l’écran verrouillé |
-| settings.hideLock.desc | Nothing shows until your phone is unlocked. | Rien ne s’affiche tant que le téléphone est verrouillé. |
-| settings.quiet | Quiet hours | Heures calmes |
-| settings.push | Internet wake-ups go through Google or Apple with no content. Your phone decrypts the message itself, so they never see who sent it or what it says. | Les notifications Internet passent par Google ou Apple sans aucun contenu : votre téléphone déchiffre le message lui-même. Ils ne voient jamais l’expéditeur ni le texte. |
-| chat.private.follow / override | Follows your default (Off). / Overrides your default (Off). | Suit votre réglage général (désactivé). / Remplace votre réglage général (désactivé). |
-| chat.mute.* | Mute Alex · Messages still arrive, without sound or banners. · 1 hour / 8 hours / 1 week / Forever | Mettre Alex en sourdine · Les messages arrivent, sans son ni bannière. · 1 heure / 8 heures / 1 semaine / Toujours |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| notif.private.title / body | Hopla / New message | Hopla / Nouveau message (rendered “Hopla : Nouveau message”) | Hopla / הודעה חדשה |
+| notif.private.call | Incoming call | Appel entrant | שיחה נכנסת |
+| settings.private | Private notifications | Notifications privées | התראות פרטיות |
+| settings.private.desc | Show only “Hopla: New message”. No name, preview or photo. | Affiche seulement « Hopla : Nouveau message ». Ni nom, ni aperçu, ni photo. | להציג רק ״Hopla: הודעה חדשה״. בלי שם, תצוגה מקדימה או תמונה. |
+| settings.hideLock | Hide on lock screen | Masquer sur l’écran verrouillé | הסתרה במסך הנעילה |
+| settings.hideLock.desc | Nothing shows until your phone is unlocked. | Rien ne s’affiche tant que le téléphone est verrouillé. | שום דבר לא מוצג עד שהטלפון לא נעול. |
+| settings.quiet | Quiet hours | Heures calmes | שעות שקטות |
+| settings.push | Internet wake-ups go through Google or Apple with no content. Your phone decrypts the message itself, so they never see who sent it or what it says. | Les notifications Internet passent par Google ou Apple sans aucun contenu : votre téléphone déchiffre le message lui-même. Ils ne voient jamais l’expéditeur ni le texte. | התעוררויות דרך האינטרנט עוברות דרך Google או Apple בלי תוכן. הטלפון שלך מפענח את ההודעה בעצמו, כך שהם אף פעם לא רואים מי שלח אותה או מה כתוב בה. |
+| chat.private.follow / override | Follows your default (Off). / Overrides your default (Off). | Suit votre réglage général (désactivé). / Remplace votre réglage général (désactivé). | לפי ברירת המחדל שלך (כבוי). / עוקף את ברירת המחדל שלך (כבוי). |
+| chat.mute.* | Mute Alex · Messages still arrive, without sound or banners. · 1 hour / 8 hours / 1 week / Forever | Mettre Alex en sourdine · Les messages arrivent, sans son ni bannière. · 1 heure / 8 heures / 1 semaine / Toujours | השתקת נועה · ההודעות עדיין מגיעות, בלי צליל ובלי באנרים. · שעה / 8 שעות / שבוע / לתמיד |
 
 ### 5.40 Accessibility & platform
 - Toggles are `role=switch` with the visible title as label; descriptions linked as hint (`contentDescription` / `accessibilityHint`). Preview card announced as “Preview: Hopla, New message”.
@@ -795,19 +798,19 @@ Header: placeholder avatar, “Nearby match · identity hidden”, flag (block/r
 - Safety tips shown before first meet-up; **Share my date** sends time + typed place to one trusted contact as an E2EE message.
 
 ### 5.48 Copy (EN / FR) — key strings
-| Key | EN | FR |
-|---|---|---|
-| tab | Nearby | À proximité |
-| entry.cta / foot | Turn on Nearby / Off. Nothing is sent until you turn it on. | Activer À proximité / Désactivé. Rien n’est envoyé tant que vous ne l’activez pas. |
-| age.title / under | How old are you? / Nearby is for adults 18+ | Quel âge avez-vous ? / Réservé aux 18 ans et plus |
-| dist | < 1 km · < 5 km · in your area | < 1 km · < 5 km · dans votre secteur |
-| btn | Pass · Profile · Like | Passer · Profil · Like |
-| limit | That’s all for today. You’ve used your 100 likes. | C’est tout pour aujourd’hui. Vous avez utilisé vos 100 likes. |
-| match | You and Robin matched / Say hello | Robin et vous, c’est un match / Dire bonjour |
-| reveal | Reveal identity · Reveal your identity to Robin? · Offer to reveal · Waiting for Robin… · Reveal too | Révéler mon identité · Révéler votre identité à Robin ? · Proposer de révéler · En attente de Robin… · Révéler aussi |
-| block | Block Robin? Robin won’t see you in Nearby again, even after their keys change. Robin isn’t told. | Bloquer Robin ? Robin ne vous verra plus dans À proximité, même après le changement de clés. Robin n’est pas prévenu. |
-| report.confirm | Check before sending · Nothing is sent until you tap Send report. | Vérifiez avant d’envoyer · Rien n’est envoyé avant que vous touchiez Envoyer. |
-| tips / share | Before your first meet-up / Share my date | Avant votre premier rendez-vous / Partager mon rendez-vous |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| tab | Nearby | À proximité | בסביבה |
+| entry.cta / foot | Turn on Nearby / Off. Nothing is sent until you turn it on. | Activer À proximité / Désactivé. Rien n’est envoyé tant que vous ne l’activez pas. | הפעלת ״בסביבה״ / כבוי. שום דבר לא נשלח עד שתפעילו. |
+| age.title / under | How old are you? / Nearby is for adults 18+ | Quel âge avez-vous ? / Réservé aux 18 ans et plus | בן/בת כמה את/ה? / ״בסביבה״ מיועד למבוגרים מגיל 18 |
+| dist | < 1 km · < 5 km · in your area | < 1 km · < 5 km · dans votre secteur | פחות מ-1 ק״מ · פחות מ-5 ק״מ · באזור שלך |
+| btn | Pass · Profile · Like | Passer · Profil · Like | לדלג · פרופיל · לייק |
+| limit | That’s all for today. You’ve used your 100 likes. | C’est tout pour aujourd’hui. Vous avez utilisé vos 100 likes. | זהו להיום. השתמשת ב-100 הלייקים שלך. |
+| match | You and Robin matched / Say hello | Robin et vous, c’est un match / Dire bonjour | את/ה ורוני התאמתם / להגיד שלום |
+| reveal | Reveal identity · Reveal your identity to Robin? · Offer to reveal · Waiting for Robin… · Reveal too | Révéler mon identité · Révéler votre identité à Robin ? · Proposer de révéler · En attente de Robin… · Révéler aussi | חשיפת זהות · לחשוף את הזהות שלך לרוני? · להציע חשיפה · ממתינים לרוני… · לחשוף גם |
+| block | Block Robin? Robin won’t see you in Nearby again, even after their keys change. Robin isn’t told. | Bloquer Robin ? Robin ne vous verra plus dans À proximité, même après le changement de clés. Robin n’est pas prévenu. | לחסום את רוני? רוני לא יראה אותך שוב ב״בסביבה״, גם אחרי שהמפתחות שלו ישתנו. לרוני לא נמסר על כך. |
+| report.confirm | Check before sending · Nothing is sent until you tap Send report. | Vérifiez avant d’envoyer · Rien n’est envoyé avant que vous touchiez Envoyer. | בדיקה לפני שליחה · שום דבר לא נשלח עד שתקישו על שליחת דיווח. |
+| tips / share | Before your first meet-up / Share my date | Avant votre premier rendez-vous / Partager mon rendez-vous | לפני המפגש הראשון / שיתוף הדייט שלי |
 
 ### 5.49 Accessibility & platform
 - Every swipe has a button; TalkBack/VoiceOver custom actions on the card: Like, Pass, View profile, Block or report. Card announced “Robin, 25 to 29, less than 1 km, Dating, 2 shared interests”.
@@ -839,17 +842,17 @@ Full-screen black, close, sender, “🔥 View once”, ring + seconds. Footer (
 Timer after opening: Off · On open (deleted when closed) · 10 s · 1 min · 1 h. Delete unread after: 1 h / 24 h / 7 d. Callout “What it can’t do”. Footnote: never in previews, backups, search, share sheets. Groups: per-member burn; hidden in channels > 256 members (row replaced by “Not available in large channels — use stories”).
 
 ### 5.54 Copy (EN / FR)
-| Key | EN | FR |
-|---|---|---|
-| burn.name | Burn after read | Lecture unique |
-| menu.desc | Next message deletes itself once read | Le prochain message s’efface après lecture |
-| unread | Delete unread after · 1 h · 24 h · 7 d | S’efface sans lecture après · 1 h · 24 h · 7 j |
-| bubble.tap | Tap to read | Toucher pour lire |
-| bubble.sent | Not opened yet | Pas encore ouvert |
-| photo | Photo · view once / 🔥 Photo opened | Photo · voir une fois / 🔥 Photo ouverte |
-| burned / expired | 🔥 Message read and deleted / Expired unread | 🔥 Message lu et effacé / Expiré sans être lu |
-| honest | Burn after read stops saving in the app. It can’t stop someone photographing the screen with another device. | Lecture unique empêche la sauvegarde dans l’app, pas une photo de l’écran prise avec un autre appareil. |
-| notif | 🔥 Burn-after-read message | 🔥 Message éphémère |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| burn.name | Burn after read | Lecture unique | מחיקה אחרי קריאה |
+| menu.desc | Next message deletes itself once read | Le prochain message s’efface après lecture | ההודעה הבאה תימחק מעצמה אחרי שתיקרא |
+| unread | Delete unread after · 1 h · 24 h · 7 d | S’efface sans lecture après · 1 h · 24 h · 7 j | מחיקה אם לא נקראה אחרי · שעה · 24 שע׳ · 7 ימים |
+| bubble.tap | Tap to read | Toucher pour lire | הקישו כדי לקרוא |
+| bubble.sent | Not opened yet | Pas encore ouvert | עדיין לא נפתחה |
+| photo | Photo · view once / 🔥 Photo opened | Photo · voir une fois / 🔥 Photo ouverte | תמונה · צפייה חד־פעמית / 🔥 התמונה נפתחה |
+| burned / expired | 🔥 Message read and deleted / Expired unread | 🔥 Message lu et effacé / Expiré sans être lu | 🔥 ההודעה נקראה ונמחקה / פג תוקף בלי קריאה |
+| honest | Burn after read stops saving in the app. It can’t stop someone photographing the screen with another device. | Lecture unique empêche la sauvegarde dans l’app, pas une photo de l’écran prise avec un autre appareil. | מחיקה אחרי קריאה מונעת שמירה באפליקציה. היא לא יכולה למנוע ממישהו לצלם את המסך במכשיר אחר. |
+| notif | 🔥 Burn-after-read message | 🔥 Message éphémère | 🔥 הודעה שנמחקת אחרי קריאה |
 
 ### 5.55 Accessibility & platform
 - Countdown ring is `role=timer`; screen readers announce remaining time on open, every 5 s (≤ 10 s timers: every second for the last 3), and “Message deleted” at 0 (polite live region). Longer timers (1 min / 1 h) announce on open and at 10 s.
@@ -912,17 +915,17 @@ Card (refined): 28 px radius, photo 372 px with page bars, frosted flag button, 
 | Haptics | light on Like/Pass commit, success on match, none on drag | iOS UIImpactFeedback / Android `CONFIRM` | unchanged (system setting) |
 
 ### 5.60 Copy (EN / FR) — v0.1.5 keys
-| Key | EN | FR |
-|---|---|---|
-| chip.live / paused | Live nearby / Paused | Visible à proximité / En pause |
-| chip.area | Area mode | Mode secteur |
-| go.title / cta | Go Nearby / Go Nearby | Go Nearby / Go Nearby |
-| go.body | Discover people around you live, even with your phone locked. | Découvrez les gens autour de vous en direct, même téléphone verrouillé. |
-| la.counts | people nearby · new likes | personnes autour · nouveaux likes |
-| radar | Nobody nearby yet · We’re quietly looking around you. New profiles will appear here. · Widen radius | Personne pour l’instant · On cherche en douceur autour de vous. Les nouveaux profils apparaîtront ici. · Élargir le rayon |
-| area.title | Area mode keeps going | Le mode secteur reste actif |
-| ice | Break the ice | Pour briser la glace |
-| privacy.ss | Screenshot protection · Always on | Protection contre les captures · Toujours active |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| chip.live / paused | Live nearby / Paused | Visible à proximité / En pause | פעיל בסביבה / מושהה |
+| chip.area | Area mode | Mode secteur | מצב אזור |
+| go.title / cta | Go Nearby / Go Nearby | Go Nearby / Go Nearby | יוצאים ל״בסביבה״ / יוצאים ל״בסביבה״ |
+| go.body | Discover people around you live, even with your phone locked. | Découvrez les gens autour de vous en direct, même téléphone verrouillé. | לגלות אנשים סביבך בזמן אמת, גם כשהטלפון נעול. |
+| la.counts | people nearby · new likes | personnes autour · nouveaux likes | אנשים בסביבה · לייקים חדשים |
+| radar | Nobody nearby yet · We’re quietly looking around you. New profiles will appear here. · Widen radius | Personne pour l’instant · On cherche en douceur autour de vous. Les nouveaux profils apparaîtront ici. · Élargir le rayon | עדיין אין אף אחד בסביבה · אנחנו מחפשים בשקט סביבך. פרופילים חדשים יופיעו כאן. · הרחבת הרדיוס |
+| area.title | Area mode keeps going | Le mode secteur reste actif | מצב אזור ממשיך לפעול |
+| ice | Break the ice | Pour briser la glace | לשבור את הקרח |
+| privacy.ss | Screenshot protection · Always on | Protection contre les captures · Toujours active | הגנה מצילומי מסך · תמיד מופעלת |
 
 A11y: chip is `role=status`; Live Activity/Island read “Live nearby, 5 people nearby, 2 new likes”; skeleton is `aria-busy` with “Loading nearby profiles”; radar has a text alternative.
 
@@ -958,18 +961,18 @@ Explains jury (15 random verified, independent, never reported/vouched), 72 h, �
 “You’re on a jury · Is this community fine?” Context card (main reason, owner statement, reported posts with media blurred), time left, Not fine / Fine (equal weight, Fine primary only for layout consistency), “I can’t judge this (step aside)”.
 
 ### 5.68 Copy (EN / FR) — key strings
-| Key | EN | FR |
-|---|---|---|
-| vouch | Vouch / Vouched | Recommander / Recommandée |
-| rep.levels | New community · Building trust · Well supported · Strongly supported | Nouvelle · En construction · Bien soutenue · Très soutenue |
-| review | Under review | En cours d’examen |
-| reported | Reported by participants · Photos and videos are paused for now. Text is still readable. The owner can appeal. | Signalée par des participants · Images et vidéos sont en pause pour l’instant. Le texte reste lisible. Le propriétaire peut faire appel. |
-| restricted | Restricted · Only text is shown; new joins are closed. | Restreinte · Seul le texte s’affiche ; les nouvelles adhésions sont fermées. |
-| counter | It’s fine | Elle est correcte |
-| join | Before you join · Join anyway | Avant de rejoindre · Rejoindre quand même |
-| stream | Blurred for new viewers · Continue watching? | Live flouté pour les nouveaux spectateurs · Continuer à regarder ? |
-| appeal | Appeal this decision · Send appeal · The jury found your community fine | Faire appel · Envoyer l’appel · Le jury a jugé votre communauté correcte |
-| jury | Is this community fine? · Fine · Not fine · I can’t judge this (step aside) | Cette communauté est-elle correcte ? · Correcte · Pas correcte · Je ne peux pas juger (se retirer) |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| vouch | Vouch / Vouched | Recommander / Recommandée | לערוב / ערבת |
+| rep.levels | New community · Building trust · Well supported · Strongly supported | Nouvelle · En construction · Bien soutenue · Très soutenue | קהילה חדשה · בונה אמון · נתמכת היטב · נתמכת מאוד |
+| review | Under review | En cours d’examen | בבדיקה |
+| reported | Reported by participants · Photos and videos are paused for now. Text is still readable. The owner can appeal. | Signalée par des participants · Images et vidéos sont en pause pour l’instant. Le texte reste lisible. Le propriétaire peut faire appel. | דווח על ידי משתתפים · תמונות וסרטונים מושהים כרגע. הטקסט עדיין קריא. הבעלים יכולים לערער. |
+| restricted | Restricted · Only text is shown; new joins are closed. | Restreinte · Seul le texte s’affiche ; les nouvelles adhésions sont fermées. | מוגבלת · מוצג רק טקסט; הצטרפויות חדשות סגורות. |
+| counter | It’s fine | Elle est correcte | זה בסדר |
+| join | Before you join · Join anyway | Avant de rejoindre · Rejoindre quand même | לפני שמצטרפים · להצטרף בכל זאת |
+| stream | Blurred for new viewers · Continue watching? | Live flouté pour les nouveaux spectateurs · Continuer à regarder ? | מטושטש לצופים חדשים · להמשיך לצפות? |
+| appeal | Appeal this decision · Send appeal · The jury found your community fine | Faire appel · Envoyer l’appel · Le jury a jugé votre communauté correcte | ערעור על ההחלטה · שליחת ערעור · חבר המושבעים מצא שהקהילה שלך תקינה |
+| jury | Is this community fine? · Fine · Not fine · I can’t judge this (step aside) | Cette communauté est-elle correcte ? · Correcte · Pas correcte · Je ne peux pas juger (se retirer) | האם הקהילה הזו תקינה? · תקינה · לא תקינה · אני לא יכול/ה לשפוט (לפנות את המקום) |
 
 ### 5.69 Accessibility & platform
 Banners `role=status` (announced once on entry, not on every scroll). Reputation pill `role=img` “Reputation: Well supported, 3 of 4”. Blurred media has text alternative “Media paused”. “Continue watching?” is `alertdialog` with focus on Continue. Jury buttons equal size, no colour-only meaning. Android: banners as Material `Card`; iOS: inset grouped section header. Reduced motion: blur and banner slide-ins become instant/150 ms fades.
@@ -980,12 +983,12 @@ Banners `role=status` (announced once on entry, not on every scroll). Reputation
 - Off: Android clears `FLAG_SECURE` on normal windows; iOS removes the secure-capture layer and app-switcher cover. **Burn viewer, opened burn text and view-once media keep `FLAG_SECURE` / secure layer / capture cover.** Off copy: superseded by §5.71 (v0.1.7).
 - Supersedes §5.57’s “cannot be turned off” footnote.
 
-| Key | EN | FR |
-|---|---|---|
-| toggle | Block screenshots | Bloquer les captures d’écran |
-| off.desc | *(v0.1.7 → §5.71)* Screenshots are allowed. Burn-after-read and view-once content is always protected. Another device can still take a photo of your screen. | Captures autorisées. Les messages éphémères et les médias à voir une fois restent toujours protégés. Un autre appareil peut quand même photographier votre écran. |
-| confirm.title | Allow screenshots? | Autoriser les captures d’écran ? |
-| confirm.cta | Allow screenshots / Keep blocking | Autoriser les captures / Garder le blocage |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| toggle | Block screenshots | Bloquer les captures d’écran | חסימת צילומי מסך |
+| off.desc | *(v0.1.7 → §5.71)* Screenshots are allowed. Burn-after-read and view-once content is always protected. Another device can still take a photo of your screen. | Captures autorisées. Les messages éphémères et les médias à voir une fois restent toujours protégés. Un autre appareil peut quand même photographier votre écran. | *(v0.1.7 → §5.71)* צילומי מסך מותרים. תוכן שנמחק אחרי קריאה ותוכן לצפייה חד־פעמית תמיד מוגנים. מכשיר אחר עדיין יכול לצלם את המסך שלך. |
+| confirm.title | Allow screenshots? | Autoriser les captures d’écran ? | לאפשר צילומי מסך? |
+| confirm.cta | Allow screenshots / Keep blocking | Autoriser les captures / Garder le blocage | לאפשר צילומי מסך / להמשיך לחסום |
 
 ## 5I. v0.1.7 — Approved decisions (maintainer, 2026-10-24)
 
@@ -1042,15 +1045,15 @@ Notification with actions Yes / Turn off and line “No answer in 15 min turns N
 Visible nearby toggle (“Stays on until you turn it off”), Auto-pause list (3 rules + check-in), indicator explanation, My profile, Area mode, Safety tips. Rules are informational (not user-configurable in v0.3).
 
 ### 5.79 Copy (EN / FR)
-| Key | EN | FR |
-|---|---|---|
-| go.body | You stay visible until you turn Nearby off. An indicator is always shown while you are. | Vous restez visible jusqu’à ce que vous désactiviez À proximité. Un indicateur reste toujours affiché. |
-| active.sub | Visible until you turn it off | Visible jusqu’à ce que vous désactiviez |
-| pause.motion | Paused: no motion for 2 h · Resumes when you move | Pause : pas de mouvement depuis 2 h · Reprend dès que vous bougez |
-| pause.night | Paused: night (01:00–07:00) · Resumes at 07:00 | Pause : nuit (01:00–07:00) · Reprend à 07:00 |
-| pause.battery | Paused: battery below 20% · Resumes when charging or above 20% | Pause : batterie sous 20 % · Reprend en charge ou au-dessus de 20 % |
-| checkin | Still up for meeting people? · Yes · Turn off · No answer in 15 min turns Nearby off. | Toujours partant·e pour faire des rencontres ? · Oui · Désactiver · Sans réponse sous 15 min, À proximité se désactive. |
-| off | Nearby is off: no answer to the check-in. · Turn back on | À proximité est désactivé : pas de réponse au point de contrôle. · Réactiver |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| go.body | You stay visible until you turn Nearby off. An indicator is always shown while you are. | Vous restez visible jusqu’à ce que vous désactiviez À proximité. Un indicateur reste toujours affiché. | תישארו גלויים עד שתכבו את ״בסביבה״. כל עוד אתם גלויים, מוצג חיווי. |
+| active.sub | Visible until you turn it off | Visible jusqu’à ce que vous désactiviez | גלוי עד שתכבו |
+| pause.motion | Paused: no motion for 2 h · Resumes when you move | Pause : pas de mouvement depuis 2 h · Reprend dès que vous bougez | מושהה: אין תנועה כבר שעתיים · יתחדש כשתזוזו |
+| pause.night | Paused: night (01:00–07:00) · Resumes at 07:00 | Pause : nuit (01:00–07:00) · Reprend à 07:00 | מושהה: לילה (01:00–07:00) · יתחדש ב-07:00 |
+| pause.battery | Paused: battery below 20% · Resumes when charging or above 20% | Pause : batterie sous 20 % · Reprend en charge ou au-dessus de 20 % | מושהה: סוללה מתחת ל-20% · יתחדש בטעינה או מעל 20% |
+| checkin | Still up for meeting people? · Yes · Turn off · No answer in 15 min turns Nearby off. | Toujours partant·e pour faire des rencontres ? · Oui · Désactiver · Sans réponse sous 15 min, À proximité se désactive. | עדיין רוצים להכיר אנשים? · כן · לכבות · בלי תשובה תוך 15 דקות, ״בסביבה״ ייכבה. |
+| off | Nearby is off: no answer to the check-in. · Turn back on | À proximité est désactivé : pas de réponse au point de contrôle. · Réactiver | ״בסביבה״ כבוי: לא הייתה תשובה לבדיקה. · להפעיל שוב |
 
 ### 5.80 Accessibility
 Indicator is `role=status`; state changes (paused/resumed) announced politely once, never on a timer. Pause reason is in text, icons are decorative. Check-in prompt traps focus, Yes first; actions ≥ 48 px. Reduced motion: radar/ripple static in paused state; no pulsing indicator dot.
@@ -1072,11 +1075,11 @@ Frames: `nearby-area-indicator` (+`--ios-live-activity[-paused-night][-private]`
 - The 4 h counter runs only while Nearby (Go Nearby or area mode) is actually visible; any pause stops it. No check-in fires while paused (e.g. overnight).
 - Copy: Settings › Nearby “Check-in every 4 h of visibility — Counts visible time only, not pauses. Next one after 2 h 40 min more visible time.”; Go Nearby sheet “After every 4 h of visible time, we check you’re still up for it”; in-app prompt “You’ve been visible for 4 h (pauses not counted).”
 - The remaining visible time is shown **only** in Settings › Nearby (static, rounded to 10 min), never on the lock screen or as a ticking countdown.
-| Key | EN | FR |
-|---|---|---|
-| checkin.rule | Check-in every 4 h of visibility | Point de contrôle toutes les 4 h visibles |
-| checkin.desc | Counts visible time only, not pauses. Next one after {t} more visible time. | Compte seulement le temps visible (pas les pauses). Prochain dans {t} de visibilité. |
-| area.title / sub | Area mode · Visible in your area (~5 km) until you turn it off | Mode secteur · Visible dans votre secteur (~5 km) jusqu’à désactivation |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| checkin.rule | Check-in every 4 h of visibility | Point de contrôle toutes les 4 h visibles | בדיקה כל 4 שעות של נראות |
+| checkin.desc | Counts visible time only, not pauses. Next one after {t} more visible time. | Compte seulement le temps visible (pas les pauses). Prochain dans {t} de visibilité. | נספר רק זמן גלוי, לא השהיות. הבדיקה הבאה אחרי עוד {t} של זמן גלוי. |
+| area.title / sub | Area mode · Visible in your area (~5 km) until you turn it off | Mode secteur · Visible dans votre secteur (~5 km) jusqu’à désactivation | מצב אזור · גלוי באזור שלך (כ-5 ק״מ) עד שתכבו |
 
 ## 5L. v0.1.10 — Restore from backup (reinstall-first) — extends §5.17, §5.26, §5.30, §5.31
 
@@ -1084,7 +1087,7 @@ Generator `/workspace/omcp-v0110/gen.py` (render: `/workspace/omcp-v0110/render.
 
 ### 5.83 Journey and entry points
 1. **Primary — auto-detect on first launch** (`restore-detect--checking` → `restore-detect`). Before onboarding, the app checks the signed-in account: Android = Credential Manager account already on device → Drive `appDataFolder` (`drive.appdata` only); iOS = CloudKit private DB `OMCPBackup` (and Drive if a Google account was previously linked — only via the manual path). Timeout 3 s; if nothing found or offline, show Welcome (no error on first launch).
-2. **Fallback — Welcome › Restore** (`restore-source`): iOS lists iCloud (recommended), Google Drive, My 24 words; Android lists Google Drive, My 24 words. Google → system account picker (Android Credential Manager sheet / iOS `ASWebAuthenticationSession` Google sign-in). **No backup found** → Try another account · Use my 24 words · Start fresh.
+2. **Fallback — Welcome › Restore** (`restore-source`): iOS lists iCloud (recommended), Google Drive, My 24 words; Android lists Google Drive, My 24 words. *(v0.1.17: the “My 24 words” row reads “Identity and contacts only, no chats” / « Identité et contacts seulement, sans les discussions » — it no longer says “Always works, no cloud needed”.)* Google → system account picker (Android Credential Manager sheet / iOS `ASWebAuthenticationSession` Google sign-in). **No backup found** → Try another account · Use my 24 words · Start fresh.
 3. **Settings › Backup › Restore:** not offered (dropped). Restoring over a live identity is “replace identity”, out of scope; Settings keeps §5.30 management only.
 
 ### 5.84 Detected backup — `restore-detect` (+`--ios`, `--dark`, `--ios-dark`, `--checking`, `--start-fresh`, `--fr`, `--ios-fr`)
@@ -1112,17 +1115,17 @@ Stages: **Download** (2.4 MB from {service}, text only) → **Decrypt** (on your
 On first-launch auto-detect, errors fall back silently to Welcome; error screens appear only after the user chose Restore.
 
 ### 5.89 Copy (EN / FR)
-| Key | EN | FR |
-|---|---|---|
-| detect.title / body | Welcome back · We found your Hopla backup. Restore your chats, contacts and verified badges. *(v0.1.11 wording)* | Bon retour · Nous avons trouvé votre sauvegarde Hopla. Restaurez vos discussions, vos contacts et vos vérifications. |
-| checking | Looking for your backup… | Recherche de votre sauvegarde… |
-| fresh | Start fresh? You’ll get a new identity, so your contacts will need to add you again. Your old backup stays in {service} until you delete it. · Restore instead · Create a new identity | Repartir de zéro ? Vous aurez une nouvelle identité : vos contacts devront vous rajouter. Votre ancienne sauvegarde reste dans {service} jusqu’à ce que vous la supprimiez. · Restaurer plutôt · Créer une nouvelle identité |
-| nobackup | No backup found · There’s no Hopla backup in {service} for {account}. It may be on another account. | Aucune sauvegarde trouvée · Aucune sauvegarde Hopla dans le {service} de {account}. Elle est peut-être sur un autre compte. |
-| pw | Enter your backup password · Forgot it? Hopla can’t reset it, but your 24 words always work. | Saisissez votre mot de passe · Oublié ? Hopla ne peut pas le réinitialiser, mais vos 24 mots fonctionnent toujours. |
-| lockout | Security pause: {n} min · Too many tries… Each new round of mistakes makes the wait longer. | Pause de sécurité : {n} min · Trop d’essais… Chaque nouvelle série d’erreurs allonge l’attente. |
-| keychain | No password needed · Key not here yet | Aucun mot de passe nécessaire · Clé introuvable pour l’instant |
-| progress | Restoring your Hopla · You can leave the app. We’ll keep going in the background. | Restauration en cours · Vous pouvez quitter l’app, on continue en arrière-plan. |
-| success | Welcome back, {name} · You’re all set. Your contacts will recognise you. · Open my chats | Bon retour, {name} · Tout est prêt. Vos contacts vous reconnaîtront. · Ouvrir mes discussions |
+| Key | EN | FR | HE (draft) |
+|---|---|---|---|
+| detect.title / body | Welcome back · We found your Hopla backup. Restore your chats, contacts and verified badges. *(v0.1.11 wording)* | Bon retour · Nous avons trouvé votre sauvegarde Hopla. Restaurez vos discussions, vos contacts et vos vérifications. | ברוכים השבים · מצאנו את הגיבוי שלך ב-Hopla. אפשר לשחזר את הצ׳אטים, אנשי הקשר ותגי האימות. *(נוסח v0.1.11)* |
+| checking | Looking for your backup… | Recherche de votre sauvegarde… | מחפשים את הגיבוי שלך… |
+| fresh | Start fresh? You’ll get a new identity, so your contacts will need to add you again. Your old backup stays in {service} until you delete it. · Restore instead · Create a new identity | Repartir de zéro ? Vous aurez une nouvelle identité : vos contacts devront vous rajouter. Votre ancienne sauvegarde reste dans {service} jusqu’à ce que vous la supprimiez. · Restaurer plutôt · Créer une nouvelle identité | להתחיל מחדש? תקבלו זהות חדשה, ואנשי הקשר יצטרכו להוסיף אתכם שוב. הגיבוי הישן נשאר ב-{service} עד שתמחקו אותו. · לשחזר במקום · יצירת זהות חדשה |
+| nobackup | No backup found · There’s no Hopla backup in {service} for {account}. It may be on another account. | Aucune sauvegarde trouvée · Aucune sauvegarde Hopla dans le {service} de {account}. Elle est peut-être sur un autre compte. | לא נמצא גיבוי · אין גיבוי של Hopla ב-{service} עבור {account}. ייתכן שהוא בחשבון אחר. |
+| pw | Enter your backup password · Forgot it? Hopla can’t reset it. Your 24 words still restore your identity and contacts, but not your chats. | Saisissez votre mot de passe · Oublié ? Hopla ne peut pas le réinitialiser. Vos 24 mots restaurent quand même votre identité et vos contacts, mais pas vos discussions.| הזינו את סיסמת הגיבוי · שכחת? ל-Hopla אין אפשרות לאפס אותה. 24 המילים עדיין משחזרות את הזהות ואנשי הקשר, אבל לא את הצ׳אטים. |
+| lockout | Security pause: {n} min · Too many tries… Each new round of mistakes makes the wait longer. | Pause de sécurité : {n} min · Trop d’essais… Chaque nouvelle série d’erreurs allonge l’attente. | השהיית אבטחה: {n} דק׳ · יותר מדי ניסיונות… כל סבב טעויות נוסף מאריך את ההמתנה. |
+| keychain | No password needed · Key not here yet | Aucun mot de passe nécessaire · Clé introuvable pour l’instant | לא נדרשת סיסמה · המפתח עוד לא כאן |
+| progress | Restoring your Hopla · You can leave the app. We’ll keep going in the background. | Restauration en cours · Vous pouvez quitter l’app, on continue en arrière-plan. | משחזרים את ה-Hopla שלך · אפשר לצאת מהאפליקציה. נמשיך ברקע. |
+| success | Welcome back, {name} · You’re all set. Your contacts will recognise you. · Open my chats | Bon retour, {name} · Tout est prêt. Vos contacts vous reconnaîtront. · Ouvrir mes discussions | ברוך/ה השב/ה, {name} · הכול מוכן. אנשי הקשר יזהו אותך. · פתיחת הצ׳אטים שלי |
 
 ### 5.90 Accessibility & reduced motion
 Hero headings are `h1`; backup card is a list of label/value pairs; errors `role=alert`; progress `role=progressbar` with stage text announced on change only. Password field supports password managers (`autofill=password`, iOS `textContentType=.password`) and paste. Reduced motion: no pulse, no cross-fades between stages (instant), success check appears without scale.
@@ -1237,13 +1240,13 @@ Replaces the v0.1.12 confirm sheet (§5.94).
 - The resent file is matched by hash and swaps in like any other restore (§5.92). One active request per item; tapping the pill again after sending does nothing (it's replaced by the status).
 - **A11y:** the pill is a button “Ask {name} to resend this photo”; Add a note is a button that moves focus into the field; the field is a multiline textbox labelled “Note to {name}, optional”; the counter is announced on reaching 120; Request sent and Undo go through `role=status`, and Undo is reachable by keyboard / switch access for its 5 s window (extended to 10 s when a screen reader is on).
 
-| Copy | EN | FR |
-|------|----|----|
-| Pill | Ask to resend | Demander un renvoi |
-| Secondary | Add a note | Ajouter un mot |
-| Field | Note to {name} · optional | Mot pour {name} · facultatif |
-| Toast | Request sent to {name} · Undo | Demande envoyée à {name} · Annuler |
-| Status | Request sent to {name} · it’ll appear here if they resend it | Demande envoyée à {name} · elle apparaîtra ici si elle est renvoyée |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Pill | Ask to resend | Demander un renvoi | לבקש שליחה חוזרת |
+| Secondary | Add a note | Ajouter un mot | הוספת הערה |
+| Field | Note to {name} · optional | Mot pour {name} · facultatif | הערה ל{name} · אופציונלי |
+| Toast | Request sent to {name} · Undo | Demande envoyée à {name} · Annuler | הבקשה נשלחה ל{name} · ביטול |
+| Status | Request sent to {name} · it’ll appear here if they resend it | Demande envoyée à {name} · elle apparaîtra ici si elle est renvoyée | הבקשה נשלחה ל{name} · הקובץ יופיע כאן אם ישלחו אותו שוב |
 
 ### 5.101 Settings › Storage › Keep media you sent — `settings-storage` (+`--edit`, `--edit-custom`, `--edit-off`, `--off`, `--forever`, `--dark`, `--edit-dark`, `--ios`, `--ios-edit`, `--fr`, `--edit-fr`, `--off-fr`)
 - **Storage screen:** usage card (“2.6 GB used by Hopla”, bar split into Media you sent / Media you received / Chats), then section “Media you sent” with the row **Keep media you sent · 90 days or 2 GB ›** and the explanation “Copies of photos, videos and files you sent, so you can resend them when a contact asks (for example after they restore Hopla).” Footnote: oldest sent media is removed first when a limit is reached; messages and captions stay. Other rows: Media you received, Review large files, Auto-download on mobile data.
@@ -1253,13 +1256,58 @@ Replaces the v0.1.12 confirm sheet (§5.94).
 - **Link with §5.100:** when the sender no longer has the file (pruned or off), the requester's request still arrives; the sender sees “You no longer have this file” and can reply in chat. Lowering a limit prunes oldest-first on Save.
 - **A11y:** the row is a button reading the current value; the toggle is `role=switch`; each segmented control is a `radiogroup` labelled “Keep for” / “Up to”; the summary is `role=status`; the usage bar is `role=img` with a full text label.
 
-| Copy | EN | FR |
-|------|----|----|
-| Row | Keep media you sent | Garder les médias envoyés |
-| Default value | 90 days or 2 GB | 90 jours ou 2 Go |
-| Groups | Keep for / Up to | Durée / Jusqu’à |
-| Presets | 30 days, 90 days, 1 year, Forever · 500 MB, 2 GB, 5 GB, No limit | 30 j, 90 j, 1 an, Toujours · 500 Mo, 2 Go, 5 Go, Sans limite |
+| Copy | EN | FR | HE (draft) |
+|------|----|----|---|
+| Row | Keep media you sent | Garder les médias envoyés | שמירת מדיה ששלחת |
+| Default value | 90 days or 2 GB | 90 jours ou 2 Go | 90 יום או 2 ג״ב |
+| Groups | Keep for / Up to | Durée / Jusqu’à | לשמור למשך / עד |
+| Presets | 30 days, 90 days, 1 year, Forever · 500 MB, 2 GB, 5 GB, No limit | 30 j, 90 j, 1 an, Toujours · 500 Mo, 2 Go, 5 Go, Sans limite | 30 יום, 90 יום, שנה, לתמיד · 500 מ״ב, 2 ג״ב, 5 ג״ב, ללא הגבלה |
 
+
+## 5P. v0.1.17 — Dark-mode WCAG AA overhaul; backup copy covers chats (requested by the maintainer, 2026-10-24)
+
+Generator `/workspace/omcp-v0117/` (`gen.py` patches the v0.1.16 pack, `render.py`, `contrast.py`, `table.py`, `compose.py`). All 70 mockups re-rendered (445 frames).
+
+### 5.102 Dark theme contrast
+- **Rule:** every dark frame meets WCAG 2.1 AA: text 4.5:1 (large 3:1), icons, control boundaries, toggle tracks/thumbs and focus rings 3:1. Disabled states are exempt but target 3:1.
+- **Dark token values changed** (light values and brand hues untouched): `--ink-2` #a3b1c2 → #b4c0ce, `--ink-3` #7a8a9c → #95a3b4, `--line` #2a3646 → #687990, `--line-strong` #3d4d60 → #7a8ba1.
+- **Switch (dark):** the thumb on the on-track uses `--brand-ink` (dark thumb on teal track, as Material 3 dark does); white on `--brand` was 2.3:1.
+- **On-accent text:** text and icons on solid `--brand`, `--ok`, `--danger`, `--warn` fills use `--brand-ink`, not literal `#fff` (`#fff` = `--brand-ink` in light, so light is unchanged). Proggy: map to `onPrimary` / an on-accent colour, never hard-code white.
+- **Audit:** `a11y/dark-contrast.md` (every dark fg/bg pair, before → after), `a11y/dark-before-after.png`, `a11y/light-spot-check.png`.
+- **Known gap:** the dimmed (opacity .4) action buttons in `nearby-skeleton--dark` stay at 1.3–2.5:1; they are disabled while loading (exempt). Fixing them needs a different disabled treatment than opacity, which would also change light.
+
+### 5.103 Backup contents in copy
+- **Meaning:** the cloud backup (Google Drive / iCloud) holds the recovery phrase **and all chats** (text; photos, voice notes and files only if media backup is on, §5.96). The written 24-word phrase alone restores **identity and contacts, not chats**.
+- Applied to `onboarding-secure` (sub, honest note, password sheet), `onboarding-secure-phrase`, `onboarding-secure-reminder`, `onboarding-restore`, `settings-backup` (method lines, honest note, delete sheet), `restore-source` (“My 24 words” row), `restore-error--corrupted`, `restore-password` (forgot hint, lockout), `restore-reinstall` (forgot hint). Copy tables §5.21, §5.26–5.30, §5.31, §5.89 updated in place (EN/FR).
+- No Arabic copy exists in the pack yet (EN/FR only), so there is nothing to change in AR; RTL stays a §5 checklist item. *(v0.1.18: Hebrew added as the first RTL locale, §5.105–5.106.)*
+
+## 5Q. v0.1.18 — Light-mode WCAG AA matched to dark; Hebrew (RTL) locale draft (requested by the maintainer, 2026-10-24)
+
+Generator `/workspace/omcp-v0118/` (`gen.py` light tokens + disabled/scrim fixes, `he.py` + `he_strings.py` Hebrew frames, `he_spec.py` Hebrew copy column, `contrast.py`, `table18.py`, `compose18.py`, `docs18.py`, `render.py`). All mockups re-rendered.
+
+### 5.104 Light theme contrast (light token values changed with the maintainer’s approval)
+- **Rule:** every light frame meets WCAG 2.1 AA like dark (§5.102): text 4.5:1, icons, control boundaries, toggle tracks/thumbs, focus rings 3:1. Disabled controls target 3:1 in both themes (no `opacity` dimming).
+- **Light token values:** `--ink-2` #4a5b70 → #3b495a, `--ink-3` #6b7c90 → #515e6d, `--line` #d8dee8 → #73849a, `--line-strong` #b8c2d0 → #617289. Dark values, soft tints and brand hues unchanged.
+- **Matched pair:** each light step has the same contrast on light `--surface` as the dark step on dark `--surface`: ink-2 9.18 / 9.18, ink-3 6.62 / 6.60, line 3.82 / 3.82, line-strong 4.91 / 4.87. Table and side-by-side in `a11y/light-vs-dark.png`.
+- **Disabled:** `nearby-skeleton` loading row → `.is-loading` + `aria-disabled` (`--surface-2` fill, `--line-strong` ring, `--ink-3` glyph); `restore-password` lockout and `settings-storage` edit-off use `.btn.disabled` / `.is-disabled`. ≥ 3.5:1 light, ≥ 4.0:1 dark.
+- **Inverse toasts** (`background:var(--ink)`): accent = the other theme’s teal (`#3dbdb6` on light’s near-black toast, `#0b6e6a` on dark’s near-white toast), like Material `inversePrimary`.
+- **Scrims over photos:** ≥ .62 alpha behind white glyphs/labels (report button, “Restored” pill).
+- **Audit:** `a11y/light-contrast.md` (new), `a11y/dark-contrast.md` (re-measured), `a11y/light-before-after.png`, `a11y/light-vs-dark.png`.
+
+### 5.105 Hebrew (he) — DRAFT
+- **Status: DRAFT — pending native-speaker review.** All Hebrew strings (frames and the “HE (draft)” column in every copy table) were written without a native reviewer. Do not ship before review, especially gendered forms.
+- **Frames** (27, suffix `--he`, same naming as `--fr`): `onboarding-welcome--he.png`, `onboarding-permissions--he.png`, `onboarding-profile--he.png`, `onboarding-secure--he.png`, `onboarding-secure-phrase--he.png`, `onboarding-secure-quiz--he.png`, `onboarding-done--he.png`, `onboarding-restore--he.png`, `chats-list--he.png`, `chats-list--he-dark.png`, `chat-thread--he.png`, `chat-thread--he-dark.png`, `settings-privacy--he.png`, `settings-backup--he.png`, `settings-storage--he.png`, `settings-notifications--he.png`, `restore-detect--he.png`, `restore-source--he.png`, `restore-password--he.png`, `restore-progress--he.png`, `restore-success--he.png`, `nearby-area--he.png`, `nearby-chat--he.png`, `burn-bubbles--he.png`, `burn-composer--he.png`, `mod-community--he.png`, `mod-report--he.png`.
+- **Font:** Rubik (variable, Google Fonts, installed locally) → fallbacks Noto Sans Hebrew, Heebo, system-ui. Every Hebrew code point used is in Rubik (checked with fontTools + Chrome platform-font report); only ✦, U+2011 and emoji fall back. No tofu. Apps: Android uses the system Hebrew font (Noto Sans Hebrew); iOS uses SF Hebrew. Rubik is for mockups only unless the brand adopts it.
+- **Tone:** informal, plural / infinitive where possible to avoid gendered address (“הזינו”, “להמשיך”); “את/ה” where a singular is unavoidable. Buttons use nouns/infinitives (“שליחת דיווח”, “להתחיל מחדש”).
+- **Fictional names (frames):** Sam Okafor → טל מזרחי (tal.mizrahi@gmail.com), Alex Rivera → נועה שרון, Jules Bernard → יואב ברק, Sam Kim → שירה כץ, Morgan Reed → עומר רז, Maya → מאיה, Robin → רוני, Ines → ענבל, Teo → תום, Riverside Gardeners → גינת הנחל, Neighbourhood watch → משמר השכונה. Léa Dubois stays (French contact; tests mixed-direction text).
+- **Kept Latin:** Hopla, OMCP, Google Drive, iCloud, Face ID, PeerIDs (`omcp1:…`), emails, the 24 BIP39 recovery words (English standard list; there is no Hebrew BIP39 list) and their numbering grid.
+
+### 5.106 RTL mirroring rules (normative for he, and for ar/fa later)
+- **Set** `dir="rtl"` and `lang="he"` on the root (Android `android:supportsRtl="true"` + `start/end` everywhere; iOS leading/trailing + `semanticContentAttribute` default).
+- **Mirror:** whole layout order (nav: back button at the right, actions at the left; tab bar order; list rows: avatar right, time/badges left); back chevron points **right** and list/forward chevrons (› rows) point **left**; send icon; message bubbles (incoming on the **right**, own on the **left**, tail corner mirrored); progress bars and step indicators fill **from the right**; stacked storage bar starts at the right; toggles (off = thumb right, on = thumb left); segmented controls and button rows (Pass/Profile/Like) reverse; overlays pinned to a side (report flag, menus, badges) swap sides; swipe directions swap (swipe **left** = forward/next, swipe-to-reply from the left edge; Nearby “Like” gesture = swipe toward the Like button, i.e. left in RTL).
+- **Do not mirror:** photos, video, avatars and media; logos and the app icon; the status bar and clock; digits and numbers (always LTR, e.g. 9:41, 1,284, 2.6); phone numbers, PeerIDs, emails, URLs, file names; QR codes (direction forced LTR); the recovery-word grid and safety-number grid (Latin/numeric, read left-to-right); timer rings and checkmarks; media playback controls (play/seek stay LTR); non-directional icons (search, bell, shield, flame, heart, flag).
+- **Bidi:** wrap Latin/number runs inside Hebrew text in isolates (`<bdi>`, `\u2066…\u2069`, Android `BidiFormatter`, iOS `NSLocale`-aware formatting) so “Merci, à demain !”, “< 1 km”, “22:00 – 07:00” and IDs keep their order; prefer Hebrew-first phrasing for mixed chips (“4 בסביבה · Mesh”). Units in Hebrew: ג״ב, מ״ב, ק״מ, דק׳, שע׳.
+- **Dates:** “12 באוק׳ 2026, 21:40” (24 h clock). Week days as letters with geresh (א׳ … ש׳).
 
 ## 6. Path indicator component (normative UX)
 
@@ -1278,20 +1326,20 @@ Do not animate path changes as errors; cross-fade colour/label 200 ms.
 - Concrete crypto only when useful: “End-to-end encrypted”, “Post-quantum hybrid when both sides support it”.
 - **Never:** military grade, unhackable, completely anonymous, guaranteed delivery worldwide.
 
-| Concept | EN | FR |
-|---------|----|----|
-| Verified contact | Verified contact | Contact vérifié |
-| Unverified | Not verified yet | Pas encore vérifié |
-| Waiting for mesh | Waiting for mesh | En attente du mesh |
-| Via neighbour Internet | Sent via neighbour’s Internet | Envoyé via l’Internet d’un voisin |
-| Gateway help | Help nearby peers reach the Internet | Aider les pairs proches à rejoindre Internet |
-| Notification default | New Hopla message | Nouveau message Hopla |
-| Not an OMCP code | Not a Hopla contact code | Ce n’est pas un code contact Hopla |
-| Safety mismatch | Safety numbers don’t match | Les numéros de sécurité ne correspondent pas |
-| File too large | {x} MB is over the 50 MB limit | {x} Mo dépasse la limite de 50 Mo |
-| Transfer paused | Paused · out of range | En pause · hors de portée |
-| BLE-only live | Video needs Wi‑Fi or Internet | La vidéo nécessite le Wi‑Fi ou Internet |
-| Recovery | Write these 24 words down… | Notez ces 24 mots… |
+| Concept | EN | FR | HE (draft) |
+|---------|----|----|---|
+| Verified contact | Verified contact | Contact vérifié | איש קשר מאומת |
+| Unverified | Not verified yet | Pas encore vérifié | עדיין לא מאומת |
+| Waiting for mesh | Waiting for mesh | En attente du mesh | ממתין ל-Mesh |
+| Via neighbour Internet | Sent via neighbour’s Internet | Envoyé via l’Internet d’un voisin | נשלח דרך האינטרנט של שכן |
+| Gateway help | Help nearby peers reach the Internet | Aider les pairs proches à rejoindre Internet | לעזור לעמיתים בסביבה להגיע לאינטרנט |
+| Notification default | New Hopla message | Nouveau message Hopla | הודעה חדשה ב-Hopla |
+| Not an OMCP code | Not a Hopla contact code | Ce n’est pas un code contact Hopla | זה לא קוד איש קשר של Hopla |
+| Safety mismatch | Safety numbers don’t match | Les numéros de sécurité ne correspondent pas | מספרי הבטיחות לא תואמים |
+| File too large | {x} MB is over the 50 MB limit | {x} Mo dépasse la limite de 50 Mo | {x} מ״ב חורג מהמגבלה של 50 מ״ב |
+| Transfer paused | Paused · out of range | En pause · hors de portée | מושהה · מחוץ לטווח |
+| BLE-only live | Video needs Wi‑Fi or Internet | La vidéo nécessite le Wi‑Fi ou Internet | וידאו דורש Wi‑Fi או אינטרנט |
+| Recovery | Write these 24 words down… | Notez ces 24 mots… | רשמו את 24 המילים האלה… |
 
 Keep FR translations reviewed by a human before store submission; table is design intent, not final L10n freeze.
 
@@ -1365,10 +1413,10 @@ Shared Rust core exposes state (path, verification, queue depth); UI never re-im
 ## 10. Accessibility checklist
 
 - [ ] All path chips have accessibility labels including path name + meaning.
-- [ ] Contrast ≥ 4.5:1 for text; ≥ 3:1 for large/UI graphics.
+- [x] Contrast ≥ 4.5:1 for text; ≥ 3:1 for large/UI graphics — both themes audited (`a11y/light-contrast.md`, `a11y/dark-contrast.md`, v0.1.18).
 - [ ] Focus order: nav → path banner → messages → composer.
 - [ ] Reduce Motion: disable non-essential transitions.
-- [ ] RTL-ready layout (logical margins) even if v0.1 ships LTR-only locales.
+- [x] RTL-ready layout (logical margins). v0.1.18 adds Hebrew (he) RTL frames — rules in §5.106; Hebrew copy is a DRAFT pending native review.
 - [ ] Safety number readable at 200 % zoom without horizontal clip.
 
 ---
@@ -1430,6 +1478,8 @@ Open (v0.1.10):
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
 | 0.1.15 | 2026-10-24 | Restored tag in groups and communities (§5.99), `group-restored`; Q24–Q25 resolved; mobile-data toggle confirmed by REQUIREMENTS |
 | 0.1.16 | 2026-10-24 | One-tap Ask to resend with optional note (§5.100, supersedes §5.94 confirm sheet); Settings › Storage › Keep media you sent, default 90 days or 2 GB (§5.101); 2 new + 1 updated mockups |
+| 0.1.17 | 2026-10-24 | Dark-mode WCAG AA overhaul (dark token values, switch thumb, on-accent ink) §5.102; backup copy says cloud backup holds the phrase and all chats, written phrase restores identity and contacts only §5.103 |
+| 0.1.18 | 2026-10-24 | Light-mode WCAG AA (light token values matched to the dark steps, semantic disabled states, inverse-toast accent) §5.104; Hebrew (he, RTL) frames and HE copy column — DRAFT pending native review §5.105; RTL mirroring rules §5.106 |
 | 0.1.14 | 2026-10-24 | Re-verification after restore (§5.98, RS2): verified badge reset, “Restored, not verified” until QR re-verify, badge earned back; restore copy; Q20 resolved; Q24–Q25; media daily Wi-Fi pass copy, partial media restore frame; Q21–Q23 resolved |
 | 0.1.13 | 2026-10-24 | Media backup setting (§5N, 5.96–5.97): toggles, size, quota, turn-off delete, first upload; `restore-media`; placeholders only for media not in the backup; Q21–Q23 |
 | 0.1.12 | 2026-10-24 | Ask to resend + confirm/sent, Wi-Fi-only gateway re-fetch with a mobile-data setting, re-requests carry no extra metadata (§5.94); Q17–Q19 resolved; restore indicator: contact notice, sheet, 7-day Restored badge, restored-phone banner (§5.95) |

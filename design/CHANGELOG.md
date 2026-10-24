@@ -1,5 +1,49 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.18 — 2026-10-24
+
+Light mode to WCAG AA as the matched twin of dark, and a first RTL locale: Hebrew (requested by the maintainer). `DESIGN_SPEC.md` §5.104–5.106.
+
+### Changed — light theme (WCAG AA; light token change approved by the maintainer)
+- `tokens.css` `:root` only: `--ink-2` #4a5b70 → #3b495a, `--ink-3` #6b7c90 → #515e6d, `--line` #d8dee8 → #73849a, `--line-strong` #b8c2d0 → #617289. Each step now has the same contrast on light `--surface` as the v0.1.17 dark step on dark `--surface` (9.18 / 6.62 / 3.82 / 4.91 vs 9.18 / 6.60 / 3.82 / 4.87). Dark values, soft tints, brand hues unchanged.
+- Disabled controls without `opacity`: `nearby-skeleton` loading row (`.is-loading`, `aria-disabled`), `restore-password` lockout, `settings-storage` edit-off. Disabled now ≥ 3.5:1 light, ≥ 4.0:1 dark (was 1.07 / 1.34).
+- Inverse toasts use the other theme’s teal for their action/icon (was 2.84:1). `mod-stream` host line no longer fades the reputation chip. “Ask to resend” pill border = full `--brand`. Photo scrims ≥ .62.
+- Result (excluding verified white-on-photo / OS-chrome artefacts, listed in the audit): light failing element pairs 1548 → **0**, worst non-disabled 1.15:1 → **3.25:1**, worst text 2.22:1 → **4.54:1**; dark failing 5 → **0** (the 5 were the disabled skeleton buttons), worst non-disabled 3.15:1 (unchanged), worst disabled 1.34:1 → 4.02:1.
+- Added `a11y/light-contrast.md`, `a11y/light-before-after.png`, `a11y/light-vs-dark.png`; re-generated `a11y/dark-contrast.md`; `a11y/dark-contrast.py` now measures either theme.
+
+### Added — Hebrew (he, RTL) — DRAFT, pending native-speaker review
+- 27 Hebrew frames (`--he`, plus `--he-dark` for chats-list and chat-thread): onboarding-welcome--he.png, onboarding-permissions--he.png, onboarding-profile--he.png, onboarding-secure--he.png, onboarding-secure-phrase--he.png, onboarding-secure-quiz--he.png, onboarding-done--he.png, onboarding-restore--he.png, chats-list--he.png, chats-list--he-dark.png, chat-thread--he.png, chat-thread--he-dark.png, settings-privacy--he.png, settings-backup--he.png, settings-storage--he.png, settings-notifications--he.png, restore-detect--he.png, restore-source--he.png, restore-password--he.png, restore-progress--he.png, restore-success--he.png, nearby-area--he.png, nearby-chat--he.png, burn-bubbles--he.png, burn-composer--he.png, mod-community--he.png, mod-report--he.png.
+- “HE (draft)” column in every EN/FR copy table of `DESIGN_SPEC.md` (216 rows).
+- `tokens.css`: RTL rules (`.phone[dir=rtl]`: Rubik → Noto Sans Hebrew → Heebo; mirrored chevrons/send, bubble tails, toggles; status bar, QR, word and safety grids stay LTR).
+- Spec §5.106 RTL mirroring rules (what mirrors, what never mirrors, bidi isolation, swipe directions).
+
+### Re-rendered
+- All mockups (system python3 Playwright, `/usr/bin/google-chrome`).
+
+### Constraints observed
+- `brand/` untouched; not pushed. Generator `/workspace/omcp-v0118/`. Mirror updated.
+
+## v0.1.17 — 2026-10-24
+
+Dark mode readable everywhere, and backup copy that says chats are backed up (requested by the maintainer). `DESIGN_SPEC.md` §5.102, §5.103.
+
+### Changed — dark theme (WCAG AA)
+- `tokens.css`, dark values only (`@media (prefers-color-scheme: dark)` and `.phone.dark`): `--ink-2` #a3b1c2 → #b4c0ce, `--ink-3` #7a8a9c → #95a3b4, `--line` #2a3646 → #687990, `--line-strong` #3d4d60 → #7a8ba1. Light values and brand hues unchanged.
+- `tokens.css`, dark-only rule: switch thumb on the on-track uses `--brand-ink` (was white, 2.29:1).
+- Mockup HTML: 58 literal `color:#fff` on solid `--brand`/`--ok`/`--danger`/`--warn` fills → `color:var(--brand-ink)` (same white in light).
+- Result: failing dark pairs 24 → 3 (all 3 disabled, in `nearby-skeleton--dark`); worst non-disabled ratio 1.14:1 → 3.15:1; worst text 2.04:1 → 4.71:1. Light: 0 regressions.
+- Added `a11y/dark-contrast.md`, `a11y/dark-contrast.py`, `a11y/dark-before-after.png`, `a11y/light-spot-check.png`.
+
+### Changed — backup copy (EN/FR, HTML + copy tables)
+- Cloud backup = recovery phrase + all chats (text; media if media backup is on). Written phrase = identity + contacts, not chats.
+- `onboarding-secure`, `onboarding-secure-phrase`, `onboarding-secure-reminder`, `onboarding-restore`, `settings-backup` (method lines, honest note, delete sheet), `restore-source`, `restore-error--corrupted`, `restore-password`, `restore-reinstall`.
+
+### Re-rendered
+- All 70 mockups (445 frames), using system python3 Playwright with `/usr/bin/google-chrome`.
+
+### Constraints observed
+- `brand/` untouched; light token values untouched; not pushed to git. Generator `/workspace/omcp-v0117/`. Mirror updated.
+
 ## v0.1.16 — 2026-10-24
 
 One-tap Ask to resend, and Keep media you sent (decisions approved by the maintainer). `DESIGN_SPEC.md` §5.100, §5.101.
