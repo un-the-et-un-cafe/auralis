@@ -59,6 +59,9 @@ pub enum OmcpError {
     #[error("backup error: {0}")]
     Backup(&'static str),
 
+    #[error("backup format v{0} is newer than this app supports")]
+    BackupTooNew(u8),
+
     #[error("backup authentication failed (wrong password or key)")]
     BackupAuth,
 

@@ -12,8 +12,13 @@
 //!   created_at(u64 BE, ms)`.
 //! - Blob: CBOR map `{v:1, kdf, salt, nonce, ct, created_at, device_hint}`
 //!   where `kdf` is `{alg:"argon2id", m, t, p}` or `{alg:"platform-key"}`.
-//! - Plaintext (inside `ct`): CBOR `{entropy: bytes(32), contacts: [...]}` so
-//!   contacts and verification state restore together with the identity.
+//! - Plaintext (inside `ct`): CBOR `{entropy: bytes(32), contacts: [...],
+//!   display_name?}` so contacts and verification state (O3: `{peer_id, name,
+//!   verified}` per contact, encrypted with the identity) restore together with
+//!   the identity. `display_name` was added in v0.1.10 as an **optional** key:
+//!   blobs stay `v:1`, older readers ignore it, and older blobs without it still
+//!   open. A blob with `v` greater than [`BACKUP_VERSION`] fails with
+//!   [`OmcpError::BackupTooNew`] so apps can say "Update Hopla to restore".
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -46,6 +51,8 @@ pub struct BackupContact {
 pub struct BackupContents {
     pub entropy: Zeroizing<[u8; 32]>,
     pub contacts: Vec<BackupContact>,
+    /// The user's own profile name (optional; absent in pre-v0.1.10 blobs).
+    pub display_name: Option<String>,
 }
 
 /// How the backup key is derived.
@@ -84,6 +91,8 @@ struct Inner {
     #[serde(with = "serde_bytes_vec")]
     entropy: Vec<u8>,
     contacts: Vec<BackupContact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
 }
 
 /// Password policy verdict.
@@ -168,6 +177,10 @@ pub fn seal_backup(
         &Inner {
             entropy: contents.entropy.to_vec(),
             contacts: contents.contacts.clone(),
+            display_name: contents
+                .display_name
+                .as_ref()
+                .map(|n| n.chars().take(64).collect()),
         },
         &mut inner,
     )
@@ -212,6 +225,9 @@ pub struct BackupInfo {
 
 fn parse(blob: &[u8]) -> Result<Blob> {
     let b: Blob = ciborium::from_reader(blob).map_err(|_| OmcpError::Backup("cbor decode"))?;
+    if b.v > BACKUP_VERSION {
+        return Err(OmcpError::BackupTooNew(b.v));
+    }
     if b.v != BACKUP_VERSION {
         return Err(OmcpError::Backup("unsupported backup version"));
     }
@@ -259,6 +275,7 @@ pub fn open_backup(blob: &[u8], secret: BackupSecret<'_>) -> Result<BackupConten
     Ok(BackupContents {
         entropy,
         contacts: i.contacts,
+        display_name: i.display_name,
     })
 }
 
@@ -301,6 +318,7 @@ mod tests {
                 name: "Alex".into(),
                 verified: true,
             }],
+            display_name: Some("Sam".into()),
         }
     }
 
@@ -369,5 +387,115 @@ mod tests {
         assert!(!check_password("12345678").ok);
         assert!(check_password(PW).ok);
         assert!(seal_backup(&contents(), BackupSecret::Password("password"), 1, "d").is_err());
+    }
+
+    /// Seal an arbitrary inner CBOR value the way [`seal_backup`] does (platform key).
+    fn seal_raw_inner(inner: &impl Serialize, key: &[u8; 32], v: u8) -> Vec<u8> {
+        let mut pt = Vec::new();
+        ciborium::into_writer(inner, &mut pt).unwrap();
+        let nonce = vec![1u8; 24];
+        let ct = XChaCha20Poly1305::new_from_slice(key)
+            .unwrap()
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &pt,
+                    aad: &aad(9),
+                },
+            )
+            .unwrap();
+        let mut out = Vec::new();
+        ciborium::into_writer(
+            &Blob {
+                v,
+                kdf: Kdf::PlatformKey,
+                salt: vec![0; 16],
+                nonce,
+                ct,
+                created_at: 9,
+                device_hint: "d".into(),
+            },
+            &mut out,
+        )
+        .unwrap();
+        out
+    }
+
+    #[test]
+    fn q15_contacts_and_verification_are_inside_the_ciphertext() {
+        let key = [4u8; 32];
+        let blob = seal_backup(&contents(), BackupSecret::PlatformKey(&key), 1, "d").unwrap();
+        assert!(!contains(&blob, &[7u8; 32]), "peer id must be encrypted");
+        assert!(!contains(&blob, b"Sam"));
+        let back = open_backup(&blob, BackupSecret::PlatformKey(&key)).unwrap();
+        assert!(back.contacts[0].verified);
+        assert_eq!(back.display_name.as_deref(), Some("Sam"));
+    }
+
+    #[test]
+    fn legacy_v1_blob_without_display_name_still_opens() {
+        #[derive(Serialize)]
+        struct LegacyInner {
+            #[serde(with = "serde_bytes_vec")]
+            entropy: Vec<u8>,
+            contacts: Vec<BackupContact>,
+        }
+        let key = [5u8; 32];
+        let c = contents();
+        let blob = seal_raw_inner(
+            &LegacyInner {
+                entropy: c.entropy.to_vec(),
+                contacts: c.contacts.clone(),
+            },
+            &key,
+            1,
+        );
+        let back = open_backup(&blob, BackupSecret::PlatformKey(&key)).unwrap();
+        assert_eq!(back.contacts, c.contacts);
+        assert_eq!(back.display_name, None);
+    }
+
+    #[test]
+    fn older_reader_shape_ignores_the_new_optional_key() {
+        #[derive(Deserialize)]
+        struct LegacyInner {
+            #[serde(with = "serde_bytes_vec")]
+            entropy: Vec<u8>,
+            contacts: Vec<BackupContact>,
+        }
+        let c = contents();
+        let mut pt = Vec::new();
+        ciborium::into_writer(
+            &Inner {
+                entropy: c.entropy.to_vec(),
+                contacts: c.contacts.clone(),
+                display_name: Some("Sam".into()),
+            },
+            &mut pt,
+        )
+        .unwrap();
+        let old: LegacyInner = ciborium::from_reader(pt.as_slice()).unwrap();
+        assert_eq!(old.entropy.len(), 32);
+        assert_eq!(old.contacts, c.contacts);
+    }
+
+    #[test]
+    fn newer_version_is_reported_as_too_new() {
+        let key = [6u8; 32];
+        let c = contents();
+        let blob = seal_raw_inner(
+            &Inner {
+                entropy: c.entropy.to_vec(),
+                contacts: vec![],
+                display_name: None,
+            },
+            &key,
+            BACKUP_VERSION + 1,
+        );
+        assert_eq!(backup_info(&blob), Err(OmcpError::BackupTooNew(2)));
+        assert_eq!(
+            open_backup(&blob, BackupSecret::PlatformKey(&key)),
+            Err(OmcpError::BackupTooNew(2))
+        );
     }
 }

@@ -194,6 +194,7 @@ fn backup_roundtrip_restores_identity_contacts_and_verification() {
     ));
     let r = open_backup_with_password(blob, pw).unwrap();
     assert_eq!(r.phrase, phrase);
+    assert_eq!(r.display_name.as_deref(), Some("Alice"));
     let a2 = OmcpNode::from_phrase(r.phrase, "Alice".into()).unwrap();
     assert_eq!(a2.identity().peer_id_hex, a.identity().peer_id_hex);
     for k in r.contacts {

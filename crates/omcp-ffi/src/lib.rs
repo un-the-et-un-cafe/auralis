@@ -71,6 +71,8 @@ pub enum FfiError {
     State { msg: String },
     #[error("wrong backup password")]
     WrongBackupPassword,
+    #[error("backup format v{version} is newer than this app supports")]
+    BackupTooNew { version: u8 },
     #[error("file too large: {size} bytes exceeds {max}")]
     FileTooLarge { size: u64, max: u64 },
 }
@@ -82,6 +84,9 @@ impl From<omcp_core::OmcpError> for FfiError {
                 return FfiError::FileTooLarge { size, max }
             }
             omcp_core::OmcpError::BackupAuth => return FfiError::WrongBackupPassword,
+            omcp_core::OmcpError::BackupTooNew(version) => {
+                return FfiError::BackupTooNew { version }
+            }
             _ => {}
         }
         FfiError::Protocol { msg: e.to_string() }
@@ -316,6 +321,8 @@ pub struct BackupContact {
 pub struct RestoredBackup {
     pub phrase: String,
     pub contacts: Vec<BackupContact>,
+    /// Own profile name if the blob carries one (v0.1.10+ writers).
+    pub display_name: Option<String>,
 }
 
 /// Backup password policy: ≥ 8 chars and zxcvbn score ≥ 3.
@@ -390,6 +397,7 @@ fn restored(c: backup::BackupContents) -> Result<RestoredBackup, FfiError> {
                 verified: b.verified,
             })
             .collect(),
+        display_name: c.display_name.clone(),
     })
 }
 
@@ -531,6 +539,7 @@ impl OmcpNode {
         let contents = backup::BackupContents {
             entropy: Zeroizing::new(*self.inner.seed),
             contacts,
+            display_name: Some(self.inner.name.clone()).filter(|n| !n.is_empty()),
         };
         Ok(backup::seal_backup(
             &contents,
