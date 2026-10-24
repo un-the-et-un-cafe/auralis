@@ -70,6 +70,10 @@ pub enum OmcpError {
 
     #[error("rendezvous token rejected: {0}")]
     TokenRejected(&'static str),
+
+    /// Scalable sync (§22) failure.
+    #[error("sync: {0}")]
+    Sync(&'static str),
 }
 
 /// Crate-wide result alias.
