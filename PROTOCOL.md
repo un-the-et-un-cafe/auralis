@@ -289,7 +289,7 @@ EnvelopeV1 {
 5. **Auth:** No unsigned identity claims. Capability statements are signed.
 6. **Replay:** `envelope_id` + timestamp window (±10 minutes skewed tolerance with logical clocks) + AEAD.
 7. **Padding:** Optional traffic padding profiles (`off`, `low`, `medium`) to mitigate size side channels on gateways.
-8. **Screenshots / notifications:** OS notification content MUST show generic “New OMCP message” unless user opts into revealing previews (off by default).
+8. **Screenshots / notifications:** Clients SHOULD show sender and preview by default and MUST offer a "Private notifications" mode that shows only a generic "New message" (no sender, no content). Payloads are decrypted on-device only; gateways and push relays never see plaintext.
 9. **Backups:** Encrypted backups only; recovery key is 24-word BIP-39-like phrase or platform secure recovery; cloud backup is optional and E2EE (client-side encrypted before upload; see apps/REQUIREMENTS.md "Onboarding & recovery backup").
 
 ---

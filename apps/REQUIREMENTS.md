@@ -18,7 +18,7 @@ Derived from PROTOCOL.md §13. Implementers (Proggy) treat this as the product c
 7. Offline queue + path indicator (mesh / gateway / mixed)
 8. Security centre: verify, reset session, block
 9. Encrypted local backup / restore
-10. Notification previews off by default
+10. Message notifications ON by default with sender + preview; per-chat and global "Private notifications" option (see "Notifications (v0.1.2)")
 
 ## Acceptance tests
 
@@ -72,3 +72,40 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
 - O4: A wrong backup password fails cleanly, with rate-limited retries. The phrase fallback still works.
 - O5: Deleting the cloud backup in Settings removes the remote record (verified via API).
 - O6: Skipping the backup shows a banner, and after 24 h the user can't continue without completing a backup method.
+
+## Notifications (v0.1.2)
+- **Default ON**: when a message arrives, the notification shows the sender name, avatar and a text preview. Calls, mentions and livestream starts notify too.
+- **Private notifications**: a toggle that applies to all chats (Settings > Notifications) or to one chat (Chat info). When it's on, the notification shows only "Hopla: New message", with no sender, no preview and no avatar. A separate **Hide on lock screen** option uses the platform's lock-screen visibility (Android `VISIBILITY_PRIVATE`/`SECRET`; iOS `hiddenPreviewsBodyPlaceholder`).
+- **Delivery**: mesh and local delivery raise notifications on-device. Internet wake-ups use FCM/APNs with **content-free** pushes (just the opaque mailbox id). The app decrypts in a Notification Service Extension (iOS) or the FCM handler (Android). Google and Apple never see the sender or text.
+- Quiet hours, mute per chat (1 h / 8 h / 1 week / forever), and per-community notification levels (all, mentions, none).
+- Acceptance: N1 a fresh install shows a sender and preview notification; N2 with Private on, no sender or content appears anywhere in the notification (including on the lock screen and in the notification history); N3 the FCM/APNs payload has no plaintext (verified in a test).
+
+## Hopla Nearby: dating (v0.3, opt-in)
+Find people nearby to meet, without a central server and without sharing exact locations.
+
+### Principles
+- **Off by default, 18+ only**: you enable it in a separate Nearby tab, after confirming your age and agreeing to the community rules. Your dating profile is **not linked** to your chat identity until both people choose to reveal it.
+- **No exact location, ever**: "nearby" means in BLE mesh range (≈ hops ≤ 3) or, over a gateway, the same coarse geohash cell (precision 5, ≈ 5 km), which is rotated and salted daily. Distance is shown only in buckets ("< 1 km", "< 5 km", "in your area").
+
+### Profile
+- A separate **Nearby key** (Ed25519/X25519) for each user, rotated every 24 h, so a profile can't be tracked over time or linked to the chat key.
+- Fields: first name or nickname, age (in a range), up to 6 photos, a short bio, interests (tags), what you're looking for (dating / friends / both), who you'd like to see (gender, age range). Photos are re-encoded on-device and all metadata (EXIF, GPS) is stripped.
+- Visibility controls: pause, show only to people with shared interests, hide from contacts in your address book (hashed matching, done locally).
+
+### Discovery & matching
+- Profiles are broadcast as signed, small `NEARBY_CARD` gossip packets (TTL 3 hops, 1 h expiry). Photos are fetched on demand, peer-to-peer.
+- The user swipes or taps **Like** or **Pass**. A like is sent as a **sealed like** (HPKE to the other person's Nearby key). Neither side learns anything unless it's **mutual**. After a mutual like, both get a match notification, and a fresh 1:1 E2EE chat (Noise hybrid, as usual) opens under the Nearby keys.
+- **Reveal identity**: after matching, either person can offer to share their main Hopla contact (it needs a mutual tap). Until then, the chat identity stays hidden.
+
+### Safety (required for launch)
+- Block and report are one tap from the profile, the chat and the match list. A block immediately hides you from that person's Nearby key and future rotations (this uses a local blocklist of their profile fingerprints, which are derived per epoch).
+- Report bundles (the reported profile card and the messages the reporter chooses) go to an optional, community-run moderation service that the client chooses. The protocol stays open, and the reference app ships a default moderator.
+- Limits: 100 likes per day; a message rate limit before a match (none allowed); first-contact photos blurred by default; a "Safety tips" screen before the first meeting; and an optional **share my date** feature that sends the meeting time and place to a trusted contact.
+- No minors: age confirmation, plus an age-estimation check on the device if the store requires it. Profiles under 18 are never shown.
+
+### Acceptance tests
+- D1: Nearby is off on a fresh install and doesn't send any packets until it's enabled.
+- D2: No exact location or GPS data leaves the device (verified in a packet-capture test); distance is shown in buckets only.
+- D3: A one-way like reveals nothing to either side; a mutual like creates a match on both devices within 5 s in BLE range.
+- D4: A Nearby profile can't be linked to the chat identity before an explicit mutual reveal (keys differ, and Nearby keys rotate every 24 h).
+- D5: Blocking hides the user across key rotations; reporting sends a bundle only with the reporter's confirmation.
