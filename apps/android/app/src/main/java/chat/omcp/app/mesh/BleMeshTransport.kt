@@ -1,0 +1,374 @@
+package chat.omcp.app.mesh
+
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothGatt
+import android.bluetooth.BluetoothGattCallback
+import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothGattServer
+import android.bluetooth.BluetoothGattServerCallback
+import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.AdvertiseCallback
+import android.bluetooth.le.AdvertiseData
+import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
+import android.content.Context
+import android.os.Build
+import android.os.ParcelUuid
+import android.util.Log
+import chat.omcp.app.core.CoreLink
+import chat.omcp.app.core.LinkResult
+import chat.omcp.app.core.OmcpGatt
+import chat.omcp.app.data.MeshRepository
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+
+/**
+ * Android BLE GATT transport (PROTOCOL §8.1). Every phone is both:
+ * - **peripheral**: advertises the OMCP service + 13-byte discovery ad (manufacturer
+ *   data in the scan response), hosts Inbox (write) / Outbox (notify) / Control (read);
+ *   acts as Noise **responder**;
+ * - **central**: scans, and dials a contact only if our PeerID sorts lower (tie-break
+ *   so two phones don't both dial); acts as Noise **initiator**.
+ *
+ * Opaque PDUs go straight into [CoreLink] (omcp-ffi): all crypto/fragmentation is Rust.
+ * GATT ops are serialised per connection (Android allows one outstanding op).
+ *
+ * Experimental: untested on real hardware in this environment.
+ */
+@SuppressLint("MissingPermission") // callers check runtime permissions first (MeshService)
+class BleMeshTransport(private val context: Context, private val repo: MeshRepository) {
+    private val tag = "OmcpBle"
+    private val io = Executors.newSingleThreadExecutor()
+    private val bt = context.getSystemService(BluetoothManager::class.java)
+    private val service = UUID.fromString(OmcpGatt.SERVICE)
+    private val inbox = UUID.fromString(OmcpGatt.INBOX)
+    private val outbox = UUID.fromString(OmcpGatt.OUTBOX)
+    private val control = UUID.fromString(OmcpGatt.CONTROL)
+    private val cccd = UUID.fromString(OmcpGatt.CCCD)
+
+    private var server: BluetoothGattServer? = null
+
+    /** Peripheral side: per-central responder links + pending notify queue. */
+    private val serverLinks = ConcurrentHashMap<String, CoreLink>()
+    private val notifyQueues = ConcurrentHashMap<String, ArrayDeque<ByteArray>>()
+    private val notifyBusy = ConcurrentHashMap<String, Boolean>()
+    private val subscribed = ConcurrentHashMap<String, BluetoothDevice>()
+
+    /** Central side: per-peripheral initiator links. */
+    private inner class Client(val contactId: String, var gatt: BluetoothGatt? = null) {
+        var link: CoreLink? = null
+        val writes = ArrayDeque<ByteArray>()
+        var busy = false
+    }
+    private val clients = ConcurrentHashMap<String, Client>() // by contactId
+
+    @Volatile var running = false
+        private set
+
+    fun start() {
+        if (running) return
+        val adapter = bt?.adapter ?: return
+        if (!adapter.isEnabled) return
+        running = true
+        startServer()
+        startAdvertising()
+        startScanning()
+        repo.kick = chat.omcp.app.data.MeshKick { id -> io.execute { kick(id) } }
+    }
+
+    fun stop() {
+        running = false
+        repo.kick = null
+        runCatching { bt.adapter.bluetoothLeScanner?.stopScan(scanCb) }
+        runCatching { bt.adapter.bluetoothLeAdvertiser?.stopAdvertising(advCb) }
+        clients.values.forEach { c -> c.link?.close(); runCatching { c.gatt?.close() } }
+        clients.clear()
+        serverLinks.values.forEach { it.close() }
+        serverLinks.clear()
+        runCatching { server?.close() }
+        server = null
+        repo.refresh()
+    }
+
+    // ---------------- peripheral ----------------
+
+    private fun startServer() {
+        val s = bt.openGattServer(context, serverCb) ?: return
+        val svc = BluetoothGattService(service, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        svc.addCharacteristic(
+            BluetoothGattCharacteristic(
+                inbox,
+                BluetoothGattCharacteristic.PROPERTY_WRITE,
+                BluetoothGattCharacteristic.PERMISSION_WRITE,
+            ),
+        )
+        svc.addCharacteristic(
+            BluetoothGattCharacteristic(
+                outbox,
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                BluetoothGattCharacteristic.PERMISSION_READ,
+            ).apply {
+                addDescriptor(
+                    BluetoothGattDescriptor(
+                        cccd,
+                        BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE,
+                    ),
+                )
+            },
+        )
+        svc.addCharacteristic(
+            BluetoothGattCharacteristic(
+                control,
+                BluetoothGattCharacteristic.PROPERTY_READ,
+                BluetoothGattCharacteristic.PERMISSION_READ,
+            ),
+        )
+        s.addService(svc)
+        server = s
+    }
+
+    private val serverCb = object : BluetoothGattServerCallback() {
+        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                io.execute {
+                    serverLinks.remove(device.address)?.close()
+                    notifyQueues.remove(device.address)
+                    subscribed.remove(device.address)
+                    repo.refresh()
+                }
+            }
+        }
+
+        override fun onCharacteristicReadRequest(d: BluetoothDevice, id: Int, offset: Int, c: BluetoothGattCharacteristic) {
+            val value = if (c.uuid == control) repo.core.advertisement() else ByteArray(0)
+            server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, offset, value.copyOfRange(minOf(offset, value.size), value.size))
+        }
+
+        override fun onDescriptorWriteRequest(
+            d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor,
+            prepared: Boolean, needResp: Boolean, offset: Int, value: ByteArray,
+        ) {
+            if (desc.uuid == cccd) subscribed[d.address] = d
+            if (needResp) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
+        }
+
+        override fun onCharacteristicWriteRequest(
+            d: BluetoothDevice, id: Int, c: BluetoothGattCharacteristic,
+            prepared: Boolean, needResp: Boolean, offset: Int, value: ByteArray,
+        ) {
+            if (needResp) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
+            if (c.uuid != inbox) return
+            io.execute {
+                val link = serverLinks.getOrPut(d.address) { repo.core.openResponderLink() }
+                val r = runCatching { link.onPdu(value) }.getOrElse {
+                    Log.w(tag, "responder pdu rejected: ${it.message}")
+                    serverLinks.remove(d.address)?.close()
+                    return@execute
+                }
+                handle(r)
+                r.outgoing.forEach { enqueueNotify(d, it) }
+            }
+        }
+
+        override fun onNotificationSent(d: BluetoothDevice, status: Int) {
+            io.execute {
+                notifyBusy[d.address] = false
+                pumpNotify(d)
+            }
+        }
+    }
+
+    private fun enqueueNotify(d: BluetoothDevice, pdu: ByteArray) {
+        notifyQueues.getOrPut(d.address) { ArrayDeque() }.addLast(pdu)
+        pumpNotify(d)
+    }
+
+    private fun pumpNotify(d: BluetoothDevice) {
+        if (notifyBusy[d.address] == true) return
+        val q = notifyQueues[d.address] ?: return
+        val next = q.removeFirstOrNull() ?: return
+        val ch = server?.getService(service)?.getCharacteristic(outbox) ?: return
+        notifyBusy[d.address] = true
+        if (Build.VERSION.SDK_INT >= 33) {
+            server?.notifyCharacteristicChanged(d, ch, false, next)
+        } else {
+            @Suppress("DEPRECATION")
+            ch.value = next
+            @Suppress("DEPRECATION")
+            server?.notifyCharacteristicChanged(d, ch, false)
+        }
+    }
+
+    private fun startAdvertising() {
+        val adv = bt.adapter.bluetoothLeAdvertiser ?: return
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setConnectable(true)
+            .build()
+        val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(service)).build()
+        val scanResp = AdvertiseData.Builder()
+            .addManufacturerData(OmcpGatt.MANUFACTURER_ID, repo.core.advertisement())
+            .build()
+        adv.startAdvertising(settings, data, scanResp, advCb)
+    }
+
+    private val advCb = object : AdvertiseCallback() {
+        override fun onStartFailure(errorCode: Int) = Log.w(tag, "advertise failed $errorCode").let { }
+    }
+
+    // ---------------- central ----------------
+
+    private fun startScanning() {
+        val scanner = bt.adapter.bluetoothLeScanner ?: return
+        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(service)).build()
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
+        scanner.startScan(listOf(filter), settings, scanCb)
+    }
+
+    private val scanCb = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) {
+            val adv = result.scanRecord?.getManufacturerSpecificData(OmcpGatt.MANUFACTURER_ID) ?: return
+            io.execute { maybeDial(result.device, adv) }
+        }
+    }
+
+    private fun maybeDial(device: BluetoothDevice, adv: ByteArray) {
+        if (!running) return
+        val contactId = repo.core.contactForAdvertisement(adv) ?: return
+        if (clients.containsKey(contactId)) return
+        val me = repo.core.identity()?.peerIdHex ?: return
+        if (me >= contactId) return // tie-break: lower PeerID dials
+        val c = Client(contactId)
+        clients[contactId] = c
+        c.gatt = device.connectGatt(context, false, clientCb(c), BluetoothDevice.TRANSPORT_LE)
+    }
+
+    private fun clientCb(c: Client) = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
+            when (newState) {
+                BluetoothProfile.STATE_CONNECTED -> g.requestMtu(517)
+                BluetoothProfile.STATE_DISCONNECTED -> io.execute {
+                    c.link?.close()
+                    clients.remove(c.contactId)
+                    runCatching { g.close() }
+                    repo.refresh()
+                }
+            }
+        }
+
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            g.discoverServices()
+        }
+
+        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            val ch = g.getService(service)?.getCharacteristic(outbox) ?: return g.disconnect()
+            g.setCharacteristicNotification(ch, true)
+            val d = ch.getDescriptor(cccd) ?: return g.disconnect()
+            if (Build.VERSION.SDK_INT >= 33) {
+                g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+            } else {
+                @Suppress("DEPRECATION")
+                d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                @Suppress("DEPRECATION")
+                g.writeDescriptor(d)
+            }
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            io.execute {
+                val link = runCatching { repo.core.openInitiatorLink(c.contactId) }.getOrNull() ?: return@execute
+                c.link = link
+                link.start().outgoing.forEach { c.writes.addLast(it) }
+                pumpWrites(c)
+            }
+        }
+
+        override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            io.execute {
+                c.busy = false
+                pumpWrites(c)
+            }
+        }
+
+        @Deprecated("API < 33 path")
+        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+            if (Build.VERSION.SDK_INT < 33) {
+                @Suppress("DEPRECATION")
+                onNotify(g, ch, ch.value ?: return)
+            }
+        }
+
+        override fun onCharacteristicChanged(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) =
+            onNotify(g, ch, value)
+
+        private fun onNotify(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
+            if (ch.uuid != outbox) return
+            io.execute {
+                val link = c.link ?: return@execute
+                val r = runCatching { link.onPdu(value) }.getOrElse {
+                    Log.w(tag, "initiator pdu rejected: ${it.message}")
+                    g.disconnect()
+                    return@execute
+                }
+                handle(r)
+                r.outgoing.forEach { c.writes.addLast(it) }
+                pumpWrites(c)
+            }
+        }
+    }
+
+    private fun pumpWrites(c: Client) {
+        if (c.busy) return
+        val g = c.gatt ?: return
+        val next = c.writes.removeFirstOrNull() ?: return
+        val ch = g.getService(service)?.getCharacteristic(inbox) ?: return
+        c.busy = true
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ch, next, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        } else {
+            @Suppress("DEPRECATION")
+            ch.value = next
+            ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION")
+            g.writeCharacteristic(ch)
+        }
+    }
+
+    // ---------------- shared ----------------
+
+    private fun handle(r: LinkResult) {
+        r.received.forEach { repo.onReceived(it); MeshNotifications.onMessage(context, repo, it) }
+        r.opened.forEach(repo::onOpened)
+        r.peerContactId?.let { repo.markFlushed(it, r.flushed) } ?: repo.refresh()
+    }
+
+    /** New text queued for [contactId]: flush on whichever link to them is up. */
+    private fun kick(contactId: String) {
+        clients[contactId]?.let { c ->
+            val link = c.link ?: return@let
+            if (!link.isEstablished()) return@let
+            val r = link.flush()
+            handle(r)
+            r.outgoing.forEach { c.writes.addLast(it) }
+            pumpWrites(c)
+            return
+        }
+        // Peripheral side: flushing a link only drains *its* peer's queue, so
+        // flushing every established responder link is safe and simple.
+        for ((addr, link) in serverLinks) {
+            if (!link.isEstablished()) continue
+            val d = subscribed[addr] ?: continue
+            val r = link.flush()
+            handle(r)
+            r.outgoing.forEach { enqueueNotify(d, it) }
+        }
+    }
+}
