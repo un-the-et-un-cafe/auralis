@@ -28,11 +28,14 @@ public protocol AppStore: AnyObject {
     var lastCloudBackupMs: Int64 { get set }
     /// "Remind me later" deadline (24 h); 0 = not deferred.
     var backupRemindDeadlineMs: Int64 { get set }
+    /// 256-bit key of the encrypted local store. On device: Keychain, this device only.
+    var storageKey: Data? { get set }
 }
 
 public final class InMemoryAppStore: AppStore {
     public var recoveryPhrase: String?
     public var displayName: String?
+    public var storageKey: Data?
     public var contacts: [Contact] = []
     public var onboarded = false
     public var privateNotifications = false
