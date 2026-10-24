@@ -9,8 +9,8 @@ use crate::files::wrap::{
     generate_content_key, seal_content_key, ContentKey, RecipientFileKeys, WrappedContentKey,
 };
 
-/// Default plaintext chunk size: 16 KiB (PROTOCOL §7).
-pub const DEFAULT_CHUNK_PLAINTEXT_LEN: usize = 16 * 1024;
+/// Default plaintext chunk size: 64 KiB (PROTOCOL §7, §22.7(7)) for all blobs.
+pub const DEFAULT_CHUNK_PLAINTEXT_LEN: usize = 64 * 1024;
 
 /// One encrypted file chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
