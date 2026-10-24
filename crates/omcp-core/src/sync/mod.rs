@@ -2,7 +2,8 @@
 //!
 //! Sub-modules map one-to-one onto the spec:
 //! - [`tag`]: rotating 8-byte mailbox tags (§22.1) and their `header_aad` TLV.
-//! - [`cuckoo`]: padded cuckoo-filter interest digests (§22.1).
+//! - [`cuckoo`]: padded cuckoo-filter interest digests and deltas (§22.1).
+//! - [`hello`]: hello back-off and delta/full digest cadence (§22.7(2)).
 //! - [`routing`]: forwarding rule (interest match / spray-and-wait), HyperLogLog
 //!   mesh-size estimate, adaptive TTL, per-neighbour token bucket (§22.1, §22.4).
 //! - [`recon`]: Negentropy-style range-based set reconciliation (§22.2).
@@ -17,6 +18,7 @@
 pub mod budget;
 pub mod compress;
 pub mod cuckoo;
+pub mod hello;
 pub mod media;
 pub mod plumtree;
 pub mod receipts;

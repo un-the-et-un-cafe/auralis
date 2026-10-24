@@ -3,9 +3,9 @@
 //!
 //! A message carries only a [`MediaRef`]: 32-byte BLAKE3 content hash, the
 //! 32-byte content key and a ≤ 40 B blurhash. Blobs are chunked at
-//! [`MEDIA_CHUNK_LEN`] (64 KiB) and fetched on demand, resumably, from a
-//! holder. Holders index blobs by an opaque *locator*
-//! (`BLAKE3-derive("OMCP-MediaLocator-v1", key || content_hash)`) so a relay
+//! [`MEDIA_CHUNK_LEN`] (64 KiB, same as §7 files) and fetched on demand, resumably, from a
+//! holder. Holders index blobs by an opaque *locator* (§22.7(6):
+//! `BLAKE3-keyed(media_key, "OMCP-loc" || content_hash)`) so a relay
 //! never learns the plaintext hash (no confirmation-of-file attack), and
 //! chunks are stored de-duplicated by `BLAKE3(chunk)`. Relays have no
 //! auto-fetch path: chunks move only in response to [`MediaHolder::serve`].
@@ -17,7 +17,7 @@ use crate::error::{OmcpError, Result};
 use crate::files::{decrypt_and_reassemble, encrypt_file, ContentKey, FileChunk, FileMeta};
 
 /// Media chunk plaintext size (64 KiB).
-pub const MEDIA_CHUNK_LEN: usize = 64 * 1024;
+pub const MEDIA_CHUNK_LEN: usize = crate::files::DEFAULT_CHUNK_PLAINTEXT_LEN;
 /// Max blurhash bytes.
 pub const MAX_BLURHASH: usize = 40;
 
@@ -30,10 +30,7 @@ pub struct MediaRef {
 
 impl MediaRef {
     pub fn locator(&self) -> [u8; 32] {
-        let mut m = [0u8; 64];
-        m[..32].copy_from_slice(&self.key);
-        m[32..].copy_from_slice(&self.content_hash);
-        blake3::derive_key("OMCP-MediaLocator-v1", &m)
+        locator(&self.key, &self.content_hash)
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
@@ -65,6 +62,14 @@ impl MediaRef {
             blurhash,
         })
     }
+}
+
+/// `locator = BLAKE3-keyed(media_key, "OMCP-loc" || content_hash)` (§22.7(6)).
+pub fn locator(media_key: &[u8; 32], content_hash: &[u8; 32]) -> [u8; 32] {
+    let mut h = blake3::Hasher::new_keyed(media_key);
+    h.update(b"OMCP-loc");
+    h.update(content_hash);
+    *h.finalize().as_bytes()
 }
 
 /// Encrypt a blob for lazy sharing. Returns the ref (for the message) and
@@ -180,6 +185,10 @@ mod tests {
         h.put(r.locator(), meta.clone(), chunks);
         assert_eq!(h.stored_chunks(), 4);
         assert_ne!(r.locator(), r.content_hash);
+        let mut kh = blake3::Hasher::new_keyed(&r.key);
+        kh.update(b"OMCP-loc");
+        kh.update(&r.content_hash);
+        assert_eq!(r.locator(), *kh.finalize().as_bytes());
 
         let mut f = LazyFetch::new(r.clone(), h.meta(&r.locator()).unwrap().clone()).unwrap();
         // fetch two, "disconnect", resume.

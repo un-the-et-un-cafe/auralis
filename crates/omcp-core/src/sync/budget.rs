@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use super::tag::{tag_rendezvous_label, MailboxTag};
+use super::tag::rendezvous_label;
 use crate::error::{OmcpError, Result};
 use crate::gateway::policy::{NetworkKind, DAY_MS};
 
@@ -244,14 +244,16 @@ pub enum Route {
     BleGossip,
 }
 
-pub fn choose_route(gateway_reachable: bool, tag: &MailboxTag, tag_epoch: u64) -> Route {
-    if gateway_reachable {
+/// Prefer the gateway rendezvous mailbox when any gateway is reachable;
+/// the label is `HKDF-SHA-384(tag_secret, "OMCP-rdv" || epoch)` (§22.7(3)).
+pub fn choose_route(gateway_reachable: bool, tag_secret: &[u8], tag_epoch: u64) -> Result<Route> {
+    Ok(if gateway_reachable {
         Route::Rendezvous {
-            label: tag_rendezvous_label(tag, tag_epoch),
+            label: rendezvous_label(tag_secret, tag_epoch)?,
         }
     } else {
         Route::BleGossip
-    }
+    })
 }
 
 #[cfg(test)]
@@ -363,9 +365,9 @@ mod tests {
         assert!(may_sync(SyncScope::OwnOnly, true, false));
         assert!(!may_sync(SyncScope::OwnOnly, false, false));
         assert!(matches!(
-            choose_route(true, &[1; 8], 3),
+            choose_route(true, &[1; 32], 3).unwrap(),
             Route::Rendezvous { .. }
         ));
-        assert_eq!(choose_route(false, &[1; 8], 3), Route::BleGossip);
+        assert_eq!(choose_route(false, &[1; 32], 3).unwrap(), Route::BleGossip);
     }
 }

@@ -1,9 +1,103 @@
-//! Interest-based forwarding (PROTOCOL §22.1) and per-neighbour rate limiting
-//! (§22.4).
+//! Interest-based forwarding (PROTOCOL §22.1, §22.7(1)) and per-neighbour rate
+//! limiting (§22.4).
+//!
+//! Forwarding order above 32 peers: (a) every neighbour that *wants* the tag;
+//! else (b) the neighbour advertising the lowest *carry distance* for it;
+//! else (c) binary spray-and-wait (k = 2, L = 8).
+
+use std::collections::HashMap;
 
 use super::cuckoo::CuckooFilter;
-use super::tag::MailboxTag;
+use super::tag::{carry_tag, MailboxTag, MAX_CARRY_DISTANCE};
 use super::SplitMix64;
+
+/// Carry tags live at most this long after the last delivery/forward.
+pub const CARRY_TTL_MS: u64 = 3_600_000;
+/// At most this many carry tags per node.
+pub const MAX_CARRY_ENTRIES: usize = 64;
+
+/// Distance a neighbour's digest advertises for `tag`: 0 if it wants it,
+/// `d` for the lowest carry entry, `None` otherwise.
+pub fn neighbour_distance(f: &CuckooFilter, tag: &MailboxTag) -> Option<u8> {
+    if f.contains(tag) {
+        return Some(0);
+    }
+    (1..=MAX_CARRY_DISTANCE).find(|d| f.contains(&carry_tag(tag, *d)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CarryEntry {
+    last_active_ms: u64,
+    distance: Option<u8>,
+}
+
+/// Distance-vector carry table (§22.7(1)).
+#[derive(Debug, Clone, Default)]
+pub struct CarryTable {
+    entries: HashMap<MailboxTag, CarryEntry>,
+}
+
+impl CarryTable {
+    /// This node delivered or forwarded an envelope for `tag` at `now_ms`.
+    pub fn note_activity(&mut self, tag: MailboxTag, now_ms: u64) {
+        self.expire(now_ms);
+        let e = self.entries.entry(tag).or_insert(CarryEntry {
+            last_active_ms: now_ms,
+            distance: None,
+        });
+        e.last_active_ms = e.last_active_ms.max(now_ms);
+        while self.entries.len() > MAX_CARRY_ENTRIES {
+            let oldest = *self
+                .entries
+                .iter()
+                .min_by_key(|(t, e)| (e.last_active_ms, **t))
+                .expect("nonempty")
+                .0;
+            self.entries.remove(&oldest);
+        }
+    }
+
+    /// Recompute `d = 1 + min(neighbour distance)` for every active tag.
+    pub fn update_from_neighbours(&mut self, neighbours: &[&CuckooFilter], now_ms: u64) {
+        self.expire(now_ms);
+        for (tag, e) in self.entries.iter_mut() {
+            e.distance = neighbours
+                .iter()
+                .filter_map(|f| neighbour_distance(f, tag))
+                .min()
+                .map(|d| d + 1)
+                .filter(|d| *d <= MAX_CARRY_DISTANCE);
+        }
+    }
+
+    pub fn expire(&mut self, now_ms: u64) {
+        self.entries
+            .retain(|_, e| now_ms < e.last_active_ms + CARRY_TTL_MS);
+    }
+
+    pub fn distance(&self, tag: &MailboxTag) -> Option<u8> {
+        self.entries.get(tag).and_then(|e| e.distance)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Digest entries to advertise (go into the same padded cuckoo digest).
+    pub fn advertised(&self) -> Vec<MailboxTag> {
+        let mut v: Vec<MailboxTag> = self
+            .entries
+            .iter()
+            .filter_map(|(t, e)| e.distance.map(|d| carry_tag(t, d)))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+}
 
 /// Above this many visible peers, epidemic flooding (§8.3) is replaced.
 pub const FLOOD_MAX_PEERS: usize = 32;
@@ -73,6 +167,8 @@ pub enum ForwardPlan {
     Flood(Vec<usize>),
     /// Interest match: hand a copy to each matching neighbour.
     Interest(Vec<usize>),
+    /// No wanter: hand a copy to the neighbour with the lowest carry distance.
+    Carry(usize),
     /// No match: spray `(neighbour, copies)`; caller keeps the remainder.
     Spray { targets: Vec<(usize, u8)>, keep: u8 },
     /// Wait phase (1 copy left, no match): hold until a matching neighbour appears.
@@ -101,6 +197,17 @@ pub fn plan_forward(
         .collect();
     if !matching.is_empty() {
         return ForwardPlan::Interest(matching);
+    }
+    let best = cands
+        .iter()
+        .filter_map(|i| {
+            neighbours[*i]
+                .and_then(|f| neighbour_distance(f, tag))
+                .map(|d| (d, *i))
+        })
+        .min();
+    if let Some((_, i)) = best {
+        return ForwardPlan::Carry(i);
     }
     if copies <= 1 || cands.is_empty() {
         return ForwardPlan::Wait;
@@ -220,6 +327,47 @@ mod tests {
             }
             p => panic!("{p:?}"),
         }
+    }
+
+    #[test]
+    fn carry_order_and_table() {
+        let mut rng = SplitMix64(5);
+        let tag = [7u8; 8];
+        let far = CuckooFilter::build_digest(&[carry_tag(&tag, 3)], 16, &mut rng).unwrap();
+        let near = CuckooFilter::build_digest(&[carry_tag(&tag, 1)], 16, &mut rng).unwrap();
+        let want = CuckooFilter::build_digest(&[tag], 16, &mut rng).unwrap();
+        let none = CuckooFilter::build_digest(&[[1; 8]], 16, &mut rng).unwrap();
+        assert_eq!(
+            plan_forward(
+                &tag,
+                8,
+                &[Some(&far), Some(&near), Some(&none)],
+                None,
+                99,
+                &mut rng
+            ),
+            ForwardPlan::Carry(1)
+        );
+        assert_eq!(
+            plan_forward(&tag, 8, &[Some(&far), Some(&want)], None, 99, &mut rng),
+            ForwardPlan::Interest(vec![1])
+        );
+        let mut t = CarryTable::default();
+        t.update_from_neighbours(&[&near], 0);
+        assert!(t.advertised().is_empty()); // no activity, no carry
+        t.note_activity(tag, 0);
+        t.update_from_neighbours(&[&far, &near], 0);
+        assert_eq!(t.distance(&tag), Some(2));
+        assert_eq!(t.advertised(), vec![carry_tag(&tag, 2)]);
+        t.update_from_neighbours(&[&want], 10);
+        assert_eq!(t.distance(&tag), Some(1));
+        t.expire(CARRY_TTL_MS);
+        assert!(t.is_empty());
+        for i in 0..100u64 {
+            t.note_activity(i.to_be_bytes(), i);
+        }
+        assert_eq!(t.len(), MAX_CARRY_ENTRIES);
+        assert_eq!(t.distance(&0u64.to_be_bytes()), None);
     }
 
     #[test]

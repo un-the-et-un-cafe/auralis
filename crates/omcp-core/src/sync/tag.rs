@@ -2,8 +2,9 @@
 //!
 //! `tag = BLAKE2b-64(key = exporter_secret, "OMCP-tag" || epoch_be)` with a 6 h
 //! epoch. Only chat members (who hold the MLS / session exporter secret) can
-//! compute it. Tags ride in `EnvelopeV1::header_aad` as a TLV
-//! (type [`AAD_TLV_TAG`], length 8) — the canonical framing is unchanged.
+//! compute it; the secret is `MLS-Exporter("OMCP-tag", epoch, 32)` for every
+//! chat, 1:1 chats being 2-member MLS groups (§22.7(5)). Tags ride in
+//! `EnvelopeV1::header_aad` as TLV `0x54` (len 8) per the §21.8 registry.
 
 use blake2::digest::consts::U8;
 use blake2::digest::Mac;
@@ -21,6 +22,8 @@ pub const TAG_EPOCH_MS: u64 = 6 * 60 * 60 * 1000;
 pub const AAD_TLV_TAG: u8 = 0x54;
 
 const LABEL: &[u8] = b"OMCP-tag";
+/// MLS exporter label for tag secrets (§22.7(5)).
+pub const TAG_EXPORTER_LABEL: &str = "OMCP-tag";
 
 /// Tag epoch for wall-clock `now_ms`.
 pub fn tag_epoch(now_ms: u64) -> u64 {
@@ -52,6 +55,31 @@ pub fn accepted_tags(exporter_secret: &[u8], now_ms: u64) -> Result<[MailboxTag;
     ])
 }
 
+/// `header_aad` TLV registry class (PROTOCOL §21.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlvClass {
+    /// `0x01`–`0x3F`: reserved for core.
+    Core,
+    /// `0x54`: mailbox tag (len 8).
+    MailboxTag,
+    /// `0x55`–`0x7F`: unassigned (extension process §16).
+    Unassigned,
+    /// `0x80`–`0xFF`: experimental / private use.
+    Experimental,
+    /// `0x00`, `0x40`–`0x53`: not in the registry.
+    Invalid,
+}
+
+pub fn tlv_class(t: u8) -> TlvClass {
+    match t {
+        0x01..=0x3F => TlvClass::Core,
+        AAD_TLV_TAG => TlvClass::MailboxTag,
+        0x55..=0x7F => TlvClass::Unassigned,
+        0x80..=0xFF => TlvClass::Experimental,
+        _ => TlvClass::Invalid,
+    }
+}
+
 /// Append the tag TLV to a `header_aad` buffer.
 pub fn put_tag_in_aad(aad: &mut Vec<u8>, tag: &MailboxTag) {
     aad.push(AAD_TLV_TAG);
@@ -59,9 +87,14 @@ pub fn put_tag_in_aad(aad: &mut Vec<u8>, tag: &MailboxTag) {
     aad.extend_from_slice(tag);
 }
 
-/// Find the tag TLV in a `header_aad` buffer of `type u8 | len u8 | value` items.
+/// Parse a `header_aad` of `type u8 | len u8 | value` items per the §21.8
+/// registry and return the mailbox tag, if any. Rejects: truncated items,
+/// types outside the registry, a `0x54` item whose length is not 8, and
+/// duplicate `0x54` items. Core, unassigned and experimental types are
+/// skipped (forward compatibility).
 pub fn tag_from_aad(aad: &[u8]) -> Result<Option<MailboxTag>> {
     let mut i = 0;
+    let mut found = None;
     while i < aad.len() {
         if i + 2 > aad.len() {
             return Err(OmcpError::Sync("aad tlv truncated"));
@@ -70,25 +103,65 @@ pub fn tag_from_aad(aad: &[u8]) -> Result<Option<MailboxTag>> {
         let v = aad
             .get(i + 2..i + 2 + l)
             .ok_or(OmcpError::Sync("aad tlv truncated"))?;
-        if t == AAD_TLV_TAG {
-            if l != 8 {
-                return Err(OmcpError::Sync("tag tlv length"));
+        match tlv_class(t) {
+            TlvClass::Invalid => return Err(OmcpError::Sync("aad tlv type not in registry")),
+            TlvClass::MailboxTag => {
+                if l != 8 {
+                    return Err(OmcpError::Sync("tag tlv length"));
+                }
+                if found.is_some() {
+                    return Err(OmcpError::Sync("duplicate tag tlv"));
+                }
+                let mut tag = [0u8; 8];
+                tag.copy_from_slice(v);
+                found = Some(tag);
             }
-            let mut tag = [0u8; 8];
-            tag.copy_from_slice(v);
-            return Ok(Some(tag));
+            _ => {}
         }
         i += 2 + l;
     }
-    Ok(None)
+    Ok(found)
 }
 
-/// Gateway rendezvous mailbox for a tag (§22.5 ↔ §9.2 bridge): a 32-byte
-/// label so the existing `OpaqueEnvelope` / rendezvous server stay unchanged
-/// and the gateway still sees only an opaque label.
-pub fn tag_rendezvous_label(tag: &MailboxTag, epoch: u64) -> [u8; 32] {
-    let key = blake3::derive_key("OMCP-TagMailbox-v1", tag);
-    *blake3::keyed_hash(&key, &epoch.to_be_bytes()).as_bytes()
+/// 32-byte gateway rendezvous label (§22.7(3)):
+/// `HKDF-SHA-384(ikm = tag_secret, info = "OMCP-rdv" || epoch_be, L = 32)`.
+/// The existing `OpaqueEnvelope` / rendezvous server carry it unchanged.
+pub fn rendezvous_label(tag_secret: &[u8], epoch: u64) -> Result<[u8; 32]> {
+    let hk = hkdf::Hkdf::<sha2::Sha384>::new(None, tag_secret);
+    let mut info = Vec::with_capacity(16);
+    info.extend_from_slice(b"OMCP-rdv");
+    info.extend_from_slice(&epoch.to_be_bytes());
+    let mut out = [0u8; 32];
+    hk.expand(&info, &mut out)
+        .map_err(|_| OmcpError::Sync("hkdf expand"))?;
+    Ok(out)
+}
+
+/// Maximum carry distance encoded in digests (= max adaptive TTL).
+pub const MAX_CARRY_DISTANCE: u8 = 12;
+
+/// Digest entry advertising "I can reach wanters of `tag` in `d` hops"
+/// (§22.7(1)). Only nodes that saw `tag` can compute or test it.
+pub fn carry_tag(tag: &MailboxTag, d: u8) -> MailboxTag {
+    let mut m = [0u8; 9];
+    m[..8].copy_from_slice(tag);
+    m[8] = d;
+    let h = blake3::derive_key("OMCP-carry-v1", &m);
+    let mut t = [0u8; 8];
+    t.copy_from_slice(&h[..8]);
+    t
+}
+
+/// Source of per-epoch tag secrets (§22.7(5)): every chat — 1:1 included —
+/// is an MLS group and the secret is `MLS-Exporter("OMCP-tag", epoch, 32)`.
+/// Implemented by [`crate::mls::OmcpMlsMember`].
+pub trait TagSecretSource {
+    fn tag_secret(&self, tag_epoch: u64) -> Result<[u8; 32]>;
+}
+
+/// Tag for a chat at `tag_epoch` from its secret source.
+pub fn chat_tag<S: TagSecretSource + ?Sized>(src: &S, tag_epoch: u64) -> Result<MailboxTag> {
+    mailbox_tag(&src.tag_secret(tag_epoch)?, tag_epoch)
 }
 
 #[cfg(test)]
@@ -120,9 +193,37 @@ mod tests {
     }
 
     #[test]
-    fn rendezvous_label_differs_from_tag_input() {
-        let a = tag_rendezvous_label(&[1; 8], 1);
-        assert_ne!(a, tag_rendezvous_label(&[1; 8], 2));
-        assert_ne!(a, tag_rendezvous_label(&[2; 8], 1));
+    fn rendezvous_label_is_hkdf_sha384() {
+        let a = rendezvous_label(&[1; 32], 1).unwrap();
+        assert_ne!(a, rendezvous_label(&[1; 32], 2).unwrap());
+        assert_ne!(a, rendezvous_label(&[2; 32], 1).unwrap());
+        let hk = hkdf::Hkdf::<sha2::Sha384>::new(None, &[1; 32]);
+        let mut want = [0u8; 32];
+        hk.expand(b"OMCP-rdv\0\0\0\0\0\0\0\x01", &mut want).unwrap();
+        assert_eq!(a, want);
+    }
+
+    #[test]
+    fn tlv_registry() {
+        assert_eq!(tlv_class(0x01), TlvClass::Core);
+        assert_eq!(tlv_class(0x54), TlvClass::MailboxTag);
+        assert_eq!(tlv_class(0x60), TlvClass::Unassigned);
+        assert_eq!(tlv_class(0x90), TlvClass::Experimental);
+        assert_eq!(tlv_class(0x00), TlvClass::Invalid);
+        assert_eq!(tlv_class(0x40), TlvClass::Invalid);
+        // unassigned / experimental skipped, invalid rejected, dup rejected
+        let mut aad = vec![0x60, 1, 0, 0x90, 0];
+        put_tag_in_aad(&mut aad, &[4; 8]);
+        assert_eq!(tag_from_aad(&aad).unwrap(), Some([4; 8]));
+        put_tag_in_aad(&mut aad, &[4; 8]);
+        assert!(tag_from_aad(&aad).is_err());
+        assert!(tag_from_aad(&[0x45, 0]).is_err());
+    }
+
+    #[test]
+    fn carry_tags_distinct_per_distance() {
+        let t = [9u8; 8];
+        assert_ne!(carry_tag(&t, 1), carry_tag(&t, 2));
+        assert_ne!(carry_tag(&t, 1), t);
     }
 }

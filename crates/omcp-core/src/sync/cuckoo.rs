@@ -23,6 +23,8 @@ pub struct CuckooFilter {
     log2: u8,
     slots: Vec<u16>,
     count: usize,
+    /// Decoy fingerprints `(fp, bucket)` (local only, never encoded).
+    decoys: Vec<(u16, usize)>,
 }
 
 fn mix(mut z: u64) -> u64 {
@@ -42,6 +44,7 @@ impl CuckooFilter {
             log2,
             slots: vec![0; (1usize << log2) * SLOTS],
             count: 0,
+            decoys: Vec::new(),
         })
     }
 
@@ -90,6 +93,8 @@ impl CuckooFilter {
             self.count += 1;
             return Ok(());
         }
+        // Transactional: a failed insert must not drop a kicked entry.
+        let snapshot = self.slots.clone();
         let mut i = if rng.chance(0.5) { i1 } else { i2 };
         let mut fp = fp;
         for _ in 0..MAX_KICKS {
@@ -101,6 +106,7 @@ impl CuckooFilter {
                 return Ok(());
             }
         }
+        self.slots = snapshot;
         Err(OmcpError::Sync("cuckoo full"))
     }
 
@@ -125,6 +131,7 @@ impl CuckooFilter {
             let fp = (rng.next_u64() as u16).max(1);
             let i = rng.below(1 << self.log2) as usize;
             self.insert_fp(fp, i, rng)?;
+            self.decoys.push((fp, i));
         }
         Ok(())
     }
@@ -154,6 +161,88 @@ impl CuckooFilter {
             }
             log2 += 1;
         }
+    }
+
+    fn remove_fp(&mut self, fp: u16, i1: usize) -> bool {
+        let i2 = self.alt(i1, fp);
+        for i in [i1, i2] {
+            if let Some(s) = self.bucket(i).iter_mut().find(|s| **s == fp) {
+                *s = 0;
+                self.count -= 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Remove a tag (deletes one matching fingerprint).
+    pub fn remove(&mut self, tag: &MailboxTag) -> bool {
+        let (fp, i) = self.fp_and_index(tag);
+        self.remove_fp(fp, i)
+    }
+
+    /// Add a real entry and drop one decoy so the occupancy stays constant.
+    pub fn insert_keep_padding(&mut self, tag: &MailboxTag, rng: &mut SplitMix64) -> Result<()> {
+        // Free a decoy slot first so the real entry has room.
+        let freed = self.decoys.pop();
+        if let Some((fp, i)) = freed {
+            self.remove_fp(fp, i);
+        }
+        if let Err(e) = self.insert(tag, rng) {
+            if let Some((fp, i)) = freed {
+                if self.insert_fp(fp, i, rng).is_ok() {
+                    self.decoys.push((fp, i));
+                }
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Remove a real entry and add one decoy so the occupancy stays constant.
+    pub fn remove_keep_padding(&mut self, tag: &MailboxTag, rng: &mut SplitMix64) -> Result<bool> {
+        if !self.remove(tag) {
+            return Ok(false);
+        }
+        let target = self.count + 1;
+        self.pad_with_decoys(target, rng)?;
+        Ok(true)
+    }
+
+    /// Slot-level delta from `self` (old) to `newer`; `None` if the two
+    /// filters differ in salt or size (send a full digest instead).
+    pub fn delta_to(&self, newer: &CuckooFilter) -> Option<DigestDelta> {
+        if self.salt != newer.salt || self.log2 != newer.log2 {
+            return None;
+        }
+        let changes = self
+            .slots
+            .iter()
+            .zip(newer.slots.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(k, (_, b))| (k as u32, *b))
+            .collect();
+        Some(DigestDelta {
+            base_id: self.digest_id(),
+            changes,
+        })
+    }
+
+    /// Apply a delta received from a neighbour.
+    pub fn apply_delta(&mut self, d: &DigestDelta) -> Result<()> {
+        if d.base_id != self.digest_id() {
+            return Err(OmcpError::Sync("delta base mismatch"));
+        }
+        for (k, v) in &d.changes {
+            let slot = self
+                .slots
+                .get_mut(*k as usize)
+                .ok_or(OmcpError::Sync("delta slot"))?;
+            *slot = *v;
+        }
+        self.count = self.slots.iter().filter(|s| **s != 0).count();
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -202,6 +291,51 @@ impl CuckooFilter {
     }
 }
 
+/// Digest change on the wire (§22.7(2)): `base_id[8] | n varint | (slot
+/// varint, fp u16-be)*`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DigestDelta {
+    pub base_id: [u8; 8],
+    pub changes: Vec<(u32, u16)>,
+}
+
+impl DigestDelta {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut v = self.base_id.to_vec();
+        super::put_varint(&mut v, self.changes.len() as u64);
+        for (k, fp) in &self.changes {
+            super::put_varint(&mut v, *k as u64);
+            v.extend_from_slice(&fp.to_be_bytes());
+        }
+        v
+    }
+
+    pub fn decode(mut buf: &[u8]) -> Result<Self> {
+        let base_id = take(&mut buf, 8)?.try_into().expect("8");
+        let n = super::get_varint(&mut buf)?;
+        if n > buf.len() as u64 / 3 {
+            return Err(OmcpError::Sync("delta count"));
+        }
+        let mut changes = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let k = super::get_varint(&mut buf)?;
+            let fp = take(&mut buf, 2)?;
+            changes.push((
+                u32::try_from(k).map_err(|_| OmcpError::Sync("delta slot"))?,
+                u16::from_be_bytes([fp[0], fp[1]]),
+            ));
+        }
+        if !buf.is_empty() {
+            return Err(OmcpError::Sync("delta trailing bytes"));
+        }
+        Ok(Self { base_id, changes })
+    }
+
+    pub fn encoded_len(&self) -> usize {
+        self.encode().len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,8 +355,30 @@ mod tests {
             .count();
         assert!(fp < 1000, "fpr too high: {fp}/100000");
         let d = CuckooFilter::decode(&f.encode()).unwrap();
-        assert_eq!(d, f);
+        assert_eq!(d.encode(), f.encode());
         assert!(CuckooFilter::decode(&f.encode()[..20]).is_err());
         assert!(CuckooFilter::new(0, 0).is_err());
+    }
+
+    #[test]
+    fn deltas_keep_padding_and_apply() {
+        let mut rng = SplitMix64(2);
+        let tags: Vec<MailboxTag> = (0..20u64).map(|i| i.to_be_bytes()).collect();
+        let old = CuckooFilter::build_digest(&tags, 32, &mut rng).unwrap();
+        let mut new = old.clone();
+        new.remove_keep_padding(&tags[0], &mut rng).unwrap();
+        new.insert_keep_padding(&99u64.to_be_bytes(), &mut rng)
+            .unwrap();
+        assert_eq!(new.len(), old.len());
+        assert!(new.contains(&99u64.to_be_bytes()));
+        let d = old.delta_to(&new).unwrap();
+        let d = DigestDelta::decode(&d.encode()).unwrap();
+        assert!(d.encoded_len() < old.encoded_len() / 4);
+        let mut remote = CuckooFilter::decode(&old.encode()).unwrap();
+        remote.apply_delta(&d).unwrap();
+        assert_eq!(remote.encode(), new.encode());
+        assert!(remote.apply_delta(&d).is_err());
+        let other = CuckooFilter::build_digest(&tags, 32, &mut rng).unwrap();
+        assert!(old.delta_to(&other).is_none());
     }
 }
