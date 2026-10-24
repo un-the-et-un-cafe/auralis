@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +43,8 @@ fun ChatRow(
     model: ChatRowModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Tap target for the "not verified" shield → safety-number verification. */
+    onVerify: (() -> Unit)? = null,
 ) {
     val c = LocalOmcpColors.current
     Row(
@@ -74,6 +77,8 @@ fun ChatRow(
                             .padding(start = 4.dp)
                             .size(16.dp),
                     )
+                } else if (!model.isGroup) {
+                    NotVerifiedShield(onVerify)
                 }
             }
             Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
@@ -112,4 +117,19 @@ fun ChatRow(
             }
         }
     }
+}
+
+/** Small, unobtrusive "not verified" indicator; taps through to safety-number verification. */
+@Composable
+fun NotVerifiedShield(onVerify: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val c = LocalOmcpColors.current
+    Icon(
+        Icons.Default.Shield,
+        contentDescription = "Not verified. Verify safety number",
+        tint = c.ink3,
+        modifier = modifier
+            .padding(start = 4.dp)
+            .size(16.dp)
+            .then(if (onVerify != null) Modifier.clickable(onClick = onVerify) else Modifier),
+    )
 }

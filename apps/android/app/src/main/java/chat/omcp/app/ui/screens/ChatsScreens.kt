@@ -92,6 +92,7 @@ fun ChatsListScreen(
     onOpenChat: (String) -> Unit,
     onAddContact: () -> Unit,
     onBackup: () -> Unit,
+    onVerify: (String) -> Unit,
 ) {
     val status by vm.status.collectAsState()
     val contacts by vm.contacts.collectAsState()
@@ -151,7 +152,7 @@ fun ChatsListScreen(
             } else {
                 LazyColumn {
                     items(chats, key = { it.id }) { row ->
-                        ChatRow(row, onClick = { onOpenChat(row.id) })
+                        ChatRow(row, onClick = { onOpenChat(row.id) }, onVerify = { onVerify(row.id) })
                     }
                 }
             }
@@ -225,7 +226,12 @@ fun ChatThreadScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(contact?.displayName ?: "Chat")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(contact?.displayName ?: "Chat")
+                            if (contact != null && !contact.verified) {
+                                chat.omcp.app.ui.components.NotVerifiedShield(onSecurity)
+                            }
+                        }
                         Text(
                             if (contact?.verified == true) stringResource(R.string.verified_contact) else stringResource(R.string.unverified),
                             style = MaterialTheme.typography.labelSmall,
