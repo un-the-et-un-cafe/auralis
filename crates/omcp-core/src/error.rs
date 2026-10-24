@@ -79,6 +79,9 @@ pub enum OmcpError {
 
     #[error("rendezvous token rejected: {0}")]
     TokenRejected(&'static str),
+
+    #[error("burn-after-read error: {0}")]
+    Burn(&'static str),
 }
 
 /// Crate-wide result alias.

@@ -1,0 +1,473 @@
+//! Burn after read (apps/REQUIREMENTS.md "Burn after read (v0.1.3)", PROTOCOL §19.1).
+//!
+//! - [`BurnHeader`]: the encrypted inner `burn` header, carried as a prefix of the
+//!   AEAD plaintext ([`encode_inner`] / [`decode_inner`]); relays never see it.
+//! - [`expires_at_ms`]: outer envelope expiry = `sent + unread_ttl`
+//!   ([`crate::gateway::OpaqueEnvelope::expiry_ms`]).
+//! - [`SingleUseMediaKey`]: a media Content Key that can be taken exactly once.
+//! - [`OpenedReceipt`]: encrypted control message telling the sender to shred.
+//! - [`BurnStore`]: receiver-side in-memory store; every item is sealed under
+//!   its own random key, and burning zeroizes that key (crypto-shredding).
+
+use std::collections::HashMap;
+
+use chacha20poly1305::aead::{Aead, KeyInit};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use zeroize::{Zeroize, Zeroizing};
+
+use crate::error::{OmcpError, Result};
+use crate::files::ContentKey;
+
+/// Allowed sender-chosen unread TTLs: 1 h, 24 h, 7 days.
+pub const UNREAD_TTL_1H: u32 = 3_600;
+pub const UNREAD_TTL_24H: u32 = 86_400;
+pub const UNREAD_TTL_7D: u32 = 604_800;
+/// Allowed timer values (seconds) for [`BurnMode::Timer`]: 10 s, 1 min, 1 h.
+pub const TIMER_SECS: [u32; 3] = [10, 60, 3_600];
+/// Burn is unavailable in channels with more than this many members.
+pub const MAX_BURN_GROUP_MEMBERS: usize = 256;
+
+/// Inner header tag: no burn header.
+pub const INNER_TAG_NONE: u8 = 0x00;
+/// Inner header tag: `burn` header follows (9 bytes).
+pub const INNER_TAG_BURN: u8 = 0x01;
+/// Control message type for `OPENED` (PROTOCOL §19.1).
+pub const CONTROL_OPENED: u8 = 0x30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BurnMode {
+    /// Deleted as soon as it's closed (view once). `secs` = 0.
+    OnOpen = 0,
+    /// Deleted `secs` after it's opened.
+    Timer = 1,
+}
+
+/// `burn: {mode, secs, unread_ttl}`. Wire: `mode u8 | secs u32 BE | unread_ttl u32 BE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BurnHeader {
+    pub mode: BurnMode,
+    pub secs: u32,
+    pub unread_ttl: u32,
+}
+
+impl BurnHeader {
+    pub const WIRE_LEN: usize = 9;
+
+    pub fn on_open(unread_ttl: u32) -> Result<Self> {
+        Self::new(BurnMode::OnOpen, 0, unread_ttl)
+    }
+
+    pub fn timer(secs: u32, unread_ttl: u32) -> Result<Self> {
+        Self::new(BurnMode::Timer, secs, unread_ttl)
+    }
+
+    pub fn new(mode: BurnMode, secs: u32, unread_ttl: u32) -> Result<Self> {
+        let h = Self {
+            mode,
+            secs,
+            unread_ttl,
+        };
+        h.validate()?;
+        Ok(h)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if ![UNREAD_TTL_1H, UNREAD_TTL_24H, UNREAD_TTL_7D].contains(&self.unread_ttl) {
+            return Err(OmcpError::Burn("unread_ttl"));
+        }
+        match self.mode {
+            BurnMode::OnOpen if self.secs != 0 => Err(OmcpError::Burn("on_open secs")),
+            BurnMode::Timer if !TIMER_SECS.contains(&self.secs) => {
+                Err(OmcpError::Burn("timer secs"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn encode(&self) -> [u8; Self::WIRE_LEN] {
+        let mut b = [0u8; Self::WIRE_LEN];
+        b[0] = self.mode as u8;
+        b[1..5].copy_from_slice(&self.secs.to_be_bytes());
+        b[5..9].copy_from_slice(&self.unread_ttl.to_be_bytes());
+        b
+    }
+
+    pub fn decode(b: &[u8]) -> Result<Self> {
+        if b.len() != Self::WIRE_LEN {
+            return Err(OmcpError::Burn("header length"));
+        }
+        let mode = match b[0] {
+            0 => BurnMode::OnOpen,
+            1 => BurnMode::Timer,
+            _ => return Err(OmcpError::Burn("mode")),
+        };
+        let secs = u32::from_be_bytes(b[1..5].try_into().unwrap());
+        let unread_ttl = u32::from_be_bytes(b[5..9].try_into().unwrap());
+        Self::new(mode, secs, unread_ttl)
+    }
+}
+
+/// Outer envelope `expires_at` (ms): `sent_ms + unread_ttl`.
+pub fn expires_at_ms(sent_ms: u64, h: &BurnHeader) -> u64 {
+    sent_ms.saturating_add(u64::from(h.unread_ttl) * 1000)
+}
+
+/// Inner (encrypted) plaintext = `tag u8 [| burn(9)] | body`.
+pub fn encode_inner(burn: Option<&BurnHeader>, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(1 + BurnHeader::WIRE_LEN + body.len());
+    match burn {
+        None => v.push(INNER_TAG_NONE),
+        Some(h) => {
+            v.push(INNER_TAG_BURN);
+            v.extend_from_slice(&h.encode());
+        }
+    }
+    v.extend_from_slice(body);
+    v
+}
+
+pub fn decode_inner(p: &[u8]) -> Result<(Option<BurnHeader>, &[u8])> {
+    match p.first() {
+        Some(&INNER_TAG_NONE) => Ok((None, &p[1..])),
+        Some(&INNER_TAG_BURN) if p.len() > BurnHeader::WIRE_LEN => {
+            let h = BurnHeader::decode(&p[1..1 + BurnHeader::WIRE_LEN])?;
+            Ok((Some(h), &p[1 + BurnHeader::WIRE_LEN..]))
+        }
+        _ => Err(OmcpError::Burn("inner header")),
+    }
+}
+
+/// A media Content Key usable exactly once. [`Self::take`] hands it out and
+/// leaves nothing behind; the key bytes zeroize on drop ([`ContentKey`]).
+pub struct SingleUseMediaKey(Option<ContentKey>);
+
+impl SingleUseMediaKey {
+    pub fn new(k: ContentKey) -> Self {
+        Self(Some(k))
+    }
+    pub fn take(&mut self) -> Result<ContentKey> {
+        self.0
+            .take()
+            .ok_or(OmcpError::Burn("media key already used"))
+    }
+    pub fn is_spent(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+/// `OPENED` receipt (sent inside an encrypted control message).
+/// Wire: `0x30 | msg_id(16) | opened_ms u64 BE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenedReceipt {
+    pub msg_id: [u8; 16],
+    pub opened_ms: u64,
+}
+
+impl OpenedReceipt {
+    pub fn encode(&self) -> [u8; 25] {
+        let mut b = [0u8; 25];
+        b[0] = CONTROL_OPENED;
+        b[1..17].copy_from_slice(&self.msg_id);
+        b[17..].copy_from_slice(&self.opened_ms.to_be_bytes());
+        b
+    }
+    pub fn decode(b: &[u8]) -> Result<Self> {
+        if b.len() != 25 || b[0] != CONTROL_OPENED {
+            return Err(OmcpError::Burn("opened receipt"));
+        }
+        Ok(Self {
+            msg_id: b[1..17].try_into().unwrap(),
+            opened_ms: u64::from_be_bytes(b[17..].try_into().unwrap()),
+        })
+    }
+}
+
+/// Sender side: media keys kept only until the `OPENED` receipt arrives.
+#[derive(Default)]
+pub struct SenderMediaKeys(HashMap<[u8; 16], ContentKey>);
+
+impl SenderMediaKeys {
+    pub fn insert(&mut self, msg_id: [u8; 16], k: ContentKey) {
+        self.0.insert(msg_id, k);
+    }
+    /// Shred the key for this message (dropping zeroizes it). Returns true if it existed.
+    pub fn on_opened(&mut self, r: &OpenedReceipt) -> bool {
+        self.0.remove(&r.msg_id).is_some()
+    }
+    pub fn contains(&self, msg_id: &[u8; 16]) -> bool {
+        self.0.contains_key(msg_id)
+    }
+}
+
+/// What [`BurnStore::open`] returns.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Opened {
+    /// Plaintext + receipt to send. `burn_at_ms` = None means burn on close.
+    Content {
+        body: Zeroizing<Vec<u8>>,
+        receipt: OpenedReceipt,
+        burn_at_ms: Option<u64>,
+    },
+    /// Already opened or burned: show the "🔥 opened" placeholder.
+    Placeholder,
+}
+
+struct Entry {
+    header: BurnHeader,
+    key: Zeroizing<[u8; 32]>,
+    sealed: Vec<u8>,
+    expires_at_ms: u64,
+    burn_at_ms: Option<u64>,
+    opened: bool,
+}
+
+/// Receiver-side store. Plaintext is never held at rest: each entry is sealed
+/// under its own random key, and burning zeroizes the key and the ciphertext.
+#[derive(Default)]
+pub struct BurnStore {
+    live: HashMap<[u8; 16], Entry>,
+    burned: std::collections::HashSet<[u8; 16]>,
+}
+
+fn nonce0() -> Nonce {
+    Nonce::from([0u8; 12]) // each key is used for exactly one encryption
+}
+
+impl BurnStore {
+    pub fn insert(
+        &mut self,
+        msg_id: [u8; 16],
+        header: BurnHeader,
+        body: &[u8],
+        sent_ms: u64,
+    ) -> Result<()> {
+        let mut key = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(key.as_mut()).map_err(|_| OmcpError::Crypto("getrandom"))?;
+        let c = ChaCha20Poly1305::new_from_slice(key.as_ref())
+            .map_err(|_| OmcpError::Crypto("chacha key"))?;
+        let sealed = c
+            .encrypt(&nonce0(), body)
+            .map_err(|_| OmcpError::Crypto("burn seal"))?;
+        self.live.insert(
+            msg_id,
+            Entry {
+                expires_at_ms: expires_at_ms(sent_ms, &header),
+                header,
+                key,
+                sealed,
+                burn_at_ms: None,
+                opened: false,
+            },
+        );
+        Ok(())
+    }
+
+    /// Open once. A second open (or after burn/expiry) returns [`Opened::Placeholder`].
+    pub fn open(&mut self, msg_id: &[u8; 16], now_ms: u64) -> Result<Opened> {
+        self.tick(now_ms);
+        let Some(e) = self.live.get_mut(msg_id) else {
+            return Ok(Opened::Placeholder);
+        };
+        if e.opened {
+            return Ok(Opened::Placeholder);
+        }
+        let c = ChaCha20Poly1305::new_from_slice(e.key.as_ref())
+            .map_err(|_| OmcpError::Crypto("chacha key"))?;
+        let body = Zeroizing::new(
+            c.decrypt(&nonce0(), e.sealed.as_slice())
+                .map_err(|_| OmcpError::Crypto("burn open"))?,
+        );
+        e.opened = true;
+        let burn_at_ms = match e.header.mode {
+            BurnMode::OnOpen => None,
+            BurnMode::Timer => Some(now_ms.saturating_add(u64::from(e.header.secs) * 1000)),
+        };
+        e.burn_at_ms = burn_at_ms;
+        if burn_at_ms.is_none() {
+            // View once: the store copy is shredded right away; only the caller's
+            // in-memory plaintext remains until the viewer closes.
+            self.shred(msg_id);
+        }
+        Ok(Opened::Content {
+            body,
+            receipt: OpenedReceipt {
+                msg_id: *msg_id,
+                opened_ms: now_ms,
+            },
+            burn_at_ms,
+        })
+    }
+
+    /// Viewer closed: burn now (any mode).
+    pub fn close(&mut self, msg_id: &[u8; 16]) {
+        if self.live.get(msg_id).is_some_and(|e| e.opened) {
+            self.shred(msg_id);
+        }
+    }
+
+    /// Burn timers that ran out and unread messages past `expires_at`. Returns burned ids.
+    pub fn tick(&mut self, now_ms: u64) -> Vec<[u8; 16]> {
+        let due: Vec<[u8; 16]> = self
+            .live
+            .iter()
+            .filter(|(_, e)| {
+                e.burn_at_ms.is_some_and(|t| now_ms >= t)
+                    || (!e.opened && now_ms >= e.expires_at_ms)
+            })
+            .map(|(k, _)| *k)
+            .collect();
+        for id in &due {
+            self.shred(id);
+        }
+        due
+    }
+
+    fn shred(&mut self, msg_id: &[u8; 16]) {
+        if let Some(mut e) = self.live.remove(msg_id) {
+            e.key.zeroize();
+            e.sealed.zeroize();
+            self.burned.insert(*msg_id);
+        }
+    }
+
+    pub fn is_burned(&self, msg_id: &[u8; 16]) -> bool {
+        self.burned.contains(msg_id)
+    }
+    pub fn is_live(&self, msg_id: &[u8; 16]) -> bool {
+        self.live.contains_key(msg_id)
+    }
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.live.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::files::generate_content_key;
+    use crate::gateway::store::StoreAndForward;
+    use crate::gateway::OpaqueEnvelope;
+
+    const ID: [u8; 16] = [7; 16];
+
+    #[test]
+    fn header_roundtrip_and_validation() {
+        let h = BurnHeader::timer(10, UNREAD_TTL_7D).unwrap();
+        assert_eq!(BurnHeader::decode(&h.encode()).unwrap(), h);
+        assert!(BurnHeader::timer(11, UNREAD_TTL_7D).is_err());
+        assert!(BurnHeader::on_open(1234).is_err());
+        assert!(BurnHeader::new(BurnMode::OnOpen, 5, UNREAD_TTL_1H).is_err());
+        assert!(BurnHeader::decode(&[9, 0, 0, 0, 0, 0, 0, 14, 16]).is_err());
+    }
+
+    #[test]
+    fn inner_header_roundtrip() {
+        let h = BurnHeader::on_open(UNREAD_TTL_24H).unwrap();
+        let p = encode_inner(Some(&h), b"hi");
+        assert_eq!(decode_inner(&p).unwrap(), (Some(h), &b"hi"[..]));
+        let p = encode_inner(None, b"x");
+        assert_eq!(decode_inner(&p).unwrap(), (None, &b"x"[..]));
+        assert!(decode_inner(&[2, 1]).is_err());
+    }
+
+    #[test]
+    fn b1_timer_burn_shreds() {
+        let mut s = BurnStore::default();
+        let h = BurnHeader::timer(10, UNREAD_TTL_7D).unwrap();
+        s.insert(ID, h, b"secret text", 0).unwrap();
+        let Opened::Content {
+            body, burn_at_ms, ..
+        } = s.open(&ID, 1_000).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(&body[..], b"secret text");
+        assert_eq!(burn_at_ms, Some(11_000));
+        assert!(s.tick(10_999).is_empty());
+        assert_eq!(s.tick(11_000), vec![ID]);
+        assert!(s.is_burned(&ID) && !s.is_live(&ID));
+        assert_eq!(s.open(&ID, 12_000).unwrap(), Opened::Placeholder);
+    }
+
+    #[test]
+    fn b2_view_once_opens_exactly_once() {
+        let mut s = BurnStore::default();
+        s.insert(ID, BurnHeader::on_open(UNREAD_TTL_7D).unwrap(), b"jpeg", 0)
+            .unwrap();
+        assert!(matches!(
+            s.open(&ID, 5).unwrap(),
+            Opened::Content {
+                burn_at_ms: None,
+                ..
+            }
+        ));
+        assert!(s.is_empty());
+        assert_eq!(s.open(&ID, 6).unwrap(), Opened::Placeholder);
+    }
+
+    #[test]
+    fn b4_unread_expiry_receiver_and_relay() {
+        let h = BurnHeader::on_open(UNREAD_TTL_1H).unwrap();
+        let mut s = BurnStore::default();
+        s.insert(ID, h, b"never read", 1_000).unwrap();
+        let exp = expires_at_ms(1_000, &h);
+        assert_eq!(exp, 3_601_000);
+        assert!(s.tick(exp - 1).is_empty());
+        assert_eq!(s.tick(exp), vec![ID]);
+
+        let mut relay = StoreAndForward::default();
+        let env = OpaqueEnvelope {
+            dest_label: [1; 32],
+            suite_id: 1,
+            expiry_ms: exp,
+            ciphertext: vec![0xAA; 8],
+        };
+        relay.retain(env.clone(), 1_000);
+        assert_eq!(relay.have(&[1; 32]), 1);
+        relay.purge(exp);
+        assert_eq!(relay.have(&[1; 32]), 0);
+        relay.retain(env, exp); // already expired: not stored
+        assert!(relay.is_empty());
+    }
+
+    #[test]
+    fn single_use_media_key_and_opened_receipt() {
+        let k = generate_content_key().unwrap();
+        let mut sender = SenderMediaKeys::default();
+        sender.insert(ID, k.clone());
+        let mut rk = SingleUseMediaKey::new(k);
+        assert!(rk.take().is_ok());
+        assert!(rk.is_spent() && rk.take().is_err());
+
+        let r = OpenedReceipt {
+            msg_id: ID,
+            opened_ms: 42,
+        };
+        let r2 = OpenedReceipt::decode(&r.encode()).unwrap();
+        assert_eq!(r, r2);
+        assert!(sender.on_opened(&r2));
+        assert!(!sender.contains(&ID));
+        assert!(!sender.on_opened(&r2));
+        assert!(OpenedReceipt::decode(&[0; 25]).is_err());
+    }
+
+    #[test]
+    fn close_burns_timer_message_early() {
+        let mut s = BurnStore::default();
+        s.insert(
+            ID,
+            BurnHeader::timer(3_600, UNREAD_TTL_7D).unwrap(),
+            b"t",
+            0,
+        )
+        .unwrap();
+        s.close(&ID); // unopened close is a no-op
+        assert!(s.is_live(&ID));
+        let _ = s.open(&ID, 0).unwrap();
+        s.close(&ID);
+        assert!(s.is_burned(&ID));
+    }
+}

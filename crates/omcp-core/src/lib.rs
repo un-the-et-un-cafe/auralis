@@ -21,6 +21,7 @@
 
 pub mod backup;
 pub mod ble;
+pub mod burn;
 pub mod error;
 pub mod files;
 pub mod framing;
