@@ -29,3 +29,9 @@ apps/ios/OpenMeshChat.xcworkspace/
 apps/ios/DerivedData/
 **/xcuserdata/
 apps/android/.kotlin/
+
+# iOS (M6)
+apps/ios/HoplaKit/.build/
+apps/ios/build/
+apps/ios/Generated/
+apps/ios/*.xcodeproj/
