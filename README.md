@@ -69,7 +69,8 @@ Third parties may ship their own apps, bots, gateways, and desktop clients under
 | **M2** | BLE transport loopback + two-device text chat (in-process GATT pipe in `omcp-core`; not production phone BLE) |
 | **M3** | MLS groups + file chunks (OpenMLS + chunk crypto in `omcp-core`; **not production-ready**, PQ extension provisional — see [extensions/mls-pq.md](./extensions/mls-pq.md)) |
 | **M4** | Gateway role + optional rendezvous (`omcp-core::gateway` / `rendezvous`: opaque forwarding, 500 MB/day cap, Wi-Fi-only default, sealed-sender blinded labels, in-memory `/v1/enqueue`+`/v1/fetch` reference with Ed25519 short-lived tokens; **experimental, not production-ready** — no real TLS/QUIC transport) |
-| **M5–M6** | Android / iOS reference betas |
+| **M5** | Android beta “Hopla” (`apps/android` + `crates/omcp-ffi` UniFFI bridge): onboarding with encrypted recovery backup, QR contact add + safety numbers, real BLE GATT transport, 1:1 text end-to-end. **Experimental, not production-ready, untested on real hardware**; Google Drive backup is a stub (no OAuth client), files/groups not wired over BLE yet |
+| **M6** | iOS reference beta |
 | **M7** | External crypto review |
 
 Communities and livestreams are specified as a **v0.2 product layer** (§20); the mesh MVP remains 1:1 and small groups.
