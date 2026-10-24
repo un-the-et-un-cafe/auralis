@@ -116,7 +116,7 @@ Ideas for the community: desktop clients, dedicated gateway nodes (Raspberry Pi)
 | **M2** | BLE transport and two-device text chat | ⏳ Planned |
 | **M3** | MLS groups and chunked file transfer | ⏳ Planned |
 | **M4** | Gateway role and optional rendezvous | ⏳ Planned |
-| **M5** | Android reference beta | ⏳ Planned |
+| **M5** | Android reference beta “Hopla” (`apps/android` + `crates/omcp-ffi`; experimental, untested on real hardware) | 🚧 In progress |
 | **M6** | iOS reference beta | ⏳ Planned |
 | **M7** | Independent cryptography review | ⏳ Planned |
 

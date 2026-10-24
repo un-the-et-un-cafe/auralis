@@ -16,7 +16,7 @@ pub struct FileMeta {
     pub mime: String,
     /// BLAKE3(plaintext), 32 bytes.
     pub content_hash: [u8; 32],
-    /// Plaintext bytes per chunk (default 16 KiB).
+    /// Plaintext bytes per chunk (default 64 KiB).
     pub chunk_plaintext_len: u32,
     pub num_chunks: u32,
     /// Content Key wrapped to each intended recipient.
