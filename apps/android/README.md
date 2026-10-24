@@ -12,7 +12,7 @@ Design source: [`../../design/`](../../design/) (Designy pack).
 | Chat thread + path banner + composer | UI shell |
 | Security centre | UI shell |
 | Gateway settings (500 MB/day, Wi‑Fi default, metered warn) | UI shell |
-| Communities / Live | “Coming in v0.2” empty states (Jakob) |
+| Communities / Live | “Coming in v0.2” empty states (product decision) |
 | Contact-add + My QR | Minimal chooser shell |
 | Onboarding / real QR camera / NFC / BLE | Deferred (M2+) |
 | `omcp-core` JNI | Stub only (`OmcpCoreStub`) — no crypto |

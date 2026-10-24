@@ -14,7 +14,7 @@ Design pack: `design/` (mirror) ← Designy `/home/box/shared/omcp-design/`
 | My QR | ✓ | ✓ | Minimal stub under Contact-add (You → Profile/QR deferred) |
 | Security centre | ✓ | ✓ | Safety number placeholder grid |
 | Gateway settings | ✓ | ✓ | **0 of 500 MB**, Wi‑Fi default, metered **warn**; iOS BLE + companion callout |
-| Communities home | ✓ empty | ✓ empty | “Coming in v0.2” (Jakob) |
+| Communities home | ✓ empty | ✓ empty | “Coming in v0.2” (product decision) |
 | Live tab | ✓ empty | ✓ empty | “Coming in v0.2” + BLE-only copy |
 | You hub | ✓ | ✓ | Links to Gateway / Security |
 | PathChip / PathBanner | ✓ | ✓ | Designy colours |
@@ -41,7 +41,7 @@ Design pack: `design/` (mirror) ← Designy `/home/box/shared/omcp-design/`
 - Gradle wrapper JAR / committed `xcodeproj` (generate locally)
 - Enabling CI android/ios jobs (`if: false` retained)
 
-## Earlier Jakob pins (still baked in)
+## Earlier product pins (still baked in)
 
 - Q1: show Communities + Live empty (v0.2 copy), not hidden
 - Q2: 500 MB/day + Wi‑Fi-only default + metered warn (not hard-block)

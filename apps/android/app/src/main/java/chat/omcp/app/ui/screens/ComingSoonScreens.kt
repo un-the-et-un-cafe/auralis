@@ -11,7 +11,7 @@ import androidx.compose.ui.res.stringResource
 import chat.omcp.app.R
 import chat.omcp.app.ui.components.EmptyState
 
-/** Jakob: keep Communities + Live tabs visible with Coming in v0.2 empty states. */
+/** Product decision: keep Communities + Live tabs visible with Coming in v0.2 empty states. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CommunitiesHomeScreen() {
