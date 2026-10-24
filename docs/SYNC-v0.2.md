@@ -22,74 +22,47 @@ Residual risk: padding only hides length *within* a bucket. A message that is
 near a bucket edge can still cross buckets depending on compressibility.
 That is accepted by §22.3 and is why attacker-influenced content is isolated.
 
-## Conflicts with the M1–M4 design and proposed resolutions
+## M1 conflicts — resolved by §21.8 / §22.7 (v0.2.1) and implemented
 
-1. **Mailbox tags vs. sealed address / blinded labels (§9.2, `rendezvous::label`).**
-   M4 labels are 32 bytes, keyed on the *recipient's Ed25519 key*, rotating
-   every **24 h**; §22 tags are 8 bytes, keyed on the *chat exporter secret*,
-   rotating every **6 h**. *Resolution:* keep both. Tags route on the mesh;
-   for gateway offload the tag is mapped to a 32-byte label
-   (`tag::tag_rendezvous_label`, `BLAKE3-derive("OMCP-TagMailbox-v1", tag)`
-   keyed over the epoch), so `OpaqueEnvelope` and the rendezvous server are
-   unchanged. Proposed spec text: "the rendezvous mailbox for a chat is
-   `tag_rendezvous_label(tag, tag_epoch)`; per-recipient blinded labels remain
-   for 1:1 first contact and key-package delivery". The rendezvous server's
-   token check (label = blinded_label(signer_pk, epoch)) does **not** cover tag
-   labels yet — see stubs.
-2. **"Tag replaces the sealed address" vs. `EnvelopeV1` framing (§10.1, §21).**
-   `EnvelopeV1` has no tag field and its layout is pinned. *Resolution:* carry
-   the tag in `header_aad` as TLV `0x54 | 0x08 | tag` (§10.1 already allows a
-   destination hint there). No framing change, no version bump. Proposal: pin
-   the `header_aad` TLV registry in §21.
-3. **Tag derivation for 1:1 chats vs. the Noise handshake (§21.5).**
-   §22.1 uses an `exporter_secret`; MLS groups have one, but the M1 Noise
-   hybrid session is a *link* (hop) session, not an end-to-end chat secret.
-   *Resolution:* define 1:1 chats as 2-member MLS groups (preferred), or
-   derive `exporter_secret = HKDF-SHA-384(handshake_hash, "OMCP-tag-exporter")`
-   from the end-to-end session. `mailbox_tag` accepts any 16–64 byte secret.
-4. **Tag epoch (6 h) vs. label epoch (24 h) vs. seen-cache TTL (10 min).**
-   Receivers accept current + previous tag epoch (`accepted_tags`). No change
-   needed for the seen-cache.
-5. **Gateway opaque-only forwarding (§9.1.2).** Interest routing, digests and
-   reconciliation happen between mesh peers; the gateway still only sees
-   `OpaqueEnvelope`s and never fetches media (`MediaHolder` has no auto-fetch
-   path). Media holders index blobs by an opaque *locator*, not the plaintext
-   BLAKE3 hash (the §7 `content_hash` would allow confirmation-of-file). No
-   conflict once that locator rule is in the spec — proposed.
-6. **500 MB/day gateway cap vs. §22.4 relay budgets (500 MB storage on Wi-Fi).**
-   Different resources: the gateway cap is Internet bytes/day
-   (`gateway::policy::DEFAULT_DAILY_BYTE_CAP`), the relay budget is mesh
-   storage + mesh forwarding. *Resolution:* both apply; offload traffic counts
-   against the gateway cap, BLE forwarding against the relay budget. Proposed
-   clarification in §22.4. Note the M4 store-and-forward retention (72 h)
-   matches §22.4's default; §22.4 adds a 7-day maximum (`clamp_expiry`).
-7. **Metered rules.** M4 `GatewayPolicy` has `wifi_only`; §22.4 adds "unless
-   the user allows mobile data, then only own chats + pending outbound".
-   `budget::internet_sync_scope` implements that; wiring it into
-   `Gateway::pump` is a stub.
-8. **Chunk size: §7 files use 16 KiB, §22.3 media uses 64 KiB.** Both reuse
-   `files::encrypt_file` (parameterised); `sync::media` uses 64 KiB. Not a wire
-   conflict (chunk length is in `FileMeta`). The "BLAKE3 tree" in §22.3 is
-   implemented as the §7 whole-file BLAKE3 + per-chunk AEAD; per-chunk BLAKE3
-   verification before decryption (bao-style) is a stub.
-9. **Flooding (§8.3) vs. interest routing.** `routing::plan_forward` floods
-   at ≤ 32 visible peers and switches above. **Finding (SY4):** pure
-   spray-and-wait (L = 8, k = 2) delivers ~0 % over a static 6-hop path; the
-   ≥ 98 % result needs relays to advertise *carry tags* along the path.
-   Proposed spec clarification: carry tags are advertised within
-   `ttl_hops` of a friend, still inside the fixed-size padded digest.
-10. **Adaptive TTL vs. `ttl_hops: u8`.** Max 12, fits; receipts are capped at
-    2 hops (`receipts::ttl_for`).
-11. **Padding vs. 1 MiB ciphertext cap (§21.4).** 1 MiB is a 16 KiB multiple,
-    so the largest bucket equals the cap; `encode_padded` refuses to exceed it.
+| §22.7 item | Implementation |
+|---|---|
+| (1) Carry tags, distance vector, ≤ 1 h, ≤ 64, want > lowest carry d > spray | `routing::{CarryTable, neighbour_distance, plan_forward}`, `tag::carry_tag(tag, d)` entries in the same padded digest |
+| (2) Hello 1 s → 60 s, delta digests + 5-min full refresh | `hello::{HelloTimer, DigestAdvertiser}`, `cuckoo::{DigestDelta, insert_keep_padding, remove_keep_padding}` |
+| (3) Rendezvous label `HKDF-SHA-384(tag_secret, "OMCP-rdv" ‖ epoch, 32)` | `tag::rendezvous_label`, used by `budget::choose_route` |
+| (4) TLV `0x54` per §21.8 registry | `tag::{tlv_class, tag_from_aad}` (rejects types outside the registry, wrong length, duplicates) |
+| (5) 1:1 = 2-member MLS; secret = `MLS-Exporter("OMCP-tag", epoch, 32)` | `OmcpMlsMember::tag_exporter`, `impl TagSecretSource`, `tag::chat_tag`; tested with a real 2-member OpenMLS group |
+| (6) Locator `BLAKE3-keyed(media_key, "OMCP-loc" ‖ content_hash)` | `media::locator` |
+| (7) 64 KiB chunks everywhere | `files::DEFAULT_CHUNK_PLAINTEXT_LEN = 64 KiB`; media uses it |
+| (8) SY6 thresholds normative | SY6 test: 10⁶ pairs, advantage < 0.005, \|z\| < 5 |
 
-## Acceptance (§22.6) — see `crates/omcp-sim/tests/acceptance.rs`
+Unchanged from before: gateway stays opaque-only; the 500 MB/day gateway cap
+(Internet bytes) and the §22.4 relay budgets (mesh storage/forwarding) both
+apply; padding fits the 1 MiB cap.
 
-SY1 also reports the metadata share of traffic. It is ~92 % — **the §22
-"≤ 2 % metadata" goal is not met** in this model, because the median node is
-idle (1 % active) and its traffic is hellos + per-epoch digests. Absolute
-traffic is ~120 KB/day (target 5 MB). Options: count the 2 % only against
-active users, or advertise digests on change rather than per epoch.
+## Findings that need a spec decision
+
+1. **§22.7(1) as written does not meet SY4.** Carry state only exists where
+   envelopes already flowed, so the first message on a static 6-hop path
+   relies on spray-and-wait and is never delivered (cold 0 %). With one
+   shared chat tag wanted by *both* members, the distance vector points to
+   the *nearest* member, pulling A→B traffic back toward A (delivery 9.8 % /
+   51 % for width 1 / 4). Per-recipient sub-tags alone make it worse (≈ 0 %:
+   no delivery ever creates state near the recipient).
+   **Proposed amendment (simulated as `Sync22Discovery`):** route on a
+   per-recipient sub-tag, and when a holder has no wanter/carry neighbour
+   *and* no carry state for the tag, flood within `ttl_hops` instead of
+   spraying (route discovery); relays that held the envelope then hold carry
+   state. Result: 100 % delivery (cold and warm), 20–49 % fewer
+   transmissions than flooding.
+2. **Idle ≤ 1 MB/day holds only at low radio degree.** The 5-min full refresh
+   received from every neighbour dominates: ≈ 0.88 MB/day at 8 neighbours,
+   ≈ 2.44 MB/day at 24. Options: refresh on request / on new neighbour only,
+   or a 15-min refresh.
+3. **"Active: metadata ≤ 2 % of payload" is not met** in either reading:
+   raw (all metadata / own payload) ≈ 14× at 8 neighbours; above the idle
+   baseline ≈ 5.8–7.6 %. A text-chat user's payload (~200 × 307 B/day) is
+   too small next to periodic digests. Needs a definition (e.g. only
+   per-message metadata: tags, recon diffs, receipts) or larger budgets.
 
 ## Stubs / not done
 
@@ -98,9 +71,14 @@ active users, or advertise digests on change rather than per epoch.
   `ble::gossip` / `gateway::Gateway`.
 - Rendezvous server does not yet authorise tag-mailbox labels (tokens are
   tied to `blinded_label(signer_pk, epoch)`).
+- `tag_exporter` agrees only when members share the MLS epoch (TODO in
+  `mls/group.rs`: also try the previous MLS epoch during commit races).
+- Carry tags are not yet produced by `ble::gossip`; the discovery-flood
+  amendment is only in the simulator.
 - Reconciliation runs over one combined set of shared-tag items; per-tag
   scoping/handshake message and BLE 3-round-trip cap are not enforced.
 - Media: no "nearest holder" discovery; no bao-style verified streaming.
+- Delta digests are not yet framed on BLE (no message type assigned).
 - HyperLogLog sketches are not exchanged on the wire yet.
 - `OMCP_DICT_V1` is a placeholder word list, not a trained dictionary.
 - SY1 models spray/delivery costs (documented in `sy1.rs`) rather than
