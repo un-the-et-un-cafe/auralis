@@ -98,11 +98,53 @@ jobs:
 
   # M6 — needs macOS runner; still skipped.
   ios:
-    name: ios (stub)
+    name: ios
     runs-on: macos-latest
-    if: false
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/ios
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "iOS CI reserved for M6 — apps/ios shell present; enable xcodebuild when macOS pool ready"
+
+      - name: Install stable Rust + iOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ios-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+
+      - name: HoplaKit (SwiftPM) tests
+        working-directory: apps/ios/HoplaKit
+        run: swift test
+
+      - name: Strings EN/FR parity
+        run: python3 scripts/strings.py --check
+
+      - name: Build omcp-ffi xcframework + Swift bindings
+        run: ./scripts/build-rust.sh
+
+      - name: XcodeGen
+        run: |
+          command -v xcodegen || brew install xcodegen
+          xcodegen generate
+
+      - name: Pick simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: xcodebuild build + test (simulator)
+        run: |
+          xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO build test
