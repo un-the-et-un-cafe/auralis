@@ -249,14 +249,15 @@ final class RustBridgeTests: XCTestCase {
 
         // RS1: Ben sees the notice on the next link. RS2: verified cleared, old QR fails.
         var notices: [RestoreNoticeInfo] = []
-        la = try cb.openInitiatorLink(aOnB.id)
-        lb = try c2.openResponderLink()
+        // v0.1.4a: the restored device has a new X25519 key, so it dials first.
+        la = try c2.openInitiatorLink(bOnA.id)
+        lb = try cb.openResponderLink()
         var queue: [(toB: Bool, pdus: [Data])] = [(true, try la.start().outgoing)]
         while !queue.isEmpty {
             let (toB, pdus) = queue.removeFirst()
             for p in pdus {
                 let out = try (toB ? lb : la).onPdu(p)
-                if !toB { notices += out.restoreNotices; rb.applyFileEvents(out) }
+                if toB { notices += out.restoreNotices; rb.applyFileEvents(out) }
                 if !out.outgoing.isEmpty { queue.append((!toB, out.outgoing)) }
             }
         }

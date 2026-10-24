@@ -34,8 +34,12 @@ public struct Contact: Equatable, Identifiable, Codable, Sendable {
     public var restoredAtMs: Int64?
     /// RS2: restored and not re-verified in person yet: "Restored, not verified" pill (§5.98).
     public var restoredUnverified: Bool = false
+    /// Their device's X25519 key from an identity backup (v0.1.4a); nil for legacy contacts.
+    public var dhHex: String?
     public init(id: String, displayName: String, safetyNumber: [String], verified: Bool,
-                restoredBadge: Bool = false, restoredAtMs: Int64? = nil, restoredUnverified: Bool = false) {
+                restoredBadge: Bool = false, restoredAtMs: Int64? = nil, restoredUnverified: Bool = false,
+                dhHex: String? = nil) {
+        self.dhHex = dhHex
         self.id = id
         self.displayName = displayName
         self.safetyNumber = safetyNumber

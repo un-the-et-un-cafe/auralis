@@ -233,7 +233,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     }
 
     public func restoreContact(_ c: Contact) throws {
-        try call { try n().restoreContact(contactId: c.id, displayName: c.displayName, verified: c.verified) }
+        try call { try n().restoreContactWithKey(contactId: c.id, displayName: c.displayName, verified: c.verified, dhHex: c.dhHex) }
     }
 
     public func contacts() -> [Contact] { (node?.contacts() ?? []).map(Self.contact) }
@@ -314,7 +314,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
 
     private static func restored(_ r: OmcpFFI.RestoredBackup) -> HoplaKit.RestoredBackup {
         HoplaKit.RestoredBackup(phrase: r.phrase, contacts: r.contacts.map {
-            Contact(id: $0.contactId, displayName: $0.displayName, safetyNumber: [], verified: $0.verified)
+            Contact(id: $0.contactId, displayName: $0.displayName, safetyNumber: [], verified: $0.verified, dhHex: $0.dhHex)
         }, history: r.history)
     }
 

@@ -148,3 +148,82 @@ final class WebAuthenticator: NSObject, ASWebAuthenticationPresentationContextPr
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
     }
 }
+
+// MARK: iCloud chat backup (REQUIREMENTS v0.1.4a; naming + manifest logic in HoplaKit/ICloudChatRecords.swift)
+
+/// Private database, custom zone `HoplaBackupV1`. Each record has only `blob` (CKAsset), `seq` and
+/// `created`; blobs are Rust-sealed and padded. Blocking: call off the main thread.
+final class CloudKitChatRecordBackend: ChatRecordBackend {
+    private lazy var db = CKContainer(identifier: "iCloud.chat.omcp.app").privateCloudDatabase
+    private let zoneID = CKRecordZone.ID(zoneName: ICloudChatRecords.zone, ownerName: CKCurrentUserDefaultName)
+    private var zoneReady = false
+
+    var available: Bool { FileManager.default.ubiquityIdentityToken != nil }
+
+    private func wait<T>(_ body: (@escaping (Result<T, Error>) -> Void) -> Void) throws -> T {
+        let sem = DispatchSemaphore(value: 0)
+        var out: Result<T, Error>!
+        body { out = $0; sem.signal() }
+        sem.wait()
+        return try out.get()
+    }
+
+    private func ensureZone() throws {
+        if zoneReady { return }
+        let _: Void = try wait { done in
+            let op = CKModifyRecordZonesOperation(recordZonesToSave: [CKRecordZone(zoneID: zoneID)], recordZoneIDsToDelete: nil)
+            op.qualityOfService = .utility
+            op.modifyRecordZonesResultBlock = { done($0.map { _ in () }) }
+            db.add(op)
+        }
+        zoneReady = true
+    }
+
+    private func id(_ name: String) -> CKRecord.ID { CKRecord.ID(recordName: name, zoneID: zoneID) }
+
+    func save(_ r: ChatCloudRecord) throws {
+        try ensureZone()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try r.blob.write(to: url, options: .completeFileProtection)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let rec = CKRecord(recordType: r.type, recordID: id(r.name))
+        rec["blob"] = CKAsset(fileURL: url)
+        rec["seq"] = Int64(bitPattern: r.seq) as CKRecordValue
+        rec["created"] = r.createdMs as CKRecordValue
+        let _: Void = try wait { done in
+            let op = CKModifyRecordsOperation(recordsToSave: [rec], recordIDsToDelete: nil)
+            op.savePolicy = .allKeys
+            op.qualityOfService = .utility
+            op.modifyRecordsResultBlock = { done($0.map { _ in () }) }
+            db.add(op)
+        }
+    }
+
+    func fetch(_ name: String) throws -> ChatCloudRecord? {
+        try ensureZone()
+        do {
+            let rec: CKRecord = try wait { done in
+                db.fetch(withRecordID: id(name)) { r, e in
+                    if let r { done(.success(r)) } else { done(.failure(e ?? CoreError.other("cloudkit"))) }
+                }
+            }
+            guard let url = (rec["blob"] as? CKAsset)?.fileURL, let data = try? Data(contentsOf: url) else { return nil }
+            return ChatCloudRecord(type: rec.recordType, name: name, blob: data,
+                                   seq: UInt64(bitPattern: (rec["seq"] as? Int64) ?? 0),
+                                   createdMs: (rec["created"] as? Int64) ?? 0)
+        } catch let e as CKError where e.code == .unknownItem || e.code == .zoneNotFound {
+            return nil
+        }
+    }
+
+    func delete(_ name: String) throws {
+        try ensureZone()
+        do {
+            let _: CKRecord.ID = try wait { done in
+                db.delete(withRecordID: id(name)) { i, e in
+                    if let i { done(.success(i)) } else { done(.failure(e ?? CoreError.other("cloudkit"))) }
+                }
+            }
+        } catch let e as CKError where e.code == .unknownItem {}
+    }
+}
