@@ -21,6 +21,7 @@ struct YouView: View {
                 }
                 Section {
                     NavigationLink { BackupSettingsView() } label: { row(L("backup_title"), L("backup_row_desc")) }
+                    NavigationLink { StorageSettingsView() } label: { row(L("storage_title"), L("storage_keep_title")) }
                     NavigationLink { NotificationSettingsView() } label: { row(L("notif_title"), L("notif_row_desc")) }
                     NavigationLink { PrivacySettingsView() } label: { row(L("privacy_title"), L("privacy_row_desc")) }
                     NavigationLink { GatewaySettingsView() } label: { row(L("gateway_title"), L("gateway_row_desc")) }
@@ -69,5 +70,35 @@ struct PrivacySettingsView: View {
             }
         }
         .navigationTitle(L("privacy_title"))
+    }
+}
+
+/// Settings > Storage > Keep sent media (REQUIREMENTS "Keep sent media"); limits live in Rust.
+struct StorageSettingsView: View {
+    @EnvironmentObject private var model: AppModel
+    @Environment(\.omcpColors) private var c
+    @State private var prefs = KeptMediaPrefs()
+    @State private var usage = KeptMediaUsage(count: 0, bytes: 0)
+
+    private func reload() { prefs = model.core.keptMediaSettings(); usage = model.core.keptMediaUsage() }
+    private func apply(_ p: KeptMediaPrefs) {
+        _ = try? model.core.setKeptMediaSettings(p, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        reload()
+    }
+
+    var body: some View {
+        Form {
+            Section(header: Text(L("storage_keep_title")), footer: Text(L("storage_keep_body"))) {
+                Picker(L("storage_keep_days"), selection: Binding(get: { prefs.maxDays }, set: { var p = prefs; p.maxDays = $0; apply(p) })) {
+                    ForEach(StorageSettings.dayOptions, id: \.self) { Text(L("storage_days", $0)).tag($0) }
+                }
+                Picker(L("storage_keep_size"), selection: Binding(get: { prefs.maxBytes }, set: { var p = prefs; p.maxBytes = $0; apply(p) })) {
+                    ForEach(StorageSettings.sizeOptions, id: \.self) { Text(StorageSettings.formatBytes($0)).tag($0) }
+                }
+                Text(L("storage_usage", usage.count, StorageSettings.formatBytes(usage.bytes))).font(.caption).foregroundStyle(c.ink2)
+            }
+        }
+        .navigationTitle(L("storage_title"))
+        .onAppear(perform: reload)
     }
 }

@@ -273,6 +273,17 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertTrue(re.verified)
         XCTAssertFalse(re.restoredUnverified)
     }
+
+    /// Keep sent media + one-message Ask to resend over the real core (REQUIREMENTS v0.1.4b).
+    func testKeptMediaSettingsRoundTrip() throws {
+        let core = RustOmcpCore()
+        try MeshRepository(core: core, store: InMemoryAppStore()).saveIdentity(phrase: try core.generateRecoveryPhrase(), name: "Ana")
+        XCTAssertEqual(core.keptMediaSettings(), KeptMediaPrefs())
+        XCTAssertEqual(try core.setKeptMediaSettings(KeptMediaPrefs(maxDays: 30, maxBytes: 500_000_000), nowMs: 1), 0)
+        XCTAssertEqual(core.keptMediaSettings(), KeptMediaPrefs(maxDays: 30, maxBytes: 500_000_000))
+        XCTAssertEqual(core.keptMediaUsage(), HoplaKit.KeptMediaUsage(count: 0, bytes: 0))
+    }
+
 }
 
 extension RustOmcpCore {

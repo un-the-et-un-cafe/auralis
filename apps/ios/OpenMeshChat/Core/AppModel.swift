@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
             }
         }
         repo.restore()
+        // Keep sent media: age limit on start (the size limit applies on every insert).
+        _ = repo.core.evictKeptMedia(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
         // Burn timers + unread expiry, decided in Rust; ≤ 250 ms so B1 (≤ 1 s) holds.
         burnTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.repo.tickBurn() }

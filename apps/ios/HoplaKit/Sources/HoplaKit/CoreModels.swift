@@ -376,8 +376,37 @@ public struct MediaRequestInfo: Equatable, Sendable {
     public var name: String
     public var mime: String
     public var localPath: String?
-    public init(contactId: String, msgId: String, hash: String, name: String, mime: String, localPath: String?) {
+    /// "Ask to resend" only: the requester's optional note, carried in the same message.
+    public var note: String?
+    public init(contactId: String, msgId: String, hash: String, name: String, mime: String, localPath: String?, note: String? = nil) {
         self.contactId = contactId; self.msgId = msgId; self.hash = hash; self.name = name; self.mime = mime; self.localPath = localPath
+        self.note = note
+    }
+}
+
+/// Settings > Storage > Keep sent media (defaults 90 days / 2 GB, oldest deleted first).
+public struct KeptMediaPrefs: Equatable, Sendable {
+    public var maxDays: Int
+    public var maxBytes: Int64
+    public init(maxDays: Int = 90, maxBytes: Int64 = 2_000_000_000) { self.maxDays = maxDays; self.maxBytes = maxBytes }
+}
+
+public struct KeptMediaUsage: Equatable, Sendable {
+    public var count: Int
+    public var bytes: Int64
+    public init(count: Int, bytes: Int64) { self.count = count; self.bytes = bytes }
+}
+
+/// Choices and formatting for the Storage screen (decimal units, like the 50 MB file cap).
+public enum StorageSettings {
+    public static let dayOptions = [7, 30, 90, 180, 365]
+    public static let sizeOptions: [Int64] = [500_000_000, 1_000_000_000, 2_000_000_000, 5_000_000_000, 10_000_000_000]
+    public static func formatBytes(_ b: Int64) -> String {
+        func t(_ v: Double) -> String { v == v.rounded() ? String(Int64(v)) : String(format: "%.1f", v) }
+        if b >= 1_000_000_000 { return t(Double(b) / 1e9) + " GB" }
+        if b >= 1_000_000 { return t(Double(b) / 1e6) + " MB" }
+        if b >= 1_000 { return t(Double(b) / 1e3) + " KB" }
+        return "\(b) B"
     }
 }
 
@@ -490,7 +519,13 @@ public protocol OmcpCore: AnyObject {
     func restoreMediaFromBackup(msgId: String, blob: Data) throws -> Data
     // Missing media re-fetch (CB3).
     func requestMedia(_ msgId: String) throws
-    func askToResend(_ msgId: String) throws
+    /// ONE message carrying the optional note (≤ 280 UTF-8 bytes).
+    func askToResend(_ msgId: String, note: String?) throws
+    func keptMediaSettings() -> KeptMediaPrefs
+    /// Applies at once; returns how many kept copies were evicted (oldest first).
+    func setKeptMediaSettings(_ p: KeptMediaPrefs, nowMs: Int64) throws -> Int
+    func keptMediaUsage() -> KeptMediaUsage
+    func evictKeptMedia(nowMs: Int64) -> Int
     func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws
     // Restore indicator (RS1/RS2).
     func markRestored(nowMs: Int64) throws -> DeviceKeyInfo?
@@ -567,7 +602,11 @@ public extension OmcpCore {
     func mediaPlaceholders() -> [MediaBackupItem] { [] }
     func restoreMediaFromBackup(msgId: String, blob: Data) throws -> Data { throw CoreError.other("no media backup") }
     func requestMedia(_ msgId: String) throws {}
-    func askToResend(_ msgId: String) throws {}
+    func askToResend(_ msgId: String, note: String?) throws {}
+    func keptMediaSettings() -> KeptMediaPrefs { KeptMediaPrefs() }
+    func setKeptMediaSettings(_ p: KeptMediaPrefs, nowMs: Int64) throws -> Int { 0 }
+    func keptMediaUsage() -> KeptMediaUsage { KeptMediaUsage(count: 0, bytes: 0) }
+    func evictKeptMedia(nowMs: Int64) -> Int { 0 }
     func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws {}
     func markRestored(nowMs: Int64) throws -> DeviceKeyInfo? { nil }
     func deviceInfo() -> DeviceKeyInfo? { nil }

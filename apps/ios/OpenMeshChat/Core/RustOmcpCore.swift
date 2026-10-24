@@ -66,7 +66,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     }
 
     static func request(_ r: MediaRequestEvent) -> MediaRequestInfo {
-        MediaRequestInfo(contactId: r.contactId, msgId: r.msgIdHex, hash: r.hashHex, name: r.name, mime: r.mime, localPath: r.localPath)
+        MediaRequestInfo(contactId: r.contactId, msgId: r.msgIdHex, hash: r.hashHex, name: r.name, mime: r.mime, localPath: r.localPath, note: r.note)
     }
 
     static func device(_ d: DeviceInfo) -> DeviceKeyInfo {
@@ -179,7 +179,17 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         try call { try n().restoreMediaFromBackup(msgIdHex: msgId, blob: blob) }
     }
     public func requestMedia(_ msgId: String) throws { try call { try n().requestMedia(msgIdHex: msgId) } }
-    public func askToResend(_ msgId: String) throws { try call { try n().askToResend(msgIdHex: msgId) } }
+    public func askToResend(_ msgId: String, note: String?) throws { try call { try n().askToResend(msgIdHex: msgId, note: note) } }
+    public func keptMediaSettings() -> KeptMediaPrefs {
+        (try? node?.keptMediaSettings()).flatMap { $0 }.map { KeptMediaPrefs(maxDays: Int($0.maxDays), maxBytes: Int64($0.maxBytes)) } ?? KeptMediaPrefs()
+    }
+    public func setKeptMediaSettings(_ p: KeptMediaPrefs, nowMs: Int64) throws -> Int {
+        Int(try call { try n().setKeptMediaSettings(s: OmcpFFI.KeptMediaSettings(maxDays: UInt32(p.maxDays), maxBytes: UInt64(p.maxBytes)), nowMs: UInt64(nowMs)) })
+    }
+    public func keptMediaUsage() -> HoplaKit.KeptMediaUsage {
+        (try? node?.keptMediaUsage()).flatMap { $0 }.map { HoplaKit.KeptMediaUsage(count: Int($0.count), bytes: Int64($0.bytes)) } ?? HoplaKit.KeptMediaUsage(count: 0, bytes: 0)
+    }
+    public func evictKeptMedia(nowMs: Int64) -> Int { Int((try? node?.evictKeptMedia(nowMs: UInt64(nowMs))).flatMap { $0 } ?? 0) }
     public func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws {
         try call { try n().answerMediaRequest(contactId: contactId, msgIdHex: msgId, bytes: bytes) }
     }

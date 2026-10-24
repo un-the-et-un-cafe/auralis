@@ -247,10 +247,17 @@ public final class MeshRepository {
         kick?.kick(contactId)
     }
 
-    /// "Ask to resend" after the confirm sheet: media reference + the (editable) text.
-    public func askToResend(_ contactId: String, msgId: String, message: String) throws {
-        try core.askToResend(msgId)
-        try send(contactId, text: message)
+    /// "Ask to resend" after the confirm sheet: ONE request carrying the optional note.
+    public func askToResend(_ contactId: String, msgId: String, note: String?) throws {
+        try core.askToResend(msgId, note: Self.resendNote(note))
+        kick?.kick(contactId)
+    }
+
+    /// Trimmed note, nil when empty, cut to ≤ 280 UTF-8 bytes on a character boundary.
+    public static func resendNote(_ note: String?) -> String? {
+        guard var n = note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty else { return nil }
+        while n.utf8.count > 280 { n.removeLast() }
+        return n
     }
 
     public func waitingMedia(_ contactId: String) -> Int { messages[contactId]?.filter { $0.file?.isPlaceholder == true }.count ?? 0 }

@@ -224,7 +224,7 @@ struct ChatThreadView: View {
                 .background(c.surface2).onTapGesture { hideMediaBanner = true }
         }
         ForEach(model.repo.resendAsks.filter { $0.contactId == contactId }, id: \.msgId) { a in
-            Text(L("media_resend_asked", peer, a.name)).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+            Text(a.note.map { L("media_resend_asked_note", peer, a.name, $0) } ?? L("media_resend_asked", peer, a.name)).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 .background(c.surface2).onTapGesture { model.repo.dismissResendAsk(a.msgId) }
         }
     }
@@ -257,15 +257,15 @@ struct ChatThreadView: View {
                 if f.state == .missing {
                     Button(L("media_request_again")) { model.repo.requestMedia(contactId, msgId: m.id) }.font(.caption.bold())
                 } else if f.state == .unavailable {
-                    Button(L("media_ask_resend")) { resendText = L("media_resend_default"); resendFor = m }.font(.caption.bold())
+                    Button(L("media_ask_resend")) { resendText = ""; resendFor = m }.font(.caption.bold())
                 }
             }
         }
         .padding(12).background(c.surface2).clipShape(RoundedRectangle(cornerRadius: 14))
         .alert(L("media_resend_title", peer), isPresented: Binding(get: { resendFor?.id == m.id }, set: { if !$0 { resendFor = nil } })) {
-            TextField("", text: $resendText)
+            TextField(L("media_resend_label"), text: $resendText)
             Button(L("media_resend_send")) {
-                try? model.repo.askToResend(contactId, msgId: m.id, message: resendText)
+                try? model.repo.askToResend(contactId, msgId: m.id, note: resendText)
                 resendSent.insert(m.id); resendFor = nil
             }
             Button(L("cancel_action"), role: .cancel) { resendFor = nil }
