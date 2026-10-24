@@ -1,4 +1,4 @@
-//! Open Mesh Chat Protocol (`omcp-core`) — M1 + M2 + M3 core library.
+//! Open Mesh Chat Protocol (`omcp-core`) — M1–M4 core library.
 //!
 //! Provides:
 //! - Canonical [`framing::EnvelopeV1`] encode/decode (PROTOCOL §10.1, §21.1–§21.4)
@@ -9,7 +9,11 @@
 //! - MLS small groups via OpenMLS + OMCP-MLS-PQ hybrid mix helper (PROTOCOL §6.2)
 //! - Chunked encrypted file sharing with BLAKE3 + Content Key wrap (PROTOCOL §7)
 //!
-//! Not in scope yet: real phone BLE bindings, gateway, production hardware,
+//! - Gateway role (opaque forwarding, policy, outage/drain, control messages,
+//!   pinning, store-and-forward) and an in-memory rendezvous reference
+//!   (PROTOCOL §8.4, §9) — **experimental (M4)**
+//!
+//! Not in scope yet: real phone BLE bindings, real TLS/QUIC gateway transport, production hardware,
 //! full OpenMLS PQ extension registration on the wire.
 
 #![forbid(unsafe_code)]
@@ -19,9 +23,11 @@ pub mod ble;
 pub mod error;
 pub mod files;
 pub mod framing;
+pub mod gateway;
 pub mod handshake;
 pub mod mls;
 pub mod negotiate;
+pub mod rendezvous;
 pub mod suite;
 
 pub use error::{OmcpError, Result};

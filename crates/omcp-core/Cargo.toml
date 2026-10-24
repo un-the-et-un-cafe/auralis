@@ -3,7 +3,7 @@ name = "omcp-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Open Mesh Chat Protocol (OMCP) core — framing, Noise hybrid (M1), BLE loopback (M2), MLS groups + file chunks (M3)"
+description = "Open Mesh Chat Protocol (OMCP) core — framing, Noise hybrid (M1), BLE loopback (M2), MLS groups + file chunks (M3), gateway + rendezvous (M4)"
 repository.workspace = true
 publish = false
 
@@ -35,6 +35,10 @@ blake3 = "=1.5.5"
 openmls = "=0.9.2"
 openmls_rust_crypto = "=0.6.0"
 openmls_basic_credential = "=0.6.0"
+
+# M4: short-lived signed rendezvous tokens (PROTOCOL §9.2). Same crate/version
+# OpenMLS already pulls in; default features off (keys built from getrandom bytes).
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "zeroize"] }
 
 [dev-dependencies]
 hex = "=0.4.3"
