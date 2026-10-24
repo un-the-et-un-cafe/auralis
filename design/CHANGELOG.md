@@ -1,5 +1,18 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.15 — 2026-10-24
+
+Restored members in groups and communities (REQUIREMENTS, Q25). `DESIGN_SPEC.md` §5.99.
+
+### Added
+- `group-restored`: a compact “Restored, not verified” tag on sender names in group threads and in the member list; tapping it opens the same verify sheet; no system notice in groups. 11 frames, EN/FR, light/dark, iOS.
+
+### Changed
+- §12 Q24 (O3 reworded in REQUIREMENTS) and Q25 resolved. §5.96 notes that REQUIREMENTS accepts the optional “Back up media on mobile data” toggle.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
 ## v0.1.14 — 2026-10-24
 
 Re-verification after restore (REQUIREMENTS, RS2). `DESIGN_SPEC.md` §5.98.

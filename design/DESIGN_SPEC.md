@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.14
+# OMCP Smartphone Apps — Design Spec v0.1.15
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -1181,7 +1181,7 @@ Generator `/workspace/omcp-v0113/gen.py`. New mockups: `settings-media-backup` a
 - **On:**
   - Per-type toggles (Photos, Videos, Voice notes, Files), each showing its local size. Turning on the master toggle selects all types by default except Videos (size; Q21 resolved).
   - Estimated backup size card: “Estimated backup size 1.6 GB · Chats 2.4 MB (hourly) + selected media (daily). Free in {service}: 3.1 GB”.
-  - Row “Back up media on mobile data · Off: daily on Wi-Fi only (default).”
+  - Row “Back up media on mobile data · Off: daily on Wi-Fi only (default).” REQUIREMENTS (v0.1.15) now explicitly accepts this optional toggle, off by default.
 - **First upload** (`--uploading`): brand-soft card “First media backup · 34% · 550 MB / 1.6 GB · On Wi-Fi, in the background. Paused while on mobile data.” Android uses a WorkManager long-running job with a foreground notification; iOS uses a `BGProcessingTask` with background URLSession.
 - **Quota:**
   - Nearly full (< 2× the remaining estimate): warn callout “{service} is almost full”, explaining that chats are backed up first.
@@ -1215,6 +1215,14 @@ Generator `/workspace/omcp-v0114/gen.py`. `restore-notice` was re-rendered (20 f
   - `restore-success` note: “Your safety number changed. Contacts need to verify you again in person (QR).”
   - Verified badges row: “Still verified on your side”. O3 restores *your* verifications of others, since their keys didn't change.
 - **A11y:** the pill label is “Restored, not verified”; the row reads “Alex Rivera, restored, not verified”; the QR match is announced via `role=status`; the re-verified system line is `role=status`. Colour is never the only carrier: the pill has text and a glyph.
+
+### 5.99 v0.1.15 — Restored tag in groups and communities — `group-restored` (+`--members`, `--sheet`, `--dark`, `--members-dark`, `--ios`, `--ios-members`, `--ios-dark`, `--fr`, `--members-fr`, `--sheet-fr`)
+Follows REQUIREMENTS “Groups and communities” (Q25). Generator `/workspace/omcp-v0115/gen.py`.
+- **Compact tag:** a smaller version of the 1:1 pill (10 px text, 16 px tall, 9 px sync glyph, neutral `--surface-2` with a `--line` border): “Restored, not verified” / « Restauré, non vérifié ». It appears after the member's name on **every message sender name** and in the **member list**. It replaces the verified badge until that member is re-verified (§5.98), then disappears.
+- **No system notice in groups or communities.** The full “<name> restored Hopla on a new device” notice appears only in 1:1 chats.
+- **Tap:** the tag opens the same verify sheet as §5.98 (safety number changed · Verify in person (QR) · Block · It was Alex).
+- **Member list:** a footnote explains the tag: “‘Restored, not verified’: this member restored Hopla on a new device. Tap the tag to verify in person.”
+- **A11y:** the tag is `role=button` labelled “Restored, not verified. Tap to verify”. The sender line reads “Alex Rivera, restored, not verified”. The touch target is extended to 44 pt via padding on the name row.
 
 ## 6. Path indicator component (normative UX)
 
@@ -1370,8 +1378,8 @@ Open (v0.1.10):
 21. ~~**Default types when media backup is turned on:**~~ → **Resolved 2026-10-24:** every type is pre-selected except Videos, as mocked.  the mockup pre-selects everything except Videos (size). Confirm, or select all?
 22. ~~**Media backup cadence:**~~ → **Resolved 2026-10-24:** media is backed up in a separate daily pass, Wi-Fi only by default. Copy: “Backed up daily on Wi-Fi” (§5.96).  the chat backup runs at most hourly, padded to 64 KiB buckets. Should media follow the same cadence and padding (padding large videos gets costly), or use a separate daily pass?
 23. ~~**Partial restore:**~~ → **Resolved 2026-10-24:** a partial media restore falls back to placeholders that refill from nearby contacts (`restore-media--partial`, §5.97).  if media download fails mid-restore (quota or offline), do the remaining items fall back to placeholders and contact re-fetch automatically? Assumed yes.
-24. **REQUIREMENTS O3 wording:** O3 still says “verification state are restored”. Suggest rewording to “your verifications of contacts are restored; contacts' verification of you resets (RS2)”.
-25. **Group / community chats:** should the “Restored, not verified” pill also show next to the restored member in groups, or only in 1:1?
+24. ~~**REQUIREMENTS O3 wording:**~~ → **Resolved 2026-10-24:** REQUIREMENTS O3 is reworded (“your verifications of contacts are restored; contacts' verification of you resets, RS2”).
+25. ~~**Group / community chats:**~~ → **Resolved 2026-10-24:** compact tag in groups and communities, with the system notice in 1:1 only (§5.99).
 
 ---
 
@@ -1383,6 +1391,7 @@ Open (v0.1.10):
 | 0.1.1 | 2026-10-24 | Hopla naming; §5.14–5.24 onboarding, contact add, file transfer; 11 new mockups (17 PNG frames); resolved v0.1.0 questions |
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
+| 0.1.15 | 2026-10-24 | Restored tag in groups and communities (§5.99), `group-restored`; Q24–Q25 resolved; mobile-data toggle confirmed by REQUIREMENTS |
 | 0.1.14 | 2026-10-24 | Re-verification after restore (§5.98, RS2): verified badge reset, “Restored, not verified” until QR re-verify, badge earned back; restore copy; Q20 resolved; Q24–Q25; media daily Wi-Fi pass copy, partial media restore frame; Q21–Q23 resolved |
 | 0.1.13 | 2026-10-24 | Media backup setting (§5N, 5.96–5.97): toggles, size, quota, turn-off delete, first upload; `restore-media`; placeholders only for media not in the backup; Q21–Q23 |
 | 0.1.12 | 2026-10-24 | Ask to resend + confirm/sent, Wi-Fi-only gateway re-fetch with a mobile-data setting, re-requests carry no extra metadata (§5.94); Q17–Q19 resolved; restore indicator: contact notice, sheet, 7-day Restored badge, restored-phone banner (§5.95) |
