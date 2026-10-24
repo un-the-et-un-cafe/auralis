@@ -31,14 +31,14 @@ fn rand_items(rng: &mut SplitMix64, n: usize) -> Vec<Item> {
 }
 
 /// Two peers sharing `items` envelopes across their common tags reconnect
-/// with cached digests: hello (4 B header + 8 B digest id each way) plus one
-/// reconciliation session.
+/// with cached digests: one sync hello each way plus one reconciliation
+/// session.
 pub fn sy2(items: usize, seed: u64) -> Sy2Report {
     let mut rng = SplitMix64(seed);
     let s = rand_items(&mut rng, items);
     let (recon, rt, a, b) = run_session(&Reconciler::new(s.clone()), &Reconciler::new(s));
     assert!(a.is_empty() && b.is_empty());
-    let hello = 2 * (4 + 8);
+    let hello = 2 * omcp_core::sync::hello::HELLO_BYTES as usize;
     Sy2Report {
         items,
         hello_bytes: hello,

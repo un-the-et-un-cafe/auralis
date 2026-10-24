@@ -39,30 +39,19 @@ Unchanged from before: gateway stays opaque-only; the 500 MB/day gateway cap
 (Internet bytes) and the §22.4 relay budgets (mesh storage/forwarding) both
 apply; padding fits the 1 MiB cap.
 
-## Findings that need a spec decision
+## §22.7(9)–(11) (accepted proposals) — implemented
 
-1. **§22.7(1) as written does not meet SY4.** Carry state only exists where
-   envelopes already flowed, so the first message on a static 6-hop path
-   relies on spray-and-wait and is never delivered (cold 0 %). With one
-   shared chat tag wanted by *both* members, the distance vector points to
-   the *nearest* member, pulling A→B traffic back toward A (delivery 9.8 % /
-   51 % for width 1 / 4). Per-recipient sub-tags alone make it worse (≈ 0 %:
-   no delivery ever creates state near the recipient).
-   **Proposed amendment (simulated as `Sync22Discovery`):** route on a
-   per-recipient sub-tag, and when a holder has no wanter/carry neighbour
-   *and* no carry state for the tag, flood within `ttl_hops` instead of
-   spraying (route discovery); relays that held the envelope then hold carry
-   state. Result: 100 % delivery (cold and warm), 20–49 % fewer
-   transmissions than flooding.
-2. **Idle ≤ 1 MB/day holds only at low radio degree.** The 5-min full refresh
-   received from every neighbour dominates: ≈ 0.88 MB/day at 8 neighbours,
-   ≈ 2.44 MB/day at 24. Options: refresh on request / on new neighbour only,
-   or a 15-min refresh.
-3. **"Active: metadata ≤ 2 % of payload" is not met** in either reading:
-   raw (all metadata / own payload) ≈ 14× at 8 neighbours; above the idle
-   baseline ≈ 5.8–7.6 %. A text-chat user's payload (~200 × 307 B/day) is
-   too small next to periodic digests. Needs a definition (e.g. only
-   per-message metadata: tags, recon diffs, receipts) or larger budgets.
+| Item | Implementation |
+|---|---|
+| (9) Sub-tags `BLAKE2b-64(exporter, "OMCP-sub" ‖ leaf_u32 ‖ epoch_u64)`, TLV `0x56` (8·n), chats ≤ 8 members; larger groups chat tag + Plumtree | `tag::{subtag, chat_subtag, put_subtags_in_aad, parse_routing_aad, uses_subtags}`; MLS-backed via `TagSecretSource` |
+| (9) Forwarding want > lowest carry > scoped flood within TTL, no spray | `routing::plan_forward(tags, ttl_hops, …)`; spray-and-wait removed |
+| (10) Per-message metadata ≤ max(256 B, 10 % ct); beacons only in idle budget | SY1 `per_message_metadata`, SY4 `metadata_per_delivered` (incl. carry deltas) |
+| (11) Full digest only to new neighbours / `DIGEST_REQ` / 30-min refresh; hello ≤ 60 s (≤ 32 nbrs) or 120 s | `hello::{DigestAdvertiser, needs_digest_req, hello_max_ms, SyncHello}` |
+
+**Proposed pin (needs Writey's OK):** the sync beacon is 6 B,
+`type 0x48 | flags | digest_id[4]` (`DIGEST_REQ` = `0x52`, same layout).
+With the previous 12 B beacon the idle budget failed at 32 neighbours
+(p95 1.17 MB/day); with 6 B it is 0.83 MB/day.
 
 ## Stubs / not done
 
@@ -73,8 +62,7 @@ apply; padding fits the 1 MiB cap.
   tied to `blinded_label(signer_pk, epoch)`).
 - `tag_exporter` agrees only when members share the MLS epoch (TODO in
   `mls/group.rs`: also try the previous MLS epoch during commit races).
-- Carry tags are not yet produced by `ble::gossip`; the discovery-flood
-  amendment is only in the simulator.
+- Carry tags / scoped flood are not yet wired into `ble::gossip`.
 - Reconciliation runs over one combined set of shared-tag items; per-tag
   scoping/handshake message and BLE 3-round-trip cap are not enforced.
 - Media: no "nearest holder" discovery; no bao-style verified streaming.

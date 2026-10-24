@@ -12,13 +12,19 @@ fn main() {
     let on = |s: &str| which == "all" || which == s;
     println!("seed = {seed:#x}");
     if on("sy1") {
-        for (n, r) in [(1_000, 1), (10_000, 1), (10_000, 2)] {
+        for (n, r) in [
+            (1_000, 8),
+            (10_000, 8),
+            (10_000, 24),
+            (10_000, 32),
+            (10_000, 48),
+        ] {
             let t = Instant::now();
             let mut p = sy1::Sy1Params::new(n, seed);
-            p.radio_radius = r;
+            p.radio_neighbours = r;
             let rep = sy1::run(&p);
             println!(
-                "SY1 n={n} radius={r}: {rep:?} ({} ms)",
+                "SY1 n={n} neighbours={r}: {rep:?} ({} ms)",
                 t.elapsed().as_millis()
             );
         }
@@ -30,12 +36,7 @@ fn main() {
         println!("SY3: {:?}", sy23::sy3(55, 500, 10, seed));
     }
     if on("sy4") {
-        for s in [
-            sy4::Strategy::Flood,
-            sy4::Strategy::Sync22,
-            sy4::Strategy::Sync22PerMember,
-            sy4::Strategy::Sync22Discovery,
-        ] {
+        for s in [sy4::Strategy::Flood, sy4::Strategy::Sync22] {
             for w in [1, 4] {
                 println!("SY4 w={w}: {:?}", sy4::run(s, w, 4, 0.3, 200, 10, seed));
             }

@@ -19,27 +19,26 @@ fn sy1_10k_nodes_median_under_5mb_and_sublinear_growth() {
 }
 
 #[test]
-fn sy1_idle_overhead_under_1mb_at_8_neighbours() {
+fn sy1_idle_overhead_under_1mb_up_to_32_neighbours() {
+    // §22.7(11): idle overhead ≤ 1 MB/day per node with up to 32 neighbours.
     for seed in SEEDS {
-        let r = sy1::run(&sy1::Sy1Params::new(10_000, seed));
-        assert_eq!(r.radio_neighbours, 8);
-        assert!(r.idle_overhead_p95 <= 1_000_000, "{r:?}");
+        for k in [8, 24, 32] {
+            let mut p = sy1::Sy1Params::new(10_000, seed);
+            p.radio_neighbours = k;
+            let r = sy1::run(&p);
+            assert_eq!(r.radio_neighbours, k);
+            assert!(r.idle_overhead_p95 <= 1_000_000, "k={k}: {r:?}");
+        }
     }
 }
 
 #[test]
-fn sy1_finding_metadata_budget_gaps() {
-    // Documented findings (see docs/SYNC-v0.2.md):
-    // - at 24 radio neighbours idle overhead exceeds 1 MB/day (5-min full
-    //   digest refresh received from every neighbour dominates);
-    // - for active nodes metadata is > 2 % of their own payload, both raw
-    //   and above the idle baseline.
-    let mut p = sy1::Sy1Params::new(10_000, SEEDS[0]);
-    p.radio_radius = 2;
-    let r = sy1::run(&p);
-    assert!(r.idle_overhead_median > 1_000_000, "{r:?}");
-    assert!(r.active_meta_ratio_raw_median > 0.02, "{r:?}");
-    assert!(r.active_meta_ratio_incremental_median > 0.02, "{r:?}");
+fn sy1_per_message_metadata_within_budget() {
+    // §22.7(10): ≤ max(256 B, 10 % of ciphertext) per delivered envelope.
+    for seed in SEEDS {
+        let r = sy1::run(&sy1::Sy1Params::new(10_000, seed));
+        assert!(r.per_message_metadata <= r.per_message_limit, "{r:?}");
+    }
 }
 
 #[test]
@@ -71,31 +70,22 @@ fn sy3_week_offline_catch_up_within_1_2x() {
 }
 
 #[test]
-fn sy4_six_hops_30pct_churn_98pct_with_proposed_discovery() {
+fn sy4_six_hops_30pct_churn_100pct_cold_and_warm() {
+    // §22.7(9): 100 % delivery, cold and warm, fewer transmissions than
+    // flooding; §22.7(10) per-message metadata including caused deltas.
     for seed in SEEDS {
         for width in [1, 4] {
             let flood = sy4::run(sy4::Strategy::Flood, width, 4, 0.3, 60, 10, seed);
-            let d = sy4::run(sy4::Strategy::Sync22Discovery, width, 4, 0.3, 60, 10, seed);
-            assert!(d.delivery_rate >= 0.98, "{d:?}");
-            assert!(d.cold_delivery_rate >= 0.98, "{d:?}");
+            let r = sy4::run(sy4::Strategy::Sync22, width, 4, 0.3, 60, 10, seed);
+            assert_eq!(r.cold_delivery_rate, 1.0, "{r:?}");
+            assert_eq!(r.warm_delivery_rate, 1.0, "{r:?}");
+            assert_eq!(r.delivery_rate, 1.0, "{r:?}");
             assert!(
-                d.delivery_rate >= flood.delivery_rate - 0.01,
-                "{d:?} {flood:?}"
+                r.mean_transmissions_per_msg < flood.mean_transmissions_per_msg,
+                "{r:?} {flood:?}"
             );
-            assert!(d.mean_transmissions_per_msg < flood.mean_transmissions_per_msg);
+            assert!(r.metadata_per_delivered <= 256.0, "{r:?}");
         }
-    }
-}
-
-#[test]
-fn sy4_finding_section_22_7_1_as_written_misses_target() {
-    // Documented finding: with the §22.7(1) rules as written (activity-gated
-    // carry tags on the shared chat tag) delivery on a static 6-hop path is
-    // far below 98 %; cold start is 0 %.
-    for width in [1, 4] {
-        let r = sy4::run(sy4::Strategy::Sync22, width, 4, 0.3, 60, 10, SEEDS[0]);
-        assert!(r.delivery_rate < 0.98, "{r:?}");
-        assert_eq!(r.cold_delivery_rate, 0.0, "{r:?}");
     }
 }
 

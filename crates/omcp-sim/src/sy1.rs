@@ -3,8 +3,8 @@
 //! overhead when idle).
 //!
 //! Model (one simulated day):
-//! - Nodes sit on a torus grid; radio neighbours are within Chebyshev
-//!   distance `radio_radius` (1 → 8 neighbours, 2 → 24). Each node's
+//! - Nodes sit on a torus grid; radio neighbours are the
+//!   `radio_neighbours` nearest grid nodes (8, 24, 32, …). Each node's
 //!   neighbourhood changes `neighbourhood_changes_per_hour` times (Poisson).
 //! - Each node has ~50 1:1 contacts (half within distance 5, half anywhere)
 //!   and 5 groups of 8 (local) — ~55 rotating tags.
@@ -12,19 +12,25 @@
 //!
 //! Executed with real encodings / state machines:
 //! - Hellos (12 B broadcast) on the real `HelloTimer` schedule (1 s after a
-//!   change, doubling to 60 s).
-//! - Digests: a full padded cuckoo digest broadcast every 5 min, and real
-//!   slot deltas at each 6 h tag rotation (old tags removed, new inserted,
-//!   decoy padding kept constant).
+//!   change, doubling to 60 s; 120 s above 32 neighbours).
+//! - Digests (§22.7(11)): a full padded cuckoo digest broadcast as the 30-min
+//!   safety refresh, a unicast full digest exchanged with each new neighbour,
+//!   and real slot deltas at each 6 h tag rotation (decoy padding constant).
 //! - Broadcasts are charged to the sender (tx) and to every radio neighbour
 //!   (rx).
 //! - Per 15-min window each node opens `encounters_per_window` links; peers
 //!   sharing a chat run range reconciliation (charged the measured in-sync
 //!   session cost, which is what running it gives after delivery).
 //!
-//! Modelled per message: binary spray-and-wait (L = 8) charged as 7 envelope
-//! transmissions among the sender's radio neighbours, then one delivery
+//! Modelled per message: `RELAY_TX_PER_MSG` relay transmissions among the
+//! sender's radio neighbours (≈ SY4 warm path cost), then one delivery
 //! transmission per recipient. Both ends of every transmission are charged.
+//!
+//! Per-message metadata (§22.7(10)) per delivered envelope: `EnvelopeV1`
+//! header (41 B) + chat-tag TLV (10 B) + sub-tag TLV (2 + 8·recipients B,
+//! chats ≤ 8 members) + reconciliation bytes caused by the message (0 here:
+//! recipients are already in sync when they reconcile). Carry-state digest
+//! deltas caused by traffic are measured in SY4.
 //!
 //! Metrics: *payload* of a node = envelopes it authored or that were
 //! delivered to it as a member. *Overhead* = everything else it sent or
@@ -33,7 +39,10 @@
 use omcp_core::sync::cuckoo::CuckooFilter;
 use omcp_core::sync::hello::{HelloTimer, DIGEST_REFRESH_MS, HELLO_BYTES};
 use omcp_core::sync::recon::{run_session, Item, Reconciler};
-use omcp_core::sync::routing::SPRAY_COPIES;
+use omcp_core::sync::tag::SUBTAG_MAX_MEMBERS;
+
+/// Relay transmissions charged per message (≈ SY4 warm path).
+pub const RELAY_TX_PER_MSG: usize = 7;
 use omcp_core::sync::tag::{mailbox_tag, MailboxTag};
 use omcp_core::sync::SplitMix64;
 
@@ -49,7 +58,7 @@ pub struct Sy1Params {
     pub group_size: usize,
     pub windows: usize,
     pub encounters_per_window: usize,
-    pub radio_radius: i64,
+    pub radio_neighbours: usize,
     pub neighbourhood_changes_per_hour: f64,
     pub seed: u64,
 }
@@ -65,7 +74,7 @@ impl Sy1Params {
             group_size: 8,
             windows: 96,
             encounters_per_window: 4,
-            radio_radius: 1,
+            radio_neighbours: 8,
             neighbourhood_changes_per_hour: 2.0,
             seed,
         }
@@ -89,13 +98,35 @@ pub struct Sy1Report {
     pub idle_overhead_p95: u64,
     /// Median idle node: metadata only (tx + rx), bytes/day.
     pub idle_metadata_median: u64,
-    /// Active nodes, median of metadata / own payload (all metadata).
-    pub active_meta_ratio_raw_median: f64,
-    /// Active nodes, median of (metadata − idle median metadata) / payload.
-    pub active_meta_ratio_incremental_median: f64,
+    /// §22.7(10): mean per-message metadata per delivered envelope (bytes).
+    pub per_message_metadata: f64,
+    /// §22.7(10) limit: max(256 B, 10 % of the ciphertext).
+    pub per_message_limit: f64,
 }
 
 const TAG_EPOCHS_PER_DAY: usize = 4;
+
+/// The `k` nearest grid nodes (Euclidean on the torus, ties by index).
+fn nearest(i: usize, side: usize, n: usize, k: usize) -> Vec<u32> {
+    let r = ((k as f64).sqrt() as i64) + 2;
+    let (x, y) = ((i % side) as i64, (i / side) as i64);
+    let mut v: Vec<(i64, u32)> = Vec::new();
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let nx = (x + dx).rem_euclid(side as i64) as usize;
+            let ny = (y + dy).rem_euclid(side as i64) as usize;
+            let j = ny * side + nx;
+            if j < n && j != i {
+                v.push((dx * dx + dy * dy, j as u32));
+            }
+        }
+    }
+    v.sort_unstable();
+    v.dedup_by_key(|e| e.1);
+    let mut out: Vec<u32> = v.into_iter().take(k).map(|e| e.1).collect();
+    out.sort_unstable();
+    out
+}
 
 fn neighbours(i: usize, side: usize, n: usize, r: i64) -> Vec<u32> {
     let (x, y) = ((i % side) as i64, (i / side) as i64);
@@ -123,7 +154,7 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
     let mut rng = SplitMix64(p.seed);
     let side = (n as f64).sqrt().ceil() as usize;
     let radio: Vec<Vec<u32>> = (0..n)
-        .map(|i| neighbours(i, side, n, p.radio_radius))
+        .map(|i| nearest(i, side, n, p.radio_neighbours))
         .collect();
     let near: Vec<Vec<u32>> = (0..n).map(|i| neighbours(i, side, n, 5)).collect();
 
@@ -220,13 +251,15 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
             ch.push(t as u64);
         }
         ch.sort_unstable();
-        bcast[i] += HelloTimer::count_hellos(0, day_ms, &ch) * HELLO_BYTES;
-        // Digests: full refresh every 5 min + real deltas at each tag rotation.
+        bcast[i] += HelloTimer::count_hellos(0, day_ms, &ch, radio[i].len()) * HELLO_BYTES;
+        // Digests: 30-min safety refresh + new-neighbour unicast + deltas.
         let tags0: Vec<MailboxTag> = member_of[i].iter().map(|c| tag_of(*c, 0)).collect();
         let mut f = CuckooFilter::build_digest(&tags0, 64, &mut rng).expect("digest");
         let refreshes = day_ms / DIGEST_REFRESH_MS;
         bcast[i] += refreshes * f.encoded_len() as u64;
-        digests_sent += refreshes;
+        // Each change brings one new neighbour: full digest each way (unicast).
+        meta[i] += ch.len() as u64 * 2 * f.encoded_len() as u64;
+        digests_sent += refreshes + 2 * ch.len() as u64;
         for e in 1..TAG_EPOCHS_PER_DAY as u64 {
             let old = f.clone();
             let mut ok = true;
@@ -251,6 +284,7 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
     }
 
     let mut recon_sessions = 0u64;
+    let (mut per_msg_meta, mut delivered_envs) = (0u64, 0u64);
     let mut mi = 0;
     for w in 0..p.windows {
         // New messages: spray + delivery to members (logs are then in sync).
@@ -263,7 +297,15 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
             id[..8].copy_from_slice(&rng.next_u64().to_le_bytes());
             log[c as usize].push(Item { ts, id });
             payload[s] += TEXT_ENVELOPE_BYTES;
-            for _ in 0..SPRAY_COPIES as usize - 1 {
+            let recips = chats[c as usize].len() as u64 - 1;
+            let sub_tlv = if chats[c as usize].len() <= SUBTAG_MAX_MEMBERS {
+                2 + 8 * recips
+            } else {
+                0
+            };
+            per_msg_meta += recips * (41 + 10 + sub_tlv);
+            delivered_envs += recips;
+            for _ in 0..RELAY_TX_PER_MSG {
                 let b = radio[s][rng.below(radio[s].len() as u64) as usize] as usize;
                 data[s] += TEXT_ENVELOPE_BYTES;
                 data[b] += TEXT_ENVELOPE_BYTES;
@@ -322,18 +364,6 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
     let idle_meta_med = median(&mut idle_meta);
     let idle_over_med = median(&mut idle_over);
     let idle_over_p95 = percentile(&idle_over, 95);
-    let mut raw: Vec<f64> = Vec::new();
-    let mut inc: Vec<f64> = Vec::new();
-    for i in (0..n).filter(|i| active[*i]) {
-        raw.push(meta[i] as f64 / payload[i] as f64);
-        inc.push((meta[i] as f64 - idle_meta_med as f64).max(0.0) / payload[i] as f64);
-    }
-    let fmed = |v: &mut Vec<f64>| {
-        v.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
-        v.get(v.len() / 2).copied().unwrap_or(0.0)
-    };
-    let (raw_med, inc_med) = (fmed(&mut raw), fmed(&mut inc));
-
     let mut total: Vec<u64> = (0..n).map(|i| data[i] + meta[i]).collect();
     let med = median(&mut total);
     let sum_meta: u64 = meta.iter().sum();
@@ -354,7 +384,7 @@ pub fn run(p: &Sy1Params) -> Sy1Report {
         idle_overhead_median: idle_over_med,
         idle_overhead_p95: idle_over_p95,
         idle_metadata_median: idle_meta_med,
-        active_meta_ratio_raw_median: raw_med,
-        active_meta_ratio_incremental_median: inc_med,
+        per_message_metadata: per_msg_meta as f64 / delivered_envs.max(1) as f64,
+        per_message_limit: 256f64.max(0.1 * 256.0),
     }
 }
