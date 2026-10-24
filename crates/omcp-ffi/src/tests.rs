@@ -173,3 +173,32 @@ fn preview_detects_known_and_mismatch() {
     let old = p.mismatch_with.unwrap();
     assert_ne!(old.safety_number, p.contact.safety_number);
 }
+
+#[test]
+fn backup_roundtrip_restores_identity_contacts_and_verification() {
+    let a = node("Alice");
+    let b = node("Bob");
+    let c = a.add_contact_from_qr(b.qr_payload()).unwrap();
+    a.set_verified(c.contact_id.clone(), true).unwrap();
+    let pw = "correct horse battery staple 42".to_string();
+    assert!(check_backup_password(pw.clone()).ok);
+    assert!(!check_backup_password("password".into()).ok);
+    let blob = a.create_backup(pw.clone(), "Pixel 8".into(), 42).unwrap();
+    let phrase = a.recovery_phrase().unwrap();
+    assert!(!blob.windows(phrase.len()).any(|w| w == phrase.as_bytes()));
+    let info = backup_info(blob.clone()).unwrap();
+    assert!(info.needs_password && info.created_at_ms == 42);
+    assert!(matches!(
+        open_backup_with_password(blob.clone(), "nope nope nope 1".into()),
+        Err(FfiError::WrongBackupPassword)
+    ));
+    let r = open_backup_with_password(blob, pw).unwrap();
+    assert_eq!(r.phrase, phrase);
+    let a2 = OmcpNode::from_phrase(r.phrase, "Alice".into()).unwrap();
+    assert_eq!(a2.identity().peer_id_hex, a.identity().peer_id_hex);
+    for k in r.contacts {
+        a2.restore_contact(k.contact_id, k.display_name, k.verified)
+            .unwrap();
+    }
+    assert_eq!(a2.contacts(), a.contacts());
+}

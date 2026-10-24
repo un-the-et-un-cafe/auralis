@@ -19,6 +19,7 @@
 #![forbid(unsafe_code)]
 #![allow(missing_docs)] // field-level docs filled as API stabilizes
 
+pub mod backup;
 pub mod ble;
 pub mod error;
 pub mod files;

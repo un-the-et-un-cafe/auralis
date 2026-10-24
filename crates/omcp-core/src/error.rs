@@ -56,6 +56,12 @@ pub enum OmcpError {
     #[error("MLS-PQ extension malformed: {0}")]
     MlsPqMalformed(&'static str),
 
+    #[error("backup error: {0}")]
+    Backup(&'static str),
+
+    #[error("backup authentication failed (wrong password or key)")]
+    BackupAuth,
+
     #[error("file too large: {size} bytes exceeds max {max} bytes")]
     FileTooLarge { size: u64, max: u64 },
 

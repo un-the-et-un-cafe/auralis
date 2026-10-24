@@ -37,7 +37,7 @@ use omcp_core::ble::message::{open_text_envelope, seal_text_envelope};
 use omcp_core::ble::{capabilities, DiscoveryAdvertisement};
 use omcp_core::gateway::policy::{GatewayPolicy, NetworkKind, DEFAULT_DAILY_BYTE_CAP};
 use omcp_core::{
-    recovery, safety, EnvelopeV1, HybridInitiator, HybridResponder, HybridSessionKeys,
+    backup, recovery, safety, EnvelopeV1, HybridInitiator, HybridResponder, HybridSessionKeys,
     StaticIdentity, SUITE_OMCP_2026_A_NAME,
 };
 use zeroize::Zeroizing;
@@ -65,14 +65,20 @@ pub enum FfiError {
     UnknownContact,
     #[error("bad state: {msg}")]
     State { msg: String },
+    #[error("wrong backup password")]
+    WrongBackupPassword,
     #[error("file too large: {size} bytes exceeds {max}")]
     FileTooLarge { size: u64, max: u64 },
 }
 
 impl From<omcp_core::OmcpError> for FfiError {
     fn from(e: omcp_core::OmcpError) -> Self {
-        if let omcp_core::OmcpError::FileTooLarge { size, max } = e {
-            return FfiError::FileTooLarge { size, max };
+        match e {
+            omcp_core::OmcpError::FileTooLarge { size, max } => {
+                return FfiError::FileTooLarge { size, max }
+            }
+            omcp_core::OmcpError::BackupAuth => return FfiError::WrongBackupPassword,
+            _ => {}
         }
         FfiError::Protocol { msg: e.to_string() }
     }
@@ -196,6 +202,77 @@ pub fn suggest_recovery_words(prefix: String) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct PasswordCheck {
+    pub ok: bool,
+    pub score: u8,
+    pub too_short: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupInfo {
+    pub created_at_ms: u64,
+    pub device_hint: String,
+    pub needs_password: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BackupContact {
+    pub contact_id: String,
+    pub display_name: String,
+    pub verified: bool,
+}
+
+/// Decrypted backup: the phrase (to load an [`OmcpNode`]) + contacts to restore.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RestoredBackup {
+    pub phrase: String,
+    pub contacts: Vec<BackupContact>,
+}
+
+/// Backup password policy: ≥ 8 chars and zxcvbn score ≥ 3.
+#[uniffi::export]
+pub fn check_backup_password(password: String) -> PasswordCheck {
+    let c = backup::check_password(&password);
+    PasswordCheck {
+        ok: c.ok,
+        score: c.score,
+        too_short: c.too_short,
+    }
+}
+
+/// Read unencrypted blob metadata (for the restore-on-reinstall prompt).
+#[uniffi::export]
+pub fn backup_info(blob: Vec<u8>) -> Result<BackupInfo, FfiError> {
+    let i = backup::backup_info(&blob)?;
+    Ok(BackupInfo {
+        created_at_ms: i.created_at,
+        device_hint: i.device_hint,
+        needs_password: i.needs_password,
+    })
+}
+
+/// Decrypt a password backup. Wrong password → `WrongBackupPassword`.
+#[uniffi::export]
+pub fn open_backup_with_password(
+    blob: Vec<u8>,
+    password: String,
+) -> Result<RestoredBackup, FfiError> {
+    let c = backup::open_backup(&blob, backup::BackupSecret::Password(&password))?;
+    Ok(RestoredBackup {
+        phrase: recovery::seed_to_phrase(&c.entropy)?.to_string(),
+        contacts: c
+            .contacts
+            .into_iter()
+            .map(|b| BackupContact {
+                contact_id: hex::encode(b.peer_id),
+                display_name: b.name,
+                verified: b.verified,
+            })
+            .collect(),
+    })
+}
+
 /// Product default: 500 MB/day (decimal).
 #[uniffi::export]
 pub fn default_gateway_daily_cap_bytes() -> u64 {
@@ -310,6 +387,42 @@ impl OmcpNode {
             peer_id_hex: hex::encode(self.inner.peer_id),
             display_name: self.inner.name.clone(),
         }
+    }
+
+    /// The 24-word phrase (Settings › Backup › View phrase; gate behind device auth).
+    pub fn recovery_phrase(&self) -> Result<String, FfiError> {
+        Ok(recovery::seed_to_phrase(&self.inner.seed)?.to_string())
+    }
+
+    /// Encrypted backup blob (identity + contacts + verification state).
+    /// The plaintext phrase never leaves this function unencrypted.
+    pub fn create_backup(
+        &self,
+        password: String,
+        device_hint: String,
+        created_at_ms: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        let contacts = self
+            .inner
+            .lock()
+            .contacts
+            .iter()
+            .map(|(id, c)| backup::BackupContact {
+                peer_id: *id,
+                name: c.name.clone(),
+                verified: c.verified,
+            })
+            .collect();
+        let contents = backup::BackupContents {
+            entropy: Zeroizing::new(*self.inner.seed),
+            contacts,
+        };
+        Ok(backup::seal_backup(
+            &contents,
+            backup::BackupSecret::Password(&password),
+            created_at_ms,
+            &device_hint,
+        )?)
     }
 
     /// Contact QR payload: `omcp:1:<peer id hex>:<display name>`.

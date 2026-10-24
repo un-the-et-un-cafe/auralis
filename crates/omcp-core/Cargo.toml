@@ -43,5 +43,12 @@ ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std
 # M5: 24-word recovery phrase (BIP39 English wordlist, 256-bit entropy).
 bip39 = { version = "=2.1.0", default-features = false, features = ["std"] }
 
+# M5: encrypted cloud backup of the recovery phrase (apps/REQUIREMENTS.md
+# "Onboarding & recovery backup"): Argon2id KDF, XChaCha20-Poly1305, CBOR blob.
+argon2 = { version = "=0.5.3", default-features = false, features = ["alloc"] }
+ciborium = "=0.2.2"
+serde = { version = "1", features = ["derive"] }
+zxcvbn = { version = "=3.1.1", default-features = false }
+
 [dev-dependencies]
 hex = "=0.4.3"
