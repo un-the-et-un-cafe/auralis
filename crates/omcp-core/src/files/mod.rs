@@ -3,7 +3,7 @@
 //! Flow:
 //! 1. `content_hash = BLAKE3(plaintext)`
 //! 2. Random 256-bit Content Key; wrap to each recipient (HPKE-style hybrid)
-//! 3. Split into default 16 KiB plaintext chunks; per-chunk ChaCha20-Poly1305
+//! 3. Split into default 64 KiB (§22.7(7)) plaintext chunks; per-chunk ChaCha20-Poly1305
 //! 4. Advertise [`FileMeta`] then serve [`FileChunk`]s; receiver reassembles + verifies hash
 
 mod chunks;
