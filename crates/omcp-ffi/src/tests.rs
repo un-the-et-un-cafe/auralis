@@ -352,3 +352,33 @@ impl<T: std::fmt::Debug> Single<T> for Vec<T> {
         self.pop().unwrap()
     }
 }
+
+#[test]
+fn icloud_key_backup_roundtrip_and_no_plaintext() {
+    let a = node("Alice");
+    let b = node("Bob");
+    let c = a.add_contact_from_qr(b.qr_payload()).unwrap();
+    a.set_verified(c.contact_id.clone(), true).unwrap();
+    let key = generate_backup_key().unwrap();
+    assert_eq!(key.len(), 32);
+    let blob = a
+        .create_backup_with_key(key.clone(), "iPhone".into(), 7)
+        .unwrap();
+    let info = backup_info(blob.clone()).unwrap();
+    assert!(!info.needs_password);
+    // O2: neither the phrase words nor the key appear in the blob.
+    let phrase = a.recovery_phrase().unwrap();
+    for w in phrase.split(' ').filter(|w| w.len() >= 5) {
+        assert!(!blob.windows(w.len()).any(|x| x == w.as_bytes()));
+    }
+    assert!(!blob.windows(32).any(|x| x == key.as_slice()));
+    let r = open_backup_with_key(blob.clone(), key).unwrap();
+    assert_eq!(r.phrase, phrase);
+    assert!(r.contacts[0].verified);
+    let wrong = generate_backup_key().unwrap();
+    assert!(open_backup_with_key(blob.clone(), wrong).is_err());
+    assert!(matches!(
+        open_backup_with_key(blob, vec![0; 31]),
+        Err(FfiError::Invalid { .. })
+    ));
+}

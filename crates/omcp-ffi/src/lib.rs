@@ -334,15 +334,47 @@ pub fn open_backup_with_password(
     blob: Vec<u8>,
     password: String,
 ) -> Result<RestoredBackup, FfiError> {
-    let c = backup::open_backup(&blob, backup::BackupSecret::Password(&password))?;
+    restored(backup::open_backup(
+        &blob,
+        backup::BackupSecret::Password(&password),
+    )?)
+}
+
+/// Decrypt an iCloud "No password" backup with the 256-bit iCloud Keychain key.
+#[uniffi::export]
+pub fn open_backup_with_key(blob: Vec<u8>, key: Vec<u8>) -> Result<RestoredBackup, FfiError> {
+    let key = platform_key(key)?;
+    restored(backup::open_backup(
+        &blob,
+        backup::BackupSecret::PlatformKey(&key),
+    )?)
+}
+
+/// Fresh random 256-bit key for the iCloud "No password" backup mode.
+#[uniffi::export]
+pub fn generate_backup_key() -> Result<Vec<u8>, FfiError> {
+    let mut k = Zeroizing::new([0u8; 32]);
+    getrandom_fill(&mut k[..])?;
+    Ok(k.to_vec())
+}
+
+fn platform_key(key: Vec<u8>) -> Result<Zeroizing<[u8; 32]>, FfiError> {
+    let key = Zeroizing::new(key);
+    let arr: [u8; 32] = key[..]
+        .try_into()
+        .map_err(|_| invalid("backup key must be 32 bytes"))?;
+    Ok(Zeroizing::new(arr))
+}
+
+fn restored(c: backup::BackupContents) -> Result<RestoredBackup, FfiError> {
     Ok(RestoredBackup {
         phrase: recovery::seed_to_phrase(&c.entropy)?.to_string(),
         contacts: c
             .contacts
-            .into_iter()
+            .iter()
             .map(|b| BackupContact {
                 contact_id: hex::encode(b.peer_id),
-                display_name: b.name,
+                display_name: b.name.clone(),
                 verified: b.verified,
             })
             .collect(),
@@ -465,6 +497,37 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+impl OmcpNode {
+    fn seal(
+        &self,
+        secret: backup::BackupSecret<'_>,
+        device_hint: &str,
+        created_at_ms: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        let contacts = self
+            .inner
+            .lock()
+            .contacts
+            .iter()
+            .map(|(id, c)| backup::BackupContact {
+                peer_id: *id,
+                name: c.name.clone(),
+                verified: c.verified,
+            })
+            .collect();
+        let contents = backup::BackupContents {
+            entropy: Zeroizing::new(*self.inner.seed),
+            contacts,
+        };
+        Ok(backup::seal_backup(
+            &contents,
+            secret,
+            created_at_ms,
+            device_hint,
+        )?)
+    }
+}
+
 /// Local node: identity, contacts, offline queue.
 #[derive(uniffi::Object)]
 pub struct OmcpNode {
@@ -517,27 +580,27 @@ impl OmcpNode {
         device_hint: String,
         created_at_ms: u64,
     ) -> Result<Vec<u8>, FfiError> {
-        let contacts = self
-            .inner
-            .lock()
-            .contacts
-            .iter()
-            .map(|(id, c)| backup::BackupContact {
-                peer_id: *id,
-                name: c.name.clone(),
-                verified: c.verified,
-            })
-            .collect();
-        let contents = backup::BackupContents {
-            entropy: Zeroizing::new(*self.inner.seed),
-            contacts,
-        };
-        Ok(backup::seal_backup(
-            &contents,
+        self.seal(
             backup::BackupSecret::Password(&password),
-            created_at_ms,
             &device_hint,
-        )?)
+            created_at_ms,
+        )
+    }
+
+    /// iCloud "No password" mode: the blob is sealed under a 256-bit key that the app
+    /// keeps in iCloud Keychain (synchronizable). See [`generate_backup_key`].
+    pub fn create_backup_with_key(
+        &self,
+        key: Vec<u8>,
+        device_hint: String,
+        created_at_ms: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        let key = platform_key(key)?;
+        self.seal(
+            backup::BackupSecret::PlatformKey(&key),
+            &device_hint,
+            created_at_ms,
+        )
     }
 
     /// Contact QR payload: `omcp:1:<peer id hex>:<display name>`.
