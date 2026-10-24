@@ -142,7 +142,6 @@ fun OmcpRoot(
                     onOpenChat = { nav.navigate(Routes.thread(it)) },
                     onAddContact = { nav.navigate(Routes.ContactAdd) },
                     onBackup = { nav.navigate(Routes.Backup) },
-                    onVerify = { nav.navigate(Routes.security(it)) },
                 )
             }
             composable(Routes.Communities) { CommunitiesHomeScreen() }

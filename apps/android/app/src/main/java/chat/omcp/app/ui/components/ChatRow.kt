@@ -13,8 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -43,8 +42,6 @@ fun ChatRow(
     model: ChatRowModel,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Tap target for the "not verified" shield → safety-number verification. */
-    onVerify: (() -> Unit)? = null,
 ) {
     val c = LocalOmcpColors.current
     Row(
@@ -69,16 +66,7 @@ fun ChatRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(model.title, style = MaterialTheme.typography.titleMedium)
                 if (model.verified) {
-                    Icon(
-                        Icons.Default.VerifiedUser,
-                        contentDescription = "Verified contact",
-                        tint = c.ok,
-                        modifier = Modifier
-                            .padding(start = 4.dp)
-                            .size(16.dp),
-                    )
-                } else if (!model.isGroup) {
-                    NotVerifiedShield(onVerify)
+                    VerifiedBadge()
                 }
             }
             Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
@@ -119,17 +107,15 @@ fun ChatRow(
     }
 }
 
-/** Small, unobtrusive "not verified" indicator; taps through to safety-number verification. */
+/** Small verified check badge next to a name (shown only for verified contacts). */
 @Composable
-fun NotVerifiedShield(onVerify: (() -> Unit)?, modifier: Modifier = Modifier) {
-    val c = LocalOmcpColors.current
+fun VerifiedBadge(modifier: Modifier = Modifier) {
     Icon(
-        Icons.Default.Shield,
-        contentDescription = "Not verified. Verify safety number",
-        tint = c.ink3,
+        Icons.Default.Verified,
+        contentDescription = "Verified contact",
+        tint = LocalOmcpColors.current.ok,
         modifier = modifier
             .padding(start = 4.dp)
-            .size(16.dp)
-            .then(if (onVerify != null) Modifier.clickable(onClick = onVerify) else Modifier),
+            .size(16.dp),
     )
 }
