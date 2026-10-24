@@ -436,8 +436,41 @@ omcp/
 | Version | Date | Notes |
 |---------|------|-------|
 | 0.1 | 2026-10-23 | Initial specification for Proggy / Pipely handoff |
+| 0.1.3 | 2026-10-24 | §19.1 burn after read (`burn` inner header, `OPENED` receipt) |
 
 **Next editors:** Implementers SHOULD open PRs against this file for any wire-format change. Semantic versioning: breaking wire changes → 1.0 major after first production interop; until then 0.x may break with explicit changelog entries.
+
+### 19.1 Burn after read: inner `burn` header (v0.1.3)
+
+This section is normative for clients that implement burn after read (apps/REQUIREMENTS.md "Burn after read (v0.1.3)"). Reference: `omcp-core::burn`.
+
+**Inner header (encrypted).** The AEAD plaintext of an application message starts with an inner header tag:
+
+```
+InnerV1 {
+  tag:   u8          // 0x00 = no inner header, 0x01 = burn
+  burn:  BurnHeader  // present iff tag == 0x01
+  body:  [..]        // content (text, or a media descriptor carrying the wrapped media key)
+}
+BurnHeader {         // 9 bytes, big-endian
+  mode:       u8     // 0 = on_open (view once), 1 = timer
+  secs:       u32    // on_open: 0; timer: one of 10, 60, 3600
+  unread_ttl: u32    // seconds; one of 3600 (1 h), 86400 (24 h), 604800 (7 d)
+}
+```
+
+The `burn` header is inside the ciphertext, so relays, gateways and store-and-forward nodes MUST NOT be able to tell that a message is ephemeral. Receivers MUST reject headers with values outside the sets above.
+
+**Alignment with the envelope expiry.** The sender MUST set the outer expiry (`expiry` / `expires_at` of the opaque envelope, §9 item 2, `OpaqueEnvelope.expiry_ms` in the reference) to `sent_ms + unread_ttl × 1000`. Relays and store-and-forward nodes (§8.4) MUST drop the opaque envelope at or after `expires_at` and MUST NOT store an envelope that has already expired. The receiver MUST delete an unopened burn message at the same instant. `expires_at` is the only outer signal; every message type SHOULD carry one, so its presence doesn't reveal burn.
+
+**Lifecycle.**
+1. *on_open*: content is shown once; it is deleted when the viewer closes. *timer*: deletion happens `secs` after opening (or on close, whichever comes first).
+2. **Single-use media key.** For burn media, the Content Key (§7) MUST be used for exactly one decryption. The receiver deletes it once the media is viewed, and the encrypted blob is deleted from the relay and the local cache.
+3. **`OPENED` receipt.** On first open, the receiver sends an encrypted control message `OPENED { type = 0x30 u8, msg_id [16]u8, opened_ms u64 BE }`. When the sender receives it, it MUST delete its local copy of the media key, and it SHOULD delete its own copy of the content when the timer runs out.
+4. **Crypto-shredding.** Burnable content at rest MUST be encrypted under a per-message key that is held only in memory (or in a separate encrypted table), and deletion MUST zeroize that key.
+5. **Groups.** Each member burns independently after they open the message. Burn MUST NOT be offered in groups or channels with more than 256 members.
+
+Burnable content MUST be excluded from notification previews, backups, search indexes and share sheets.
 
 ---
 

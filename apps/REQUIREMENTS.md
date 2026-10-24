@@ -109,3 +109,31 @@ Find people nearby to meet, without a central server and without sharing exact l
 - D3: A one-way like reveals nothing to either side; a mutual like creates a match on both devices within 5 s in BLE range.
 - D4: A Nearby profile can't be linked to the chat identity before an explicit mutual reveal (keys differ, and Nearby keys rotate every 24 h).
 - D5: Blocking hides the user across key rotations; reporting sends a bundle only with the reporter's confirmation.
+
+## Burn after read (v0.1.3)
+Messages and images that delete themselves once they've been read.
+
+### Behaviour
+- **Per message**: the 🔥 toggle in the composer (long-press Send) marks the next message or image as *burn after read*. **Per chat**: a "Burn after read" option in Chat info, with the timers *on open*, 10 s, 1 min, 1 h, or off.
+- **Text**: it shows blurred ("Tap to read"). The timer starts when it's opened, with a visible countdown ring, and when it runs out the message is deleted on both sides.
+- **Images and videos**: they open full-screen once (*view once*). They can't be saved, forwarded or quoted, and once they're closed or the timer runs out they're gone. Only a placeholder is left: "🔥 Photo opened".
+- **Unread expiry**: anything not opened within 7 days (the sender chooses 1 h, 24 h or 7 days) is deleted unopened.
+- **Groups and communities**: messages burn for each member separately after that member opens them. In channels with > 256 members it's not available (use the stories TTL).
+
+### Protocol (PROTOCOL.md §19.x, `burn` header)
+- The inner, encrypted message header gets `burn: {mode: on_open|timer, secs, unread_ttl}`. It's encrypted, so relays and gateways can't see that a message is ephemeral.
+- The outer envelope `expires_at` = sent + unread_ttl, so relays and store-and-forward nodes drop the opaque envelope once it expires.
+- The **media key is single-use**. It's deleted from the receiver once the media is viewed, and the encrypted media blob is deleted from the relay and cache. The sender deletes its local copy of the media key once it gets an `OPENED` receipt, which is sent as an encrypted control message.
+
+### Device-side protection
+- Burnable content is kept only in an encrypted, in-memory store or a separate encrypted DB table. Deletion zeroizes the keys, so it's crypto-shredded and can't be recovered from disk.
+- **Screenshots**: Android uses `FLAG_SECURE` on the viewer (screenshots and screen recording show black). iOS detects screenshots and screen recording, hides the content during recording, and notifies the sender ("📸 Took a screenshot").
+- Burnable content never appears in notification previews, backups, the search index or share sheets.
+- **Honest copy**: the app tells users plainly that burn after read can't stop someone photographing the screen with another device.
+
+### Acceptance tests
+- B1: A burn-after-read text is gone from both devices ≤ 1 s after the timer runs out, and there's no trace in the DB file afterwards (forensic test).
+- B2: A view-once image can be opened exactly once. A second tap shows the placeholder, and save, forward and quote are disabled.
+- B3: On Android the viewer produces a black screenshot; on iOS a screenshot sends the sender a notice.
+- B4: An unopened burn message expires at unread_ttl on the receiver and is dropped by relays (envelope `expires_at`).
+- B5: Burn content is excluded from cloud backup, notifications and search.
