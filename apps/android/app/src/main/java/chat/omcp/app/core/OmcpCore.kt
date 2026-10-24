@@ -18,6 +18,8 @@ data class Contact(
     val restoredAtMs: Long? = null,
     /** "Restored, not verified" until re-verified by QR in person (RS2, design §5.98). */
     val restoredUnverified: Boolean = false,
+    /** Their device's X25519 key from an identity backup (v0.1.4a); null for legacy contacts. */
+    val dhHex: String? = null,
 )
 
 /** RS1: the contact is on a new (restored) device; a system notice was added to the chat. */

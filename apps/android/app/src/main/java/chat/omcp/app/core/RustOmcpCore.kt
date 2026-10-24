@@ -67,7 +67,7 @@ class RustOmcpCore : OmcpCore {
     }
 
     override fun restoreContact(contact: Contact) =
-        n().restoreContact(contact.id, contact.displayName, contact.verified)
+        n().restoreContactWithKey(contact.id, contact.displayName, contact.verified, contact.dhHex)
 
     override fun contacts() = n().contacts().map { it.toContact() }
     override fun setVerified(contactId: String, verified: Boolean) = n().setVerified(contactId, verified)
@@ -130,7 +130,7 @@ class RustOmcpCore : OmcpCore {
 
     override fun openBackup(blob: ByteArray, password: String): RestoredBackup = try {
         val r = chat.omcp.ffi.openBackupWithPassword(blob, password)
-        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified) }, r.displayName, r.history)
+        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified, dhHex = it.dhHex) }, r.displayName, r.history)
     } catch (e: FfiException.WrongBackupPassword) {
         throw WrongBackupPasswordException()
     } catch (e: FfiException.BackupTooNew) {

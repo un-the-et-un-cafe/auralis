@@ -93,7 +93,8 @@ class ChatBackupBridgeTest {
         assertNotEquals(oldAliceQr, alice2.core.qrPayload())
 
         // RS1: Bob sees the unsuppressible notice on the next link; RS2: verified cleared.
-        link(bob, alice2, aliceId)
+        // v0.1.4a: the restored device has a new X25519, so it dials first.
+        link(alice2, bob, bobId)
         assertEquals(1, bob.notices.size)
         val c = bob.core.contacts().first { it.id == aliceId }
         assertFalse(c.verified)
