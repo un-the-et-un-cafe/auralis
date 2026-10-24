@@ -79,11 +79,15 @@ public final class MeshRepository {
     public var onChange: (() -> Void)?
     public var genericBody = "New message"
     private let clock: () -> Int64
+    /// Encrypted local store (Rust core). nil = everything in memory (tests, previews).
+    private let dbPath: String?
     public private(set) var messages: [String: [ChatMessage]] = [:]
 
-    public init(core: OmcpCore, store: AppStore, clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+    public init(core: OmcpCore, store: AppStore, dbPath: String? = nil,
+                clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.core = core
         self.store = store
+        self.dbPath = dbPath
         self.clock = clock
     }
 
@@ -92,13 +96,59 @@ public final class MeshRepository {
     /// Load identity + contacts from the store on launch. Returns false if there is no identity yet.
     @discardableResult public func restore() -> Bool {
         guard let phrase = store.recoveryPhrase else { return false }
-        guard (try? core.load(phrase: phrase, displayName: store.displayName ?? "Me")) != nil else { return false }
+        guard (try? loadCore(phrase: phrase, name: store.displayName ?? "Me")) != nil else { return false }
         for c in store.contacts { try? core.restoreContact(c) }
+        // Contacts used to live in plain UserDefaults: once in the encrypted store, drop them.
+        if dbPath != nil, !store.contacts.isEmpty { store.contacts = [] }
+        loadMessages()
         return true
     }
 
+    private func loadCore(phrase: String, name: String) throws {
+        guard let path = dbPath else {
+            try core.load(phrase: phrase, displayName: name)
+            return
+        }
+        let key: Data
+        if let k = store.storageKey { key = k } else {
+            key = try core.generateStorageKey()
+            store.storageKey = key
+        }
+        do {
+            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
+        } catch CoreError.storageUnavailable {
+            // Unreadable with this key (Keychain reset, other identity, newer app): its data is
+            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
+            let fm = FileManager.default
+            try? fm.moveItem(atPath: path, toPath: "\(path).unreadable-\(clock())")
+            try? fm.removeItem(atPath: "\(path)-journal")
+            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
+        }
+    }
+
+    /// Reload chats from the core's encrypted store (after a restart or a restore).
+    private func loadMessages() {
+        var all: [String: [ChatMessage]] = [:]
+        for c in core.contacts() {
+            let ms = core.storedMessages(c.id).map(Self.chatMessage)
+            if !ms.isEmpty { all[c.id] = ms }
+        }
+        messages = all
+    }
+
+    private static func chatMessage(_ m: StoredMessageInfo) -> ChatMessage {
+        var file = m.file.map {
+            FileAttachment(name: $0.name, sizeBytes: $0.size, mime: $0.mime, state: $0.state, doneBytes: $0.doneBytes, localPath: $0.localPath)
+        }
+        if file == nil, let mime = m.mime {
+            file = FileAttachment(name: mime.hasPrefix("video/") ? "video" : "photo", sizeBytes: 0, mime: mime, state: .received)
+        }
+        return ChatMessage(id: m.id, contactId: m.contactId, text: m.text, mine: m.mine, timeMs: m.timeMs, status: m.status,
+                           file: file, burn: m.burn, burnState: m.burnState, burnAtMs: m.burnAtMs)
+    }
+
     public func saveIdentity(phrase: String, name: String) throws {
-        try core.load(phrase: phrase, displayName: name)
+        try loadCore(phrase: phrase, name: name)
         store.recoveryPhrase = phrase
         store.displayName = name
     }
@@ -106,8 +156,11 @@ public final class MeshRepository {
     public func restoreFromBackup(_ r: RestoredBackup, name: String, method: String) throws {
         try saveIdentity(phrase: r.phrase, name: name)
         for c in r.contacts { try core.restoreContact(c) }
+        if let h = r.history { try core.restoreHistory(h) }
         store.backupMethods.insert(method)
         persistContacts()
+        loadMessages()
+        changed()
     }
 
     public var contacts: [Contact] { core.contacts() }
@@ -146,7 +199,8 @@ public final class MeshRepository {
     }
 
     private func persistContacts() {
-        store.contacts = core.contacts()
+        // With a local store the Rust core persists contacts (encrypted); defaults only without one.
+        if dbPath == nil { store.contacts = core.contacts() }
         changed()
     }
 
@@ -223,6 +277,7 @@ public final class MeshRepository {
     /// From the link: a file arrived and its BLAKE3 hash matched (checked in Rust).
     public func onFileReceived(_ r: ReceivedFileInfo) {
         let path = fileSink?.save(r)
+        if fileSink != nil { try? core.setReceivedFilePath(r.transferId, path: path) }
         let ok = path != nil || fileSink == nil
         let f = FileAttachment(name: r.name, sizeBytes: UInt64(r.bytes.count), mime: r.mime, state: ok ? .received : .failed,
                                doneBytes: UInt64(r.bytes.count), localPath: path)

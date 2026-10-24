@@ -30,6 +30,8 @@ interface AppStore {
     var restoreFailures: Int
     var restoreRound: Int
     var restoreLockedUntilMs: Long
+    /** 256-bit key of the encrypted local store. On device it is sealed with a Keystore key. */
+    var storageKey: ByteArray?
 }
 
 class InMemoryAppStore : AppStore {
@@ -49,4 +51,5 @@ class InMemoryAppStore : AppStore {
     override var restoreFailures = 0
     override var restoreRound = 0
     override var restoreLockedUntilMs = 0L
+    override var storageKey: ByteArray? = null
 }

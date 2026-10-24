@@ -263,9 +263,59 @@ public struct BackupMeta: Equatable, Sendable {
 public struct RestoredBackup: Equatable, Sendable {
     public var phrase: String
     public var contacts: [Contact]
-    public init(phrase: String, contacts: [Contact]) {
+    /// Chats, messages, file metadata and pending queue (never burn content); nil for older backups.
+    public var history: Data?
+    public init(phrase: String, contacts: [Contact], history: Data? = nil) {
         self.phrase = phrase
         self.contacts = contacts
+        self.history = history
+    }
+}
+
+/// File-transfer metadata as persisted by the Rust local store.
+public struct StoredFileInfo: Equatable, Sendable {
+    public var name: String
+    public var mime: String
+    public var size: UInt64
+    public var state: FileAttachment.State
+    public var doneBytes: UInt64
+    public var localPath: String?
+    public init(name: String, mime: String, size: UInt64, state: FileAttachment.State, doneBytes: UInt64, localPath: String?) {
+        self.name = name
+        self.mime = mime
+        self.size = size
+        self.state = state
+        self.doneBytes = doneBytes
+        self.localPath = localPath
+    }
+}
+
+/// A message as persisted by the Rust local store. Burn messages never carry text here.
+public struct StoredMessageInfo: Equatable, Sendable {
+    public var id: String
+    public var contactId: String
+    public var text: String
+    public var mine: Bool
+    public var timeMs: Int64
+    public var status: ChatMessage.Status
+    public var mime: String?
+    public var burn: BurnSpec?
+    public var burnState: ChatMessage.BurnState
+    public var burnAtMs: Int64?
+    public var file: StoredFileInfo?
+    public init(id: String, contactId: String, text: String, mine: Bool, timeMs: Int64, status: ChatMessage.Status,
+                mime: String?, burn: BurnSpec?, burnState: ChatMessage.BurnState, burnAtMs: Int64?, file: StoredFileInfo?) {
+        self.id = id
+        self.contactId = contactId
+        self.text = text
+        self.mine = mine
+        self.timeMs = timeMs
+        self.status = status
+        self.mime = mime
+        self.burn = burn
+        self.burnState = burnState
+        self.burnAtMs = burnAtMs
+        self.file = file
     }
 }
 
@@ -274,6 +324,8 @@ public enum CoreError: Error, Equatable {
     case invalid(String)
     case fileTooLarge(size: UInt64, max: UInt64)
     case notLoaded
+    /// The encrypted local store can't be opened (wrong/lost storage key, other identity, newer schema).
+    case storageUnavailable(String)
     case other(String)
 }
 
@@ -298,6 +350,17 @@ public protocol OmcpCore: AnyObject {
     func suggestRecoveryWords(_ prefix: String) -> [String]
 
     @discardableResult func load(phrase: String, displayName: String) throws -> Identity
+    /// Load the identity and open its encrypted local store at `dbPath` (contacts, chats,
+    /// messages, file metadata, queue and burn state survive restarts). `storageKey`
+    /// (32 bytes) lives in the iOS Keychain. Throws `CoreError.storageUnavailable`.
+    @discardableResult func open(phrase: String, displayName: String, dbPath: String, storageKey: Data) throws -> Identity
+    func generateStorageKey() throws -> Data
+    /// Persisted messages of one chat, oldest first (empty for in-memory cores).
+    func storedMessages(_ contactId: String) -> [StoredMessageInfo]
+    /// Record where a verified received file was saved (nil = couldn't save).
+    func setReceivedFilePath(_ transferId: String, path: String?) throws
+    /// Import `RestoredBackup.history` into the local store.
+    func restoreHistory(_ history: Data) throws
     func identity() -> Identity?
     func qrPayload() throws -> String
     func advertisement() throws -> Data
@@ -339,4 +402,18 @@ public protocol OmcpCore: AnyObject {
     func maxFileBytes() -> UInt64
     func gatewayDailyCapBytes() -> UInt64
     func gatewayDecision(wifiOnly: Bool, network: NetworkType, metered: Bool) -> GatewayDecision
+}
+
+/// In-memory defaults (fake core, previews): no local store.
+public extension OmcpCore {
+    @discardableResult func open(phrase: String, displayName: String, dbPath: String, storageKey: Data) throws -> Identity {
+        try load(phrase: phrase, displayName: displayName)
+    }
+    func generateStorageKey() throws -> Data {
+        var g = SystemRandomNumberGenerator()
+        return Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &g) })
+    }
+    func storedMessages(_ contactId: String) -> [StoredMessageInfo] { [] }
+    func setReceivedFilePath(_ transferId: String, path: String?) throws {}
+    func restoreHistory(_ history: Data) throws {}
 }

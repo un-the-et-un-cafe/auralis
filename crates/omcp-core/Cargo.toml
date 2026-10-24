@@ -3,7 +3,7 @@ name = "omcp-core"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Open Mesh Chat Protocol (OMCP) core — framing, Noise hybrid (M1), BLE loopback (M2), MLS groups + file chunks (M3), gateway + rendezvous (M4), scalable sync (v0.2)"
+description = "Open Mesh Chat Protocol (OMCP) core — framing, Noise hybrid (M1), BLE loopback (M2), MLS groups + file chunks (M3), gateway + rendezvous (M4), scalable sync (v0.2), encrypted local store"
 repository.workspace = true
 publish = false
 
@@ -53,5 +53,11 @@ ciborium = "=0.2.2"
 serde = { version = "1", features = ["derive"] }
 zxcvbn = { version = "=3.1.1", default-features = false }
 
+# Encrypted local store (messages, contacts, queue, burn state). Bundled SQLite so
+# Android (cargo-ndk) and iOS builds need no system library; every row is sealed
+# with XChaCha20-Poly1305 by `store` itself (no SQLCipher / OpenSSL dependency).
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+
 [dev-dependencies]
 hex = "=0.4.3"
+tempfile = "=3.14.0"

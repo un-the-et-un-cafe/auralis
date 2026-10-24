@@ -483,3 +483,277 @@ fn interrupted_file_transfer_completes_on_reconnect() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].bytes, data);
 }
+
+// ---- encrypted local store: survives a restart ----
+
+const SKEY: [u8; 32] = [0x5c; 32];
+
+fn open_node(phrase: &str, name: &str, dir: &std::path::Path) -> Arc<OmcpNode> {
+    OmcpNode::open(
+        phrase.into(),
+        name.into(),
+        dir.join("omcp.db").to_string_lossy().into_owned(),
+        SKEY.to_vec(),
+    )
+    .unwrap()
+}
+
+fn disk_bytes(dir: &std::path::Path) -> Vec<u8> {
+    let mut all = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap() {
+        all.extend(std::fs::read(e.unwrap().path()).unwrap());
+    }
+    all
+}
+
+fn has(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn contacts_chats_messages_and_queue_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let pa = generate_recovery_phrase().unwrap();
+    let b = node("Bob");
+    let bob_id;
+    {
+        let a = open_node(&pa, "Alice", dir.path());
+        b.add_contact_from_qr(a.qr_payload()).unwrap();
+        let cb = a.add_contact_from_qr(b.qr_payload()).unwrap();
+        bob_id = cb.contact_id.clone();
+        a.set_verified(bob_id.clone(), true).unwrap();
+        // One message exchanged now, one left in the offline queue.
+        let la = a.open_initiator_link(bob_id.clone()).unwrap();
+        let lb = b.open_responder_link().unwrap();
+        pump(&la, &lb, la.start().unwrap());
+        let got = pump(
+            &lb,
+            &la,
+            lb.send_text("hello Alice, from Bob".into()).unwrap(),
+        );
+        assert_eq!(got[0].text, "hello Alice, from Bob");
+        la.shutdown();
+        a.queue_text(bob_id.clone(), "queued while offline".into())
+            .unwrap();
+        assert_eq!(a.queued_for(bob_id.clone()), 1);
+    }
+    let raw = disk_bytes(dir.path());
+    assert!(!has(&raw, b"queued while offline"));
+    assert!(!has(&raw, b"hello Alice"));
+    assert!(!has(&raw, b"Bob"));
+
+    // "Restart": a fresh node over the same file and key.
+    let a = open_node(&pa, "Alice", dir.path());
+    let c = a.contacts();
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].display_name, "Bob");
+    assert!(c[0].verified);
+    assert_eq!(a.chats().unwrap()[0].contact_id, bob_id);
+    let ms = a.stored_messages(bob_id.clone()).unwrap();
+    let texts: Vec<_> = ms
+        .iter()
+        .map(|m| (m.text.as_str(), m.mine, m.status))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("hello Alice, from Bob", false, MessageStatus::Received),
+            ("queued while offline", true, MessageStatus::Queued),
+        ]
+    );
+    assert_eq!(a.queued_for(bob_id.clone()), 1);
+
+    // The restored queue is delivered on the next link and marked sent.
+    let la = a.open_initiator_link(bob_id.clone()).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let got = pump(&la, &lb, la.start().unwrap());
+    assert_eq!(got[0].text, "queued while offline");
+    assert_eq!(a.queued_for(bob_id.clone()), 0);
+    assert_eq!(
+        a.stored_messages(bob_id.clone()).unwrap()[1].status,
+        MessageStatus::Sent
+    );
+    drop((la, lb, a));
+    let a = open_node(&pa, "Alice", dir.path());
+    assert_eq!(a.queued_for(bob_id), 0);
+}
+
+#[test]
+fn wrong_storage_key_and_other_identity_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let pa = generate_recovery_phrase().unwrap();
+    drop(open_node(&pa, "A", dir.path()));
+    let path = dir.path().join("omcp.db").to_string_lossy().into_owned();
+    assert!(matches!(
+        OmcpNode::open(pa.clone(), "A".into(), path.clone(), vec![1; 32]),
+        Err(FfiError::Storage { .. })
+    ));
+    assert!(matches!(
+        OmcpNode::open(pa, "A".into(), path.clone(), vec![1; 31]),
+        Err(FfiError::Invalid { .. })
+    ));
+    let other = generate_recovery_phrase().unwrap();
+    assert!(matches!(
+        OmcpNode::open(other, "B".into(), path, SKEY.to_vec()),
+        Err(FfiError::Storage { .. })
+    ));
+    assert_eq!(storage_schema_version(), 1);
+    assert_eq!(generate_storage_key().unwrap().len(), 32);
+}
+
+/// PROTOCOL §19.1 / REQUIREMENTS B1: an unopened burn message survives a
+/// restart (and opens exactly once); once burned, neither it nor its key can be
+/// recovered from disk, and it doesn't come back after another restart.
+#[test]
+fn burn_survives_restart_until_burned_then_is_unrecoverable() {
+    const SECRET: &str = "burn me: the spare key is under the blue flowerpot";
+    let dir = tempfile::tempdir().unwrap();
+    let pb = generate_recovery_phrase().unwrap();
+    let a = node("Alice");
+    let (alice_id, msg_id);
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        alice_id = b.add_contact_from_qr(a.qr_payload()).unwrap().contact_id;
+        let cb = a.add_contact_from_qr(b.qr_payload()).unwrap();
+        msg_id = a
+            .queue_message(
+                cb.contact_id.clone(),
+                SECRET.into(),
+                Some(spec(BurnMode::Timer, 10, core_burn::UNREAD_TTL_7D)),
+            )
+            .unwrap();
+        let la = a.open_initiator_link(cb.contact_id).unwrap();
+        let lb = b.open_responder_link().unwrap();
+        let (got, _) = pump_all(&la, &lb, la.start().unwrap());
+        assert_eq!(got[0].text, "");
+        assert!(got[0].burn.is_some());
+        lb.shutdown();
+    }
+    assert!(!has(&disk_bytes(dir.path()), SECRET.as_bytes()));
+
+    let t0 = now_ms();
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        assert!(b.burn_is_live(msg_id.clone()));
+        let m = &b.stored_messages(alice_id.clone()).unwrap()[0];
+        assert_eq!(
+            (m.text.as_str(), m.burn_state),
+            ("", StoredBurnState::Unopened)
+        );
+        let c = b.open_burn(msg_id.clone(), t0).unwrap().unwrap();
+        assert_eq!(c.text, SECRET);
+        assert_eq!(c.burn_at_ms, Some(t0 + 10_000));
+    }
+    // Restart while open: content is never handed out a second time.
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        assert_eq!(b.open_burn(msg_id.clone(), t0 + 1).unwrap(), None);
+        assert_eq!(
+            b.stored_messages(alice_id.clone()).unwrap()[0].burn_state,
+            StoredBurnState::Open
+        );
+        // Control messages (the OPENED receipt) aren't user-visible queue items.
+        assert_eq!(b.path_status().queued_count, 0);
+        assert_eq!(b.tick_burn(t0 + 10_000), vec![msg_id.clone()]);
+        assert!(!b.burn_is_live(msg_id.clone()));
+        assert!(b.stored_messages(alice_id.clone()).unwrap().is_empty());
+    }
+    let b = open_node(&pb, "Bob", dir.path());
+    assert!(!b.burn_is_live(msg_id.clone()));
+    assert_eq!(b.open_burn(msg_id.clone(), t0 + 20_000).unwrap(), None);
+    assert!(b.stored_messages(alice_id).unwrap().is_empty());
+    drop(b);
+    assert!(!has(&disk_bytes(dir.path()), SECRET.as_bytes()));
+}
+
+#[test]
+fn backup_carries_history_but_never_burn_content() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let bob = a.contacts()[0].contact_id.clone();
+    pump(&la, &lb, la.send_text("kept in the backup".into()).unwrap());
+    a.queue_message(
+        bob.clone(),
+        "burn never in backup".into(),
+        Some(spec(BurnMode::OnOpen, 0, core_burn::UNREAD_TTL_1H)),
+    )
+    .unwrap();
+    let key = generate_backup_key().unwrap();
+    let blob = a
+        .create_backup_with_key(key.clone(), "d".into(), 1)
+        .unwrap();
+    let r = open_backup_with_key(blob, key).unwrap();
+    let h = r.history.clone().unwrap();
+    assert!(!has(&h, b"burn never in backup"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = open_node(&r.phrase, "Alice", dir.path());
+    for k in &r.contacts {
+        a2.restore_contact(k.contact_id.clone(), k.display_name.clone(), k.verified)
+            .unwrap();
+    }
+    a2.restore_history(h).unwrap();
+    let ms = a2.stored_messages(bob.clone()).unwrap();
+    assert_eq!(ms.len(), 1);
+    assert_eq!(ms[0].text, "kept in the backup");
+    drop(a2);
+    let a3 = open_node(&r.phrase, "Alice", dir.path());
+    assert_eq!(a3.stored_messages(bob).unwrap().len(), 1);
+    drop(b);
+}
+
+#[test]
+fn outgoing_file_and_received_file_reference_survive_restart() {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (pa, pb) = (
+        generate_recovery_phrase().unwrap(),
+        generate_recovery_phrase().unwrap(),
+    );
+    let data: Vec<u8> = (0..(2 * FILE_CHUNK_BYTES + 7)).map(|i| i as u8).collect();
+    let (bob, alice, tid);
+    {
+        let a = open_node(&pa, "Alice", dir_a.path());
+        let b = open_node(&pb, "Bob", dir_b.path());
+        alice = b.add_contact_from_qr(a.qr_payload()).unwrap().contact_id;
+        bob = a.add_contact_from_qr(b.qr_payload()).unwrap().contact_id;
+        tid = a
+            .queue_file(
+                bob.clone(),
+                "notes.txt".into(),
+                "text/plain".into(),
+                data.clone(),
+            )
+            .unwrap()
+            .transfer_id_hex;
+    }
+    // Restart before anything was sent: the transfer is still queued.
+    let a = open_node(&pa, "Alice", dir_a.path());
+    let b = open_node(&pb, "Bob", dir_b.path());
+    assert_eq!(a.files_pending_for(bob.clone()), 1);
+    let m = &a.stored_messages(bob.clone()).unwrap()[0];
+    assert_eq!(m.file.as_ref().unwrap().state, StoredFileState::Queued);
+    let la = a.open_initiator_link(bob.clone()).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    pump(&la, &lb, la.start().unwrap());
+    let (files, fails, _) = pump_files(&la, &lb);
+    assert!(fails.is_empty());
+    assert_eq!(files[0].bytes, data);
+    assert_eq!(a.files_pending_for(bob.clone()), 0);
+    b.set_received_file_path(tid.clone(), Some("/app/files/notes.txt".into()))
+        .unwrap();
+    drop((la, lb, a, b));
+
+    let a = open_node(&pa, "Alice", dir_a.path());
+    let b = open_node(&pb, "Bob", dir_b.path());
+    assert_eq!(a.files_pending_for(bob.clone()), 0);
+    let sent = a.stored_messages(bob).unwrap()[0].file.clone().unwrap();
+    assert_eq!(sent.state, StoredFileState::Sent);
+    let got = b.stored_messages(alice).unwrap()[0].file.clone().unwrap();
+    assert_eq!(got.state, StoredFileState::Received);
+    assert_eq!(got.local_path.as_deref(), Some("/app/files/notes.txt"));
+    assert_eq!(
+        (got.name.as_str(), got.size),
+        ("notes.txt", data.len() as u64)
+    );
+}

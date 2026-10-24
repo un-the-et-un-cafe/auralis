@@ -73,7 +73,37 @@ data class PasswordCheck(val ok: Boolean, val score: Int, val tooShort: Boolean)
 
 data class BackupMeta(val createdAtMs: Long, val deviceHint: String, val needsPassword: Boolean)
 
-data class RestoredBackup(val phrase: String, val contacts: List<Contact>, val displayName: String? = null)
+/** [history]: legacy history snapshot from pre-chat-backup blobs (never burn content); null otherwise. */
+class RestoredBackup(
+    val phrase: String,
+    val contacts: List<Contact>,
+    val displayName: String? = null,
+    val history: ByteArray? = null,
+)
+
+/** The encrypted local store can't be opened (wrong/lost storage key, other identity, newer schema). */
+class StorageUnavailableException(message: String?, cause: Throwable? = null) : Exception(message, cause)
+
+/** File-transfer metadata as persisted by the Rust store; [state] = a `FileAttachment.State` name. */
+data class StoredFileInfo(val name: String, val mime: String, val size: Long, val state: String, val doneBytes: Long, val localPath: String?)
+
+/**
+ * A message as persisted by the Rust store. [status] = `Queued|Sent|Received`,
+ * [burnState] = `None|Unopened|Open|Opened`. Burn messages never carry text here.
+ */
+data class StoredMessageInfo(
+    val id: String,
+    val contactId: String,
+    val text: String,
+    val mine: Boolean,
+    val timeMs: Long,
+    val status: String,
+    val mime: String?,
+    val burn: chat.omcp.app.burn.BurnSpec?,
+    val burnState: String,
+    val burnAtMs: Long?,
+    val file: StoredFileInfo?,
+)
 
 class WrongBackupPasswordException : Exception("wrong backup password")
 
@@ -107,8 +137,27 @@ interface OmcpCore {
     /** Up to 3 prefix matches from the recovery word list. */
     fun suggestRecoveryWords(prefix: String): List<String>
 
-    /** Load identity from phrase. Must be called before the node APIs below. */
+    /** Load identity from phrase (in memory only). Must be called before the node APIs below. */
     fun load(phrase: String, displayName: String): Identity
+
+    /**
+     * Load identity and open its encrypted local store at [dbPath] (contacts, chats, messages,
+     * file metadata, queue and burn state survive restarts). [storageKey] (32 bytes) is kept
+     * Keystore-wrapped by the app and never hard-coded. Throws [StorageUnavailableException].
+     */
+    fun open(phrase: String, displayName: String, dbPath: String, storageKey: ByteArray): Identity = load(phrase, displayName)
+
+    /** Fresh 256-bit storage key (wrap it with the Android Keystore before saving). */
+    fun generateStorageKey(): ByteArray = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+
+    /** Persisted messages of one chat, oldest first (empty for in-memory cores). */
+    fun storedMessages(contactId: String): List<StoredMessageInfo> = emptyList()
+
+    /** Record where a verified received file was saved (null = couldn't save). */
+    fun setReceivedFilePath(transferId: String, path: String?) {}
+
+    /** Import [RestoredBackup.history] into the local store. */
+    fun restoreHistory(history: ByteArray) {}
     fun identity(): Identity?
     fun qrPayload(): String
     fun advertisement(): ByteArray

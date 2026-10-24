@@ -32,6 +32,77 @@ final class RustBridgeTests: XCTestCase {
         }
     }
 
+    /// Encrypted local store: contacts, verification, chat, queue and an unopened burn message
+    /// survive an app restart; once burned it is gone after the next restart and never on disk.
+    func testMessagesQueueAndBurnSurviveRestart() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("omcp-store.db").path
+        let store = InMemoryAppStore()
+        var t = Int64(Date().timeIntervalSince1970 * 1000)
+        func bob() -> (RustOmcpCore, MeshRepository) {
+            let c = RustOmcpCore()
+            return (c, MeshRepository(core: c, store: store, dbPath: db, clock: { t }))
+        }
+        let (ca, ra) = try node("Ana")
+        var (cb, rb) = bob()
+        try rb.saveIdentity(phrase: try cb.generateRecoveryPhrase(), name: "Ben")
+        let bOnA = try ra.addContact(qr: try cb.qrPayload(), action: .chatWithoutVerifying)
+        let aOnB = try rb.addContact(qr: try ca.qrPayload(), action: .verifyAndChat)
+        XCTAssertTrue(store.contacts.isEmpty) // encrypted store, not UserDefaults
+        XCTAssertNotNil(store.storageKey)
+        let secret = "burn: meet at gate 7"
+        try ra.send(bOnA.id, text: "hello Ben")
+        try ra.send(bOnA.id, text: secret, burnOnce: .timer(10))
+        var la = try ca.openInitiatorLink(bOnA.id)
+        var lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        try rb.send(aOnB.id, text: "queued for Ana")
+        la.close(); lb.close()
+
+        (cb, rb) = bob()
+        XCTAssertTrue(rb.restore())
+        XCTAssertEqual(rb.contacts.first?.verified, true)
+        let chat = rb.messages[aOnB.id] ?? []
+        XCTAssertEqual(chat.map(\.text), ["hello Ben", "", "queued for Ana"])
+        XCTAssertEqual(chat[1].burnState, .unopened)
+        XCTAssertEqual(chat[2].status, .queued)
+        XCTAssertEqual(cb.queuedFor(aOnB.id), 1)
+        XCTAssertEqual(try cb.openBurn(chat[1].id, nowMs: t)?.text, secret)
+        t += 10_000
+        XCTAssertEqual(cb.tickBurn(nowMs: t), [chat[1].id])
+
+        (cb, rb) = bob()
+        XCTAssertTrue(rb.restore())
+        XCTAssertEqual((rb.messages[aOnB.id] ?? []).map(\.text), ["hello Ben", "queued for Ana"])
+        XCTAssertFalse(cb.burnIsLive(chat[1].id))
+        la = try ca.openInitiatorLink(bOnA.id)
+        lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        XCTAssertEqual(ra.messages[bOnA.id]?.last?.text, "queued for Ana")
+        XCTAssertEqual(cb.queuedFor(aOnB.id), 0)
+        la.close(); lb.close()
+        for f in try FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            let bytes = try Data(contentsOf: dir.appendingPathComponent(f))
+            XCTAssertNil(bytes.range(of: Data(secret.utf8)), "burn content on disk in \(f)")
+            XCTAssertNil(bytes.range(of: Data("hello Ben".utf8)), "plaintext on disk in \(f)")
+        }
+    }
+
+    func testUnreadableStoreIsSetAsideNotFatal() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("omcp-store.db").path
+        let store = InMemoryAppStore()
+        let c1 = RustOmcpCore()
+        try MeshRepository(core: c1, store: store, dbPath: db).saveIdentity(phrase: try c1.generateRecoveryPhrase(), name: "Ben")
+        store.storageKey = Data(repeating: 7, count: 32) // e.g. Keychain reset
+        XCTAssertTrue(MeshRepository(core: RustOmcpCore(), store: store, dbPath: db).restore())
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.hasPrefix("omcp-store.db.unreadable-") })
+    }
+
     func testLinkedAndPolicyFromCore() {
         let c = RustOmcpCore()
         XCTAssertTrue(c.linked)

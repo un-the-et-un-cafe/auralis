@@ -25,6 +25,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         case .FileTooLarge(let size, let max): return CoreError.fileTooLarge(size: size, max: max)
         case .UnknownContact: return CoreError.invalid("unknown contact")
         case .Protocol(let msg), .State(let msg): return CoreError.other(msg)
+        case .Storage(let msg): return CoreError.storageUnavailable(msg)
         }
     }
 
@@ -76,6 +77,61 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         self.node = node
         let i = node.identity()
         return Identity(peerIdHex: i.peerIdHex, displayName: i.displayName)
+    }
+
+    @discardableResult
+    public func open(phrase: String, displayName: String, dbPath: String, storageKey: Data) throws -> Identity {
+        let node = try call {
+            try OmcpNode.open(phrase: phrase, displayName: displayName, dbPath: dbPath, storageKey: storageKey)
+        }
+        self.node = node
+        let i = node.identity()
+        return Identity(peerIdHex: i.peerIdHex, displayName: i.displayName)
+    }
+
+    public func generateStorageKey() throws -> Data { try call { try OmcpFFI.generateStorageKey() } }
+
+    public func storedMessages(_ contactId: String) -> [StoredMessageInfo] {
+        ((try? node?.storedMessages(contactId: contactId)) ?? []).map(Self.stored)
+    }
+
+    public func setReceivedFilePath(_ transferId: String, path: String?) throws {
+        try call { try n().setReceivedFilePath(transferIdHex: transferId, localPath: path) }
+    }
+
+    public func restoreHistory(_ history: Data) throws { try call { try n().restoreHistory(history: history) } }
+
+    static func stored(_ m: OmcpFFI.StoredMessage) -> StoredMessageInfo {
+        let status: ChatMessage.Status
+        switch m.status {
+        case .queued: status = .queued
+        case .sent: status = .sent
+        case .received: status = .received
+        }
+        let burnState: ChatMessage.BurnState
+        switch m.burnState {
+        case .none: burnState = .none
+        case .unopened: burnState = .unopened
+        case .open: burnState = .open
+        case .opened: burnState = .opened
+        }
+        let file = m.file.map { f -> StoredFileInfo in
+            let st: FileAttachment.State
+            switch f.state {
+            case .queued: st = .queued
+            case .sending: st = .sending
+            case .receiving: st = .receiving
+            case .paused: st = .paused
+            case .sent: st = .sent
+            case .received: st = .received
+            case .failed: st = .failed
+            case .integrityFailed: st = .integrityFailed
+            }
+            return StoredFileInfo(name: f.name, mime: f.mime, size: f.size, state: st, doneBytes: f.doneBytes, localPath: f.localPath)
+        }
+        return StoredMessageInfo(id: m.idHex, contactId: m.contactId, text: m.text, mine: m.mine, timeMs: Int64(m.timeMs),
+                                 status: status, mime: m.mime, burn: m.burn.map(spec), burnState: burnState,
+                                 burnAtMs: m.burnAtMs.map(Int64.init), file: file)
     }
 
     public func identity() -> Identity? {
@@ -178,7 +234,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     private static func restored(_ r: OmcpFFI.RestoredBackup) -> HoplaKit.RestoredBackup {
         HoplaKit.RestoredBackup(phrase: r.phrase, contacts: r.contacts.map {
             Contact(id: $0.contactId, displayName: $0.displayName, safetyNumber: [], verified: $0.verified)
-        })
+        }, history: r.history)
     }
 
     public func openBackup(_ blob: Data, password: String) throws -> HoplaKit.RestoredBackup {

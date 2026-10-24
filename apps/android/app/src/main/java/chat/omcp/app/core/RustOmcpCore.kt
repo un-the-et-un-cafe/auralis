@@ -31,6 +31,24 @@ class RustOmcpCore : OmcpCore {
         return identity()!!
     }
 
+    override fun open(phrase: String, displayName: String, dbPath: String, storageKey: ByteArray): Identity {
+        node = try {
+            OmcpNode.open(phrase, displayName, dbPath, storageKey)
+        } catch (e: FfiException.Storage) {
+            throw StorageUnavailableException(e.message, e)
+        }
+        return identity()!!
+    }
+
+    override fun generateStorageKey(): ByteArray = chat.omcp.ffi.generateStorageKey()
+
+    override fun storedMessages(contactId: String): List<StoredMessageInfo> =
+        n().storedMessages(contactId).map { it.toApp() }
+
+    override fun setReceivedFilePath(transferId: String, path: String?) = n().setReceivedFilePath(transferId, path)
+
+    override fun restoreHistory(history: ByteArray) = n().restoreHistory(history)
+
     override fun identity(): Identity? = node?.identity()?.let { Identity(it.peerIdHex, it.displayName) }
     override fun qrPayload() = n().qrPayload()
     override fun advertisement(): ByteArray = n().advertisement()
@@ -112,7 +130,7 @@ class RustOmcpCore : OmcpCore {
 
     override fun openBackup(blob: ByteArray, password: String): RestoredBackup = try {
         val r = chat.omcp.ffi.openBackupWithPassword(blob, password)
-        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified) }, r.displayName)
+        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified) }, r.displayName, r.history)
     } catch (e: FfiException.WrongBackupPassword) {
         throw WrongBackupPasswordException()
     } catch (e: FfiException.BackupTooNew) {
@@ -147,6 +165,44 @@ private fun chat.omcp.ffi.BurnSpec.toApp() = BurnSpec(
     if (mode == chat.omcp.ffi.BurnMode.ON_OPEN) BurnSpec.Mode.OnOpen else BurnSpec.Mode.Timer,
     secs.toInt(),
     unreadTtl.toInt(),
+)
+
+private fun chat.omcp.ffi.StoredMessage.toApp() = StoredMessageInfo(
+    id = idHex,
+    contactId = contactId,
+    text = text,
+    mine = mine,
+    timeMs = timeMs.toLong(),
+    status = when (status) {
+        chat.omcp.ffi.MessageStatus.QUEUED -> "Queued"
+        chat.omcp.ffi.MessageStatus.SENT -> "Sent"
+        chat.omcp.ffi.MessageStatus.RECEIVED -> "Received"
+    },
+    mime = mime,
+    burn = burn?.toApp(),
+    burnState = when (burnState) {
+        chat.omcp.ffi.StoredBurnState.NONE -> "None"
+        chat.omcp.ffi.StoredBurnState.UNOPENED -> "Unopened"
+        chat.omcp.ffi.StoredBurnState.OPEN -> "Open"
+        chat.omcp.ffi.StoredBurnState.OPENED -> "Opened"
+    },
+    burnAtMs = burnAtMs?.toLong(),
+    file = file?.let {
+        StoredFileInfo(
+            it.name, it.mime, it.size.toLong(),
+            when (it.state) {
+                chat.omcp.ffi.StoredFileState.QUEUED -> "Queued"
+                chat.omcp.ffi.StoredFileState.SENDING -> "Sending"
+                chat.omcp.ffi.StoredFileState.RECEIVING -> "Receiving"
+                chat.omcp.ffi.StoredFileState.PAUSED -> "Paused"
+                chat.omcp.ffi.StoredFileState.SENT -> "Sent"
+                chat.omcp.ffi.StoredFileState.RECEIVED -> "Received"
+                chat.omcp.ffi.StoredFileState.FAILED -> "Failed"
+                chat.omcp.ffi.StoredFileState.INTEGRITY_FAILED -> "IntegrityFailed"
+            },
+            it.doneBytes.toLong(), it.localPath,
+        )
+    },
 )
 
 private fun ContactInfo.toContact() = Contact(contactId, displayName, safetyNumber, verified)

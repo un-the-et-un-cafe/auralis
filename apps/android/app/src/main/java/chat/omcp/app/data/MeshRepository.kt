@@ -69,11 +69,16 @@ fun interface MeshKick {
 
 /**
  * Single source of truth for identity, contacts, messages and path status.
- * Messages are in-memory for the beta (TODO: Room persistence).
+ *
+ * With [dbPath] set, the Rust core keeps contacts, verification state, chats, messages,
+ * file metadata, the outbound queue and burn state in its encrypted local store at that
+ * path (key: [AppStore.storageKey], Keystore-sealed) and they are reloaded on [restore].
+ * Without it (tests, previews) everything is in memory.
  */
 class MeshRepository(
     val core: OmcpCore,
     private val store: AppStore,
+    private val dbPath: String? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
@@ -93,8 +98,11 @@ class MeshRepository(
     /** Load an existing identity from the store; returns true if onboarded. */
     fun restore(): Boolean {
         val phrase = store.recoveryPhrase ?: return false
-        core.load(phrase, store.displayName ?: "Me")
+        loadCore(phrase, store.displayName ?: "Me")
         store.contacts.forEach { core.restoreContact(it) }
+        // Contacts used to live in plain SharedPreferences: once in the encrypted store, drop them.
+        if (dbPath != null && store.contacts.isNotEmpty()) store.contacts = emptyList()
+        loadMessages()
         refresh()
         _onboarded.value = true
         return true
@@ -102,7 +110,7 @@ class MeshRepository(
 
     /** Create or restore identity from [phrase] and persist it (sealed). */
     fun saveIdentity(phrase: String, name: String) {
-        core.load(phrase, name)
+        loadCore(phrase, name)
         store.recoveryPhrase = phrase
         store.displayName = name
         refresh()
@@ -112,8 +120,44 @@ class MeshRepository(
     fun restoreFromBackup(r: chat.omcp.app.core.RestoredBackup, name: String) {
         saveIdentity(r.phrase, r.displayName?.takeIf { it.isNotBlank() } ?: name)
         r.contacts.forEach { core.restoreContact(it) }
+        r.history?.let { core.restoreHistory(it) }
         store.backupMethods = store.backupMethods + BACKUP_DRIVE
         persistContacts()
+        loadMessages()
+    }
+
+    private fun loadCore(phrase: String, name: String) {
+        val path = dbPath ?: run {
+            core.load(phrase, name)
+            return
+        }
+        val key = store.storageKey ?: core.generateStorageKey().also { store.storageKey = it }
+        try {
+            core.open(phrase, name, path, key)
+        } catch (e: chat.omcp.app.core.StorageUnavailableException) {
+            // Unreadable with this key (Keystore reset, other identity, newer app): its data is
+            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
+            java.io.File(path).renameTo(java.io.File("$path.unreadable-${clock()}"))
+            java.io.File("$path-journal").delete()
+            core.open(phrase, name, path, key)
+        }
+    }
+
+    /** Reload chats from the core's encrypted store (after a restart or a restore). */
+    private fun loadMessages() {
+        _messages.value = core.contacts()
+            .associate { c -> c.id to core.storedMessages(c.id).map(::toChatMessage) }
+            .filterValues { it.isNotEmpty() }
+    }
+
+    private fun toChatMessage(m: chat.omcp.app.core.StoredMessageInfo): ChatMessage {
+        val file = m.file?.let {
+            FileAttachment(it.name, it.size, it.mime, FileAttachment.State.valueOf(it.state), it.doneBytes, it.localPath)
+        } ?: m.mime?.let { FileAttachment(if (it.startsWith("video/")) "video" else "photo", 0, it, FileAttachment.State.Received) }
+        return ChatMessage(
+            m.id, m.contactId, m.text, m.mine, m.timeMs, ChatMessage.Status.valueOf(m.status), file,
+            burn = m.burn, burnState = ChatMessage.BurnState.valueOf(m.burnState), burnAtMs = m.burnAtMs,
+        )
     }
 
     /** Backup requirement (REQUIREMENTS "Onboarding & recovery backup", O6). */
@@ -235,6 +279,7 @@ class MeshRepository(
     /** From the link: a file arrived and its BLAKE3 hash matched (checked in Rust). */
     fun onFileReceived(r: chat.omcp.app.core.ReceivedFileInfo) {
         val path = fileSink?.save(r)
+        if (fileSink != null) runCatching { core.setReceivedFilePath(r.transferId, path) }
         val f = FileAttachment(
             r.name, r.bytes.size.toLong(), r.mime,
             if (path != null || fileSink == null) FileAttachment.State.Received else FileAttachment.State.Failed,
@@ -359,7 +404,8 @@ class MeshRepository(
     fun contact(id: String) = _contacts.value.firstOrNull { it.id == id }
 
     private fun persistContacts() {
-        store.contacts = core.contacts()
+        // With a local store the Rust core persists contacts (encrypted); prefs only without one.
+        if (dbPath == null) store.contacts = core.contacts()
         refresh()
     }
 

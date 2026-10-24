@@ -17,7 +17,7 @@ final class AppModel: ObservableObject {
     private var burnTimer: Timer?
 
     init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore()) {
-        repo = MeshRepository(core: core, store: store)
+        repo = MeshRepository(core: core, store: store, dbPath: Self.localStorePath())
         onboarded = store.onboarded && store.recoveryPhrase != nil
         repo.notifier = LocalNotifier()
         repo.fileSink = ReceivedFiles()
@@ -36,6 +36,20 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.repo.tickBurn() }
         }
         if onboarded { startMesh() }
+    }
+
+    /// Application Support/omcp-store.db, excluded from iCloud/iTunes backup (its key is
+    /// this-device-only anyway) and protected until first unlock.
+    static func localStorePath() -> String? {
+        let fm = FileManager.default
+        guard var dir = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            return nil
+        }
+        try? fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: dir.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+        return dir.appendingPathComponent("omcp-store.db").path
     }
 
     var core: OmcpCore { repo.core }
