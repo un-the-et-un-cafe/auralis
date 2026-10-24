@@ -61,6 +61,15 @@ pub enum OmcpError {
 
     #[error("file content hash mismatch")]
     FileHashMismatch,
+
+    #[error("gateway error: {0}")]
+    Gateway(&'static str),
+
+    #[error("rendezvous error: {0}")]
+    Rendezvous(&'static str),
+
+    #[error("rendezvous token rejected: {0}")]
+    TokenRejected(&'static str),
 }
 
 /// Crate-wide result alias.
