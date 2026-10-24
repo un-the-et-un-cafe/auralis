@@ -137,6 +137,69 @@ pub fn decode_inner(p: &[u8]) -> Result<(Option<BurnHeader>, &[u8])> {
     }
 }
 
+/// Inner content type: UTF-8 text.
+pub const INNER_CT_TEXT: u8 = 0x01;
+/// Inner content type: view-once media descriptor / bytes (beta: raw bytes).
+pub const INNER_CT_MEDIA: u8 = 0x02;
+
+/// Decoded application content inside `InnerV1` (after the optional burn header).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppContent {
+    Text(String),
+    Media { mime: String, bytes: Vec<u8> },
+    Opened(OpenedReceipt),
+}
+
+/// `InnerV1` plaintext for an application message: `tag [| burn] | inner_ct u8 | body`.
+/// Media body = `mime_len u8 | mime | bytes`. `OPENED` body = the 24-byte receipt tail.
+pub fn encode_app(burn: Option<&BurnHeader>, content: &AppContent) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    match content {
+        AppContent::Text(t) => {
+            body.push(INNER_CT_TEXT);
+            body.extend_from_slice(t.as_bytes());
+        }
+        AppContent::Media { mime, bytes } => {
+            let m = u8::try_from(mime.len()).map_err(|_| OmcpError::Burn("mime"))?;
+            body.push(INNER_CT_MEDIA);
+            body.push(m);
+            body.extend_from_slice(mime.as_bytes());
+            body.extend_from_slice(bytes);
+        }
+        AppContent::Opened(r) => {
+            if burn.is_some() {
+                return Err(OmcpError::Burn("control messages can't burn"));
+            }
+            body.extend_from_slice(&r.encode());
+        }
+    }
+    Ok(encode_inner(burn, &body))
+}
+
+pub fn decode_app(p: &[u8]) -> Result<(Option<BurnHeader>, AppContent)> {
+    let (burn, body) = decode_inner(p)?;
+    let (&ct, rest) = body.split_first().ok_or(OmcpError::Burn("empty body"))?;
+    let c = match ct {
+        INNER_CT_TEXT => {
+            AppContent::Text(String::from_utf8(rest.to_vec()).map_err(|_| OmcpError::Burn("utf8"))?)
+        }
+        INNER_CT_MEDIA => {
+            let (&n, rest) = rest.split_first().ok_or(OmcpError::Burn("mime"))?;
+            let n = n as usize;
+            if rest.len() < n {
+                return Err(OmcpError::Burn("mime"));
+            }
+            AppContent::Media {
+                mime: String::from_utf8(rest[..n].to_vec()).map_err(|_| OmcpError::Burn("mime"))?,
+                bytes: rest[n..].to_vec(),
+            }
+        }
+        CONTROL_OPENED if burn.is_none() => AppContent::Opened(OpenedReceipt::decode(body)?),
+        _ => return Err(OmcpError::Burn("inner content type")),
+    };
+    Ok((burn, c))
+}
+
 /// A media Content Key usable exactly once. [`Self::take`] hands it out and
 /// leaves nothing behind; the key bytes zeroize on drop ([`ContentKey`]).
 pub struct SingleUseMediaKey(Option<ContentKey>);
@@ -298,6 +361,26 @@ impl BurnStore {
         })
     }
 
+    /// Sender copy: the peer sent `OPENED`. View-once (or any media) is shredded
+    /// at once; a timer copy burns `secs` after `opened_ms`. Returns true if shredded now.
+    pub fn on_remote_opened(&mut self, msg_id: &[u8; 16], opened_ms: u64, media: bool) -> bool {
+        let Some(e) = self.live.get_mut(msg_id) else {
+            return false;
+        };
+        if media || e.header.mode == BurnMode::OnOpen {
+            self.shred(msg_id);
+            return true;
+        }
+        e.opened = true;
+        e.burn_at_ms = Some(opened_ms.saturating_add(u64::from(e.header.secs) * 1000));
+        false
+    }
+
+    /// Burn deadline once opened (timer mode), if any.
+    pub fn burn_at(&self, msg_id: &[u8; 16]) -> Option<u64> {
+        self.live.get(msg_id).and_then(|e| e.burn_at_ms)
+    }
+
     /// Viewer closed: burn now (any mode).
     pub fn close(&mut self, msg_id: &[u8; 16]) {
         if self.live.get(msg_id).is_some_and(|e| e.opened) {
@@ -452,6 +535,51 @@ mod tests {
         assert!(!sender.contains(&ID));
         assert!(!sender.on_opened(&r2));
         assert!(OpenedReceipt::decode(&[0; 25]).is_err());
+    }
+
+    #[test]
+    fn app_content_roundtrip() {
+        let h = BurnHeader::timer(60, UNREAD_TTL_24H).unwrap();
+        for (b, c) in [
+            (Some(h), AppContent::Text("hé".into())),
+            (None, AppContent::Text(String::new())),
+            (
+                Some(BurnHeader::on_open(UNREAD_TTL_7D).unwrap()),
+                AppContent::Media {
+                    mime: "image/jpeg".into(),
+                    bytes: vec![1, 2, 3],
+                },
+            ),
+            (
+                None,
+                AppContent::Opened(OpenedReceipt {
+                    msg_id: ID,
+                    opened_ms: 9,
+                }),
+            ),
+        ] {
+            let p = encode_app(b.as_ref(), &c).unwrap();
+            assert_eq!(decode_app(&p).unwrap(), (b, c));
+        }
+        let r = AppContent::Opened(OpenedReceipt {
+            msg_id: ID,
+            opened_ms: 1,
+        });
+        assert!(encode_app(Some(&h), &r).is_err());
+    }
+
+    #[test]
+    fn sender_copy_on_remote_opened() {
+        let mut s = BurnStore::default();
+        s.insert(ID, BurnHeader::timer(10, UNREAD_TTL_7D).unwrap(), b"t", 0)
+            .unwrap();
+        assert!(!s.on_remote_opened(&ID, 5_000, false));
+        assert_eq!(s.burn_at(&ID), Some(15_000));
+        assert_eq!(s.tick(15_000), vec![ID]);
+        s.insert(ID, BurnHeader::on_open(UNREAD_TTL_7D).unwrap(), b"t", 0)
+            .unwrap();
+        assert!(s.on_remote_opened(&ID, 1, false));
+        assert!(s.is_empty());
     }
 
     #[test]

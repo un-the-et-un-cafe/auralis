@@ -202,3 +202,153 @@ fn backup_roundtrip_restores_identity_contacts_and_verification() {
     }
     assert_eq!(a2.contacts(), a.contacts());
 }
+
+// ---- burn after read end to end (PROTOCOL §19.1) ----
+
+fn pump_all(
+    la: &MeshLink,
+    lb: &MeshLink,
+    out: LinkOutput,
+) -> (Vec<ReceivedText>, Vec<OpenedEvent>) {
+    // Like `pump`, but also collects OPENED events from both sides.
+    let mut got = Vec::new();
+    let mut opened = Vec::new();
+    let mut queue = vec![(false, out.outgoing)];
+    opened.extend(out.opened);
+    while let Some((back, pdus)) = queue.pop() {
+        for p in pdus {
+            let dst = if back { la } else { lb };
+            let o = dst.on_pdu(p).unwrap();
+            got.extend(o.received);
+            opened.extend(o.opened);
+            if !o.outgoing.is_empty() {
+                queue.push((!back, o.outgoing));
+            }
+        }
+    }
+    (got, opened)
+}
+
+fn spec(mode: BurnMode, secs: u32, ttl: u32) -> BurnSpec {
+    BurnSpec {
+        mode,
+        secs,
+        unread_ttl: ttl,
+    }
+}
+
+#[test]
+fn burn_timer_and_opened_shred_both_sides() {
+    let (a, b, la, lb) = paired();
+    let bob_id = a.contacts()[0].contact_id.clone();
+    let _ = pump_all(&la, &lb, la.start().unwrap());
+    let id = a
+        .queue_message(
+            bob_id,
+            "secret".into(),
+            Some(spec(BurnMode::Timer, 10, 604_800)),
+        )
+        .unwrap();
+    assert!(a.burn_is_live(id.clone()));
+    let (got, _) = pump_all(&la, &lb, la.flush().unwrap());
+    let m = got.single_or_panic();
+    assert_eq!(m.text, "", "burn content not in the received list");
+    assert_eq!(m.burn, Some(spec(BurnMode::Timer, 10, 604_800)));
+    assert_eq!(m.envelope_id_hex, id);
+
+    let c = b.open_burn(id.clone(), 1_000).unwrap().unwrap();
+    assert_eq!(c.text, "secret");
+    assert_eq!(c.burn_at_ms, Some(11_000));
+    assert!(
+        b.open_burn(id.clone(), 1_001).unwrap().is_none(),
+        "opens once"
+    );
+    let (_, opened) = pump_all(&lb, &la, lb.flush().unwrap());
+    assert_eq!(opened.len(), 1);
+    assert!(!opened[0].shredded);
+    assert_eq!(opened[0].burn_at_ms, Some(11_000));
+    assert!(b.tick_burn(10_999).is_empty());
+    assert_eq!(b.tick_burn(11_000), vec![id.clone()]);
+    assert_eq!(a.tick_burn(11_000), vec![id.clone()]);
+    assert!(!a.burn_is_live(id.clone()) && !b.burn_is_live(id));
+}
+
+#[test]
+fn burn_view_once_media_shreds_sender_on_opened() {
+    let (a, b, la, lb) = paired();
+    let bob_id = a.contacts()[0].contact_id.clone();
+    let _ = pump_all(&la, &lb, la.start().unwrap());
+    let id = a
+        .queue_media(
+            bob_id,
+            "image/jpeg".into(),
+            vec![0xFF, 0xD8, 1],
+            Some(spec(BurnMode::OnOpen, 0, 86_400)),
+        )
+        .unwrap();
+    let (got, _) = pump_all(&la, &lb, la.flush().unwrap());
+    assert_eq!(got.single_or_panic().mime.as_deref(), Some("image/jpeg"));
+    let c = b.open_burn(id.clone(), 5).unwrap().unwrap();
+    assert_eq!(c.bytes, vec![0xFF, 0xD8, 1]);
+    assert!(
+        !b.burn_is_live(id.clone()),
+        "view once: receiver copy shredded on view"
+    );
+    assert!(b.open_burn(id.clone(), 6).unwrap().is_none());
+    let (_, opened) = pump_all(&lb, &la, lb.flush().unwrap());
+    assert!(opened.single_or_panic().shredded);
+    assert!(!a.burn_is_live(id));
+}
+
+#[test]
+fn burn_unread_ttl_expires_both_sides_and_bad_specs_rejected() {
+    let (a, b, la, lb) = paired();
+    let bob_id = a.contacts()[0].contact_id.clone();
+    let _ = pump_all(&la, &lb, la.start().unwrap());
+    let s = spec(BurnMode::OnOpen, 0, 3_600);
+    let id = a
+        .queue_message(bob_id.clone(), "never".into(), Some(s))
+        .unwrap();
+    let (got, _) = pump_all(&la, &lb, la.flush().unwrap());
+    let sent = got.single_or_panic().created_ms;
+    let exp = burn_expires_at_ms(sent, s).unwrap();
+    assert_eq!(exp, sent + 3_600_000);
+    assert!(b.tick_burn(exp - 1).is_empty());
+    assert_eq!(b.tick_burn(exp), vec![id.clone()]);
+    assert!(b.open_burn(id.clone(), exp).unwrap().is_none());
+    assert_eq!(a.tick_burn(exp + 1_000), vec![id]); // sender copy expires too
+    assert!(!burn_spec_valid(spec(BurnMode::Timer, 11, 3_600)));
+    assert!(a
+        .queue_message(bob_id, "x".into(), Some(spec(BurnMode::OnOpen, 0, 5)))
+        .is_err());
+}
+
+#[test]
+fn opened_from_wrong_peer_is_ignored_and_not_counted_as_flushed() {
+    let (a, b, la, lb) = paired();
+    let bob_id = a.contacts()[0].contact_id.clone();
+    let _ = pump_all(&la, &lb, la.start().unwrap());
+    let id = a
+        .queue_message(bob_id, "t".into(), Some(spec(BurnMode::Timer, 60, 604_800)))
+        .unwrap();
+    let out = la.flush().unwrap();
+    assert_eq!(out.flushed, 1);
+    let _ = pump_all(&la, &lb, out);
+    b.open_burn(id, 0).unwrap().unwrap();
+    assert_eq!(
+        b.queued_for(a.identity().peer_id_hex),
+        0,
+        "OPENED is control, not user-queued"
+    );
+    assert_eq!(lb.flush().unwrap().flushed, 0);
+}
+
+trait Single<T> {
+    fn single_or_panic(self) -> T;
+}
+impl<T: std::fmt::Debug> Single<T> for Vec<T> {
+    fn single_or_panic(mut self) -> T {
+        assert_eq!(self.len(), 1, "{self:?}");
+        self.pop().unwrap()
+    }
+}

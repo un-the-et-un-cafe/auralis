@@ -450,7 +450,8 @@ This section is normative for clients that implement burn after read (apps/REQUI
 InnerV1 {
   tag:   u8          // 0x00 = no inner header, 0x01 = burn
   burn:  BurnHeader  // present iff tag == 0x01
-  body:  [..]        // content (text, or a media descriptor carrying the wrapped media key)
+  inner_ct: u8       // 0x01 text (UTF-8), 0x02 media (mime_len u8 | mime | bytes), 0x30 OPENED control
+  body:  [..]
 }
 BurnHeader {         // 9 bytes, big-endian
   mode:       u8     // 0 = on_open (view once), 1 = timer
@@ -459,7 +460,7 @@ BurnHeader {         // 9 bytes, big-endian
 }
 ```
 
-The `burn` header is inside the ciphertext, so relays, gateways and store-and-forward nodes MUST NOT be able to tell that a message is ephemeral. Receivers MUST reject headers with values outside the sets above.
+The outer `header_aad` content type for every `InnerV1` message is `0x02` (inner v1), whether it's text, media, burn or control, so relays can't tell them apart. (`0x01` plain text from M2 is still accepted on receive.) `OPENED` MUST NOT carry a burn header, and receivers MUST ignore an `OPENED` that doesn't come from the message's recipient. The `burn` header is inside the ciphertext, so relays, gateways and store-and-forward nodes MUST NOT be able to tell that a message is ephemeral. Receivers MUST reject headers with values outside the sets above.
 
 **Alignment with the envelope expiry.** The sender MUST set the outer expiry (`expiry` / `expires_at` of the opaque envelope, §9 item 2, `OpaqueEnvelope.expiry_ms` in the reference) to `sent_ms + unread_ttl × 1000`. Relays and store-and-forward nodes (§8.4) MUST drop the opaque envelope at or after `expires_at` and MUST NOT store an envelope that has already expired. The receiver MUST delete an unopened burn message at the same instant. `expires_at` is the only outer signal; every message type SHOULD carry one, so its presence doesn't reveal burn.
 

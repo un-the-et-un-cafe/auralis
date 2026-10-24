@@ -33,8 +33,9 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use omcp_core::ble::fragment::{fragment_and_seal, random_frag_id, FragmentReassembler};
 use omcp_core::ble::gossip::SeenCache;
 use omcp_core::ble::link::LinkSession;
-use omcp_core::ble::message::{open_text_envelope, seal_text_envelope};
+use omcp_core::ble::message::{open_app_envelope, seal_inner_envelope, CONTENT_TYPE_TEXT_PLAIN};
 use omcp_core::ble::{capabilities, DiscoveryAdvertisement};
+use omcp_core::burn::{self as core_burn, AppContent, BurnHeader, BurnStore, Opened};
 use omcp_core::gateway::policy::{GatewayPolicy, NetworkKind, DEFAULT_DAILY_BYTE_CAP};
 use omcp_core::{
     backup, recovery, safety, EnvelopeV1, HybridInitiator, HybridResponder, HybridSessionKeys,
@@ -133,9 +134,82 @@ pub struct ContactPreview {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct ReceivedText {
     pub contact_id: String,
+    /// Empty for burn messages: their content is only available via [`OmcpNode::open_burn`].
     pub text: String,
     pub created_ms: u64,
     pub envelope_id_hex: String,
+    /// Decrypted inner `burn` header (PROTOCOL §19.1), if any.
+    pub burn: Option<BurnSpec>,
+    /// Set for media messages (view-once images/videos).
+    pub mime: Option<String>,
+}
+
+/// Burn mode (PROTOCOL §19.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BurnMode {
+    OnOpen,
+    Timer,
+}
+
+/// Mirrors `omcp_core::burn::BurnHeader`; validated in Rust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct BurnSpec {
+    pub mode: BurnMode,
+    pub secs: u32,
+    pub unread_ttl: u32,
+}
+
+impl BurnSpec {
+    fn header(&self) -> Result<BurnHeader, FfiError> {
+        let m = match self.mode {
+            BurnMode::OnOpen => core_burn::BurnMode::OnOpen,
+            BurnMode::Timer => core_burn::BurnMode::Timer,
+        };
+        Ok(BurnHeader::new(m, self.secs, self.unread_ttl)?)
+    }
+    fn from_header(h: &BurnHeader) -> Self {
+        Self {
+            mode: match h.mode {
+                core_burn::BurnMode::OnOpen => BurnMode::OnOpen,
+                core_burn::BurnMode::Timer => BurnMode::Timer,
+            },
+            secs: h.secs,
+            unread_ttl: h.unread_ttl,
+        }
+    }
+}
+
+/// Sender side: the peer opened one of our burn messages.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OpenedEvent {
+    pub contact_id: String,
+    pub msg_id_hex: String,
+    pub opened_ms: u64,
+    /// True if our copy was crypto-shredded immediately (view once / media).
+    pub shredded: bool,
+    /// Timer mode: when our copy burns.
+    pub burn_at_ms: Option<u64>,
+}
+
+/// Content of a burn message, returned exactly once by [`OmcpNode::open_burn`].
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BurnContent {
+    pub text: String,
+    pub bytes: Vec<u8>,
+    pub mime: Option<String>,
+    /// None = burn when the viewer closes (view once).
+    pub burn_at_ms: Option<u64>,
+}
+
+#[uniffi::export]
+pub fn burn_spec_valid(spec: BurnSpec) -> bool {
+    spec.header().is_ok()
+}
+
+/// Outer envelope `expires_at` = sent + unread_ttl (PROTOCOL §19.1).
+#[uniffi::export]
+pub fn burn_expires_at_ms(sent_ms: u64, spec: BurnSpec) -> Result<u64, FfiError> {
+    Ok(core_burn::expires_at_ms(sent_ms, &spec.header()?))
 }
 
 /// Result of feeding a link: PDUs to transmit (in order) + decrypted messages.
@@ -145,8 +219,10 @@ pub struct LinkOutput {
     pub received: Vec<ReceivedText>,
     pub established: bool,
     pub peer_contact_id: Option<String>,
-    /// Number of queued texts flushed onto this link by this call.
+    /// Number of queued user messages flushed onto this link by this call (control messages excluded).
     pub flushed: u32,
+    /// `OPENED` receipts received on this call (our copies already handled in Rust).
+    pub opened: Vec<OpenedEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -319,10 +395,46 @@ struct Contact {
 
 struct NodeState {
     contacts: HashMap<[u8; 32], Contact>,
-    queues: HashMap<[u8; 32], VecDeque<String>>,
+    queues: HashMap<[u8; 32], VecDeque<Queued>>,
+    /// Received burn content (crypto-shredding store).
+    burn_in: BurnStore,
+    /// Our own sent burn content, kept until `OPENED` + timer or unread expiry.
+    burn_out: BurnStore,
+    burn_meta: HashMap<[u8; 16], BurnMeta>,
     links_up: HashMap<u64, [u8; 32]>,
     next_link: u64,
     seen: SeenCache,
+}
+
+/// One queued outbound message: envelope id fixed at queue time so `OPENED` can match.
+struct Queued {
+    envelope_id: [u8; 16],
+    created_ms: u64,
+    inner: Zeroizing<Vec<u8>>,
+    /// Control messages (OPENED) don't count towards `LinkOutput::flushed`.
+    control: bool,
+}
+
+struct BurnMeta {
+    peer: [u8; 32],
+    mime: Option<String>,
+}
+
+fn random_id16() -> Result<[u8; 16], FfiError> {
+    let mut id = [0u8; 16];
+    getrandom_fill(&mut id)?;
+    Ok(id)
+}
+
+fn getrandom_fill(b: &mut [u8]) -> Result<(), FfiError> {
+    getrandom::getrandom(b).map_err(|_| FfiError::Protocol {
+        msg: "getrandom".into(),
+    })
+}
+
+fn parse_msg_id(h: &str) -> Result<[u8; 16], FfiError> {
+    let v = hex::decode(h).map_err(|_| invalid("msg id hex"))?;
+    v.try_into().map_err(|_| invalid("msg id length"))
 }
 
 struct NodeInner {
@@ -374,6 +486,9 @@ impl OmcpNode {
                 state: Mutex::new(NodeState {
                     contacts: HashMap::new(),
                     queues: HashMap::new(),
+                    burn_in: BurnStore::default(),
+                    burn_out: BurnStore::default(),
+                    burn_meta: HashMap::new(),
                     links_up: HashMap::new(),
                     next_link: 1,
                     seen: SeenCache::default(),
@@ -546,16 +661,104 @@ impl OmcpNode {
 
     /// Queue a text for a contact; it is sent when a link to them is up.
     pub fn queue_text(&self, contact_id: String, text: String) -> Result<(), FfiError> {
+        self.queue_message(contact_id, text, None).map(|_| ())
+    }
+
+    /// Queue a text, optionally burn after read. The `burn` header travels inside the
+    /// encrypted inner message. Returns the message (envelope) id, hex.
+    pub fn queue_message(
+        &self,
+        contact_id: String,
+        text: String,
+        burn: Option<BurnSpec>,
+    ) -> Result<String, FfiError> {
         if text.len() > MAX_TEXT_BYTES {
             return Err(invalid("text too long"));
         }
-        let id = parse_id(&contact_id)?;
-        let mut st = self.inner.lock();
-        if !st.contacts.contains_key(&id) {
-            return Err(FfiError::UnknownContact);
+        self.queue_app(&contact_id, AppContent::Text(text), burn, None)
+    }
+
+    /// Queue a (small, ≤ 16 KiB in the beta) media item, e.g. a view-once photo.
+    pub fn queue_media(
+        &self,
+        contact_id: String,
+        mime: String,
+        bytes: Vec<u8>,
+        burn: Option<BurnSpec>,
+    ) -> Result<String, FfiError> {
+        if bytes.len() > MAX_TEXT_BYTES {
+            return Err(invalid("media too large for the beta link"));
         }
-        st.queues.entry(id).or_default().push_back(text);
+        let m = Some(mime.clone());
+        self.queue_app(&contact_id, AppContent::Media { mime, bytes }, burn, m)
+    }
+
+    /// Open a received burn message. Returns its content exactly once (None afterwards,
+    /// or once burned/expired) and queues an encrypted `OPENED` receipt to the sender.
+    pub fn open_burn(
+        &self,
+        msg_id_hex: String,
+        now_ms: u64,
+    ) -> Result<Option<BurnContent>, FfiError> {
+        let id = parse_msg_id(&msg_id_hex)?;
+        let mut st = self.inner.lock();
+        let Some(meta) = st.burn_meta.get(&id) else {
+            return Ok(None);
+        };
+        let (peer, mime) = (meta.peer, meta.mime.clone());
+        if !st.burn_in.is_live(&id) {
+            return Ok(None);
+        }
+        let Opened::Content {
+            body,
+            receipt,
+            burn_at_ms,
+        } = st.burn_in.open(&id, now_ms)?
+        else {
+            return Ok(None);
+        };
+        let inner = core_burn::encode_app(None, &AppContent::Opened(receipt))?;
+        st.queues.entry(peer).or_default().push_back(Queued {
+            envelope_id: random_id16()?,
+            created_ms: now_ms,
+            inner: Zeroizing::new(inner),
+            control: true,
+        });
+        let (text, bytes) = if mime.is_some() {
+            (String::new(), body.to_vec())
+        } else {
+            (String::from_utf8_lossy(&body).into_owned(), Vec::new())
+        };
+        Ok(Some(BurnContent {
+            text,
+            bytes,
+            mime,
+            burn_at_ms,
+        }))
+    }
+
+    /// Viewer closed: burn the opened message now.
+    pub fn close_burn(&self, msg_id_hex: String) -> Result<(), FfiError> {
+        let id = parse_msg_id(&msg_id_hex)?;
+        self.inner.lock().burn_in.close(&id);
         Ok(())
+    }
+
+    /// Run timers and unread expiry on both stores. Returns ids that were crypto-shredded.
+    pub fn tick_burn(&self, now_ms: u64) -> Vec<String> {
+        let mut st = self.inner.lock();
+        let mut out = st.burn_in.tick(now_ms);
+        out.extend(st.burn_out.tick(now_ms));
+        out.iter().map(hex::encode).collect()
+    }
+
+    /// Whether any copy (sent or received) of this burn message still exists on this node.
+    pub fn burn_is_live(&self, msg_id_hex: String) -> bool {
+        let Ok(id) = parse_msg_id(&msg_id_hex) else {
+            return false;
+        };
+        let st = self.inner.lock();
+        st.burn_in.is_live(&id) || st.burn_out.is_live(&id)
     }
 
     pub fn queued_for(&self, contact_id: String) -> u32 {
@@ -566,14 +769,18 @@ impl OmcpNode {
             .lock()
             .queues
             .get(&id)
-            .map_or(0, |q| q.len() as u32)
+            .map_or(0, |q| q.iter().filter(|m| !m.control).count() as u32)
     }
 
     /// Aggregate path status for the banner. Gateway transport is not wired in
     /// the beta, so `Gateway`/`Mixed` are not produced yet.
     pub fn path_status(&self) -> PathStatus {
         let st = self.inner.lock();
-        let queued: usize = st.queues.values().map(VecDeque::len).sum();
+        let queued: usize = st
+            .queues
+            .values()
+            .map(|q| q.iter().filter(|m| !m.control).count())
+            .sum();
         let mut peers: Vec<_> = st.links_up.values().collect();
         peers.sort();
         peers.dedup();
@@ -606,6 +813,41 @@ impl OmcpNode {
 }
 
 impl OmcpNode {
+    fn queue_app(
+        &self,
+        contact_id: &str,
+        content: AppContent,
+        burn: Option<BurnSpec>,
+        mime: Option<String>,
+    ) -> Result<String, FfiError> {
+        let id = parse_id(contact_id)?;
+        let header = burn.map(|b| b.header()).transpose()?;
+        let inner = core_burn::encode_app(header.as_ref(), &content)?;
+        let envelope_id = random_id16()?;
+        let now = now_ms();
+        let mut st = self.inner.lock();
+        if !st.contacts.contains_key(&id) {
+            return Err(FfiError::UnknownContact);
+        }
+        if let Some(h) = header {
+            let body: &[u8] = match &content {
+                AppContent::Text(t) => t.as_bytes(),
+                AppContent::Media { bytes, .. } => bytes,
+                AppContent::Opened(_) => &[],
+            };
+            st.burn_out.insert(envelope_id, h, body, now)?;
+            st.burn_meta
+                .insert(envelope_id, BurnMeta { peer: id, mime });
+        }
+        st.queues.entry(id).or_default().push_back(Queued {
+            envelope_id,
+            created_ms: now,
+            inner: Zeroizing::new(inner),
+            control: false,
+        });
+        Ok(hex::encode(envelope_id))
+    }
+
     fn info(&self, id: &[u8; 32], c: &Contact) -> ContactInfo {
         ContactInfo {
             contact_id: hex::encode(id),
@@ -739,19 +981,11 @@ impl MeshLink {
                 if let Some(bytes) = up.reasm.push_frame(&mut up.link, body, Instant::now())? {
                     let env = EnvelopeV1::decode(&bytes)?;
                     let key = up.recv_key();
-                    let text = open_text_envelope(&key, &peer, &env, &mut up.app_recv)?;
-                    let dup = self
-                        .node
-                        .lock()
-                        .seen
-                        .check_and_insert(env.envelope_id, Instant::now());
-                    if !dup {
-                        out.received.push(ReceivedText {
-                            contact_id: hex::encode(peer),
-                            text,
-                            created_ms: env.created_ms,
-                            envelope_id_hex: hex::encode(env.envelope_id),
-                        });
+                    let (ct, plain) = open_app_envelope(&key, &peer, &env, &mut up.app_recv)?;
+                    let plain = Zeroizing::new(plain);
+                    let mut node = self.node.lock();
+                    if !node.seen.check_and_insert(env.envelope_id, Instant::now()) {
+                        Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
                     }
                 }
             }
@@ -768,7 +1002,16 @@ impl MeshLink {
         let peer = st.peer.ok_or(FfiError::UnknownContact)?;
         match &mut st.role {
             Role::Up(up) => {
-                Self::seal_into(&self.node, up, &text, &mut out)?;
+                if text.len() > MAX_TEXT_BYTES {
+                    return Err(invalid("text too long"));
+                }
+                let q = Queued {
+                    envelope_id: random_id16()?,
+                    created_ms: now_ms(),
+                    inner: Zeroizing::new(core_burn::encode_app(None, &AppContent::Text(text))?),
+                    control: false,
+                };
+                Self::seal_into(&self.node, up, &q, &mut out)?;
             }
             _ => {
                 drop(st);
@@ -813,17 +1056,93 @@ impl MeshLink {
         out.peer_contact_id = st.peer.map(hex::encode);
     }
 
+    /// Route one decrypted message: text, burn content into the shredding store, or `OPENED`.
+    fn deliver(
+        node: &mut NodeState,
+        peer: [u8; 32],
+        env: &EnvelopeV1,
+        ct: u8,
+        plain: &[u8],
+        out: &mut LinkOutput,
+    ) -> Result<(), FfiError> {
+        let mut rt = ReceivedText {
+            contact_id: hex::encode(peer),
+            text: String::new(),
+            created_ms: env.created_ms,
+            envelope_id_hex: hex::encode(env.envelope_id),
+            burn: None,
+            mime: None,
+        };
+        if ct == CONTENT_TYPE_TEXT_PLAIN {
+            rt.text = String::from_utf8(plain.to_vec()).map_err(|_| invalid("utf8"))?;
+            out.received.push(rt);
+            return Ok(());
+        }
+        let (burn, content) = core_burn::decode_app(plain)?;
+        match (burn, content) {
+            (_, AppContent::Opened(r)) => {
+                let Some(meta) = node.burn_meta.get(&r.msg_id) else {
+                    return Ok(());
+                };
+                if meta.peer != peer {
+                    return Ok(()); // only the recipient may open it
+                }
+                let media = meta.mime.is_some();
+                let shredded = node
+                    .burn_out
+                    .on_remote_opened(&r.msg_id, r.opened_ms, media);
+                out.opened.push(OpenedEvent {
+                    contact_id: hex::encode(peer),
+                    msg_id_hex: hex::encode(r.msg_id),
+                    opened_ms: r.opened_ms,
+                    shredded,
+                    burn_at_ms: node.burn_out.burn_at(&r.msg_id),
+                });
+            }
+            (None, AppContent::Text(t)) => {
+                rt.text = t;
+                out.received.push(rt);
+            }
+            (None, AppContent::Media { mime, .. }) => {
+                // TODO(M5.x): non-burn media goes through the chunked file path.
+                rt.mime = Some(mime);
+                out.received.push(rt);
+            }
+            (Some(h), c) => {
+                let (body, mime) = match &c {
+                    AppContent::Text(t) => (t.as_bytes(), None),
+                    AppContent::Media { mime, bytes } => (bytes.as_slice(), Some(mime.clone())),
+                    AppContent::Opened(_) => unreachable!(),
+                };
+                node.burn_in
+                    .insert(env.envelope_id, h, body, env.created_ms)?;
+                node.burn_meta.insert(
+                    env.envelope_id,
+                    BurnMeta {
+                        peer,
+                        mime: mime.clone(),
+                    },
+                );
+                rt.burn = Some(BurnSpec::from_header(&h));
+                rt.mime = mime;
+                out.received.push(rt);
+            }
+        }
+        Ok(())
+    }
+
     fn seal_into(
         node: &NodeInner,
         up: &mut Established,
-        text: &str,
+        q: &Queued,
         out: &mut LinkOutput,
     ) -> Result<(), FfiError> {
-        let env = seal_text_envelope(
+        let env = seal_inner_envelope(
             &up.send_key(),
             &node.peer_id,
-            text,
-            now_ms(),
+            q.envelope_id,
+            &q.inner,
+            q.created_ms,
             &mut up.app_send,
             TTL_HOPS,
         )?;
@@ -850,16 +1169,18 @@ impl MeshLink {
         let (Some(peer), Role::Up(up)) = (st.peer, &mut st.role) else {
             return Ok(());
         };
-        let pending: Vec<String> = self
+        let pending: Vec<Queued> = self
             .node
             .lock()
             .queues
             .remove(&peer)
             .map(Vec::from)
             .unwrap_or_default();
-        for t in &pending {
-            Self::seal_into(&self.node, up, t, out)?;
-            out.flushed += 1;
+        for q in &pending {
+            Self::seal_into(&self.node, up, q, out)?;
+            if !q.control {
+                out.flushed += 1;
+            }
         }
         Ok(())
     }
