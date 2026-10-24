@@ -25,6 +25,7 @@ final class PolicyTests: XCTestCase {
         }
         XCTAssertTrue(src.contains("MANUFACTURER_ID = 0xFFFF"))
         XCTAssertEqual(OmcpGatt.manufacturerId, 0xFFFF)
+        XCTAssertTrue(src.contains("const val LOCAL_NAME = \"\(OmcpGatt.localName)\""))
     }
 
     func testFileLimitFromCore() throws {

@@ -13,8 +13,10 @@ import HoplaKit
 /// Opaque PDUs go straight into `CoreLink` (Rust); all crypto and fragmentation is in Rust.
 ///
 /// iOS differences / background notes (see apps/ios/README.md):
-/// - iOS peripherals can't advertise manufacturer data, so the 13-byte ad is served on Control;
-///   Android centrals must also accept service-UUID-only results (TODO on Android side).
+/// - iOS peripherals can't advertise manufacturer data, so the 13-byte ad is served on Control
+///   and we also advertise `OmcpGatt.localName`. Android centrals don't rely on manufacturer data
+///   for iPhones: they match the service UUID / local name, or Apple's background overflow-area
+///   data, then connect and do GATT service discovery + read Control (`ScanClassifier.kt`).
 /// - In the background iOS moves the service UUID to the overflow area and slows scanning;
 ///   scanning must name the service UUID. `UIBackgroundModes` has bluetooth-central and
 ///   bluetooth-peripheral; both managers use state restoration identifiers so iOS can relaunch
@@ -202,7 +204,7 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
         outboxChar = outboxC
         pm.removeAllServices()
         pm.add(s)
-        pm.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [service]])
+        pm.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [service], CBAdvertisementDataLocalNameKey: OmcpGatt.localName])
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, didReceiveRead req: CBATTRequest) {

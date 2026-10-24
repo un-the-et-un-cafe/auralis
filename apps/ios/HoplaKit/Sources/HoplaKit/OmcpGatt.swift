@@ -11,4 +11,8 @@ public enum OmcpGatt {
     public static let cccd = "00002902-0000-1000-8000-00805f9b34fb"
     /// Manufacturer-data company id for the 13-byte advertisement (0xFFFF = testing).
     public static let manufacturerId: UInt16 = 0xFFFF
+    /// Local name in the (foreground) advertisement so Android can spot iPhones even when the
+    /// service UUID isn't in the scan record. Backgrounded iOS drops it; Android then probes
+    /// devices with Apple overflow-area data via GATT service discovery.
+    public static let localName = "OMCP"
 }

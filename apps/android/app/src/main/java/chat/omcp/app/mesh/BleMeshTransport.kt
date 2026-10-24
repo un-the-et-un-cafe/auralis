@@ -63,12 +63,15 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     private val subscribed = ConcurrentHashMap<String, BluetoothDevice>()
 
     /** Central side: per-peripheral initiator links. */
-    private inner class Client(val contactId: String, var gatt: BluetoothGatt? = null) {
+    private inner class Client(val address: String, var contactId: String?, var probing: Boolean = false) {
+        var gatt: BluetoothGatt? = null
         var link: CoreLink? = null
+        /** Map key: contact id once known, else the device address while probing. */
+        val key: String get() = contactId ?: address
         val writes = ArrayDeque<ByteArray>()
         var busy = false
     }
-    private val clients = ConcurrentHashMap<String, Client>() // by contactId
+    private val clients = ConcurrentHashMap<String, Client>() // by contactId (or address while probing)
 
     @Volatile var running = false
         private set
@@ -214,6 +217,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             .setConnectable(true)
             .build()
         val data = AdvertiseData.Builder().addServiceUuid(ParcelUuid(service)).build()
+        // Manufacturer data (13-byte ad) for Android centrals; iOS centrals read it from Control.
         val scanResp = AdvertiseData.Builder()
             .addManufacturerData(OmcpGatt.MANUFACTURER_ID, repo.core.advertisement())
             .build()
@@ -226,29 +230,74 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
     // ---------------- central ----------------
 
+    /**
+     * Not a strict service-UUID-only filter (iPhones would never match in the background, see
+     * [ScanClassifier]). The filters are OR'ed and keep working with the screen off:
+     * OMCP service UUID, OMCP manufacturer data (Android peers), OMCP local name (foreground
+     * iPhones) and Apple's overflow-area manufacturer data (backgrounded iPhones).
+     */
     private fun startScanning() {
         val scanner = bt.adapter.bluetoothLeScanner ?: return
-        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(service)).build()
-        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_POWER).build()
-        scanner.startScan(listOf(filter), settings, scanCb)
+        val filters = listOf(
+            ScanFilter.Builder().setServiceUuid(ParcelUuid(service)).build(),
+            ScanFilter.Builder().setManufacturerData(OmcpGatt.MANUFACTURER_ID, ByteArray(0)).build(),
+            ScanFilter.Builder().setDeviceName(OmcpGatt.LOCAL_NAME).build(),
+            ScanFilter.Builder()
+                .setManufacturerData(ScanClassifier.APPLE_COMPANY_ID, byteArrayOf(ScanClassifier.APPLE_OVERFLOW_TYPE), byteArrayOf(0xFF.toByte()))
+                .build(),
+        )
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_BALANCED).build()
+        scanner.startScan(filters, settings, scanCb)
     }
+
+    private val probes = ProbeLimiter()
 
     private val scanCb = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val adv = result.scanRecord?.getManufacturerSpecificData(OmcpGatt.MANUFACTURER_ID) ?: return
-            io.execute { maybeDial(result.device, adv) }
+            val rec = result.scanRecord ?: return
+            val mfr = HashMap<Int, ByteArray>()
+            rec.manufacturerSpecificData?.let { a -> for (i in 0 until a.size()) mfr[a.keyAt(i)] = a.valueAt(i) }
+            val decision = ScanClassifier.classify(
+                serviceUuids = rec.serviceUuids.orEmpty().map { it.uuid },
+                manufacturerData = mfr,
+                localName = rec.deviceName,
+                omcpService = service,
+                omcpManufacturerId = OmcpGatt.MANUFACTURER_ID,
+                omcpLocalName = OmcpGatt.LOCAL_NAME,
+            )
+            when (decision) {
+                is ScanClassifier.Decision.Dial -> io.execute { maybeDial(result.device, decision.advertisement) }
+                is ScanClassifier.Decision.Probe -> io.execute { maybeProbe(result.device) }
+                ScanClassifier.Decision.Ignore -> Unit
+            }
         }
     }
 
     private fun maybeDial(device: BluetoothDevice, adv: ByteArray) {
         if (!running) return
         val contactId = repo.core.contactForAdvertisement(adv) ?: return
-        if (clients.containsKey(contactId)) return
+        if (clients.containsKey(contactId) || clients.containsKey(device.address)) return
         val me = repo.core.identity()?.peerIdHex ?: return
         if (me >= contactId) return // tie-break: lower PeerID dials
-        val c = Client(contactId)
+        val c = Client(device.address, contactId)
         clients[contactId] = c
         c.gatt = device.connectGatt(context, false, clientCb(c), BluetoothDevice.TRANSPORT_LE)
+    }
+
+    /** iPhone (no manufacturer data): connect, discover services, read Control, then decide. */
+    private fun maybeProbe(device: BluetoothDevice) {
+        if (!running || clients.containsKey(device.address)) return
+        if (clients.values.any { it.address == device.address }) return
+        if (!probes.tryBegin(device.address)) return
+        val c = Client(device.address, null, probing = true)
+        clients[device.address] = c
+        c.gatt = device.connectGatt(context, false, clientCb(c), BluetoothDevice.TRANSPORT_LE)
+    }
+
+    private fun endProbe(c: Client, useful: Boolean) {
+        if (!c.probing) return
+        c.probing = false
+        probes.end(c.address, useful)
     }
 
     private fun clientCb(c: Client) = object : BluetoothGattCallback() {
@@ -256,8 +305,9 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> g.requestMtu(517)
                 BluetoothProfile.STATE_DISCONNECTED -> io.execute {
+                    endProbe(c, useful = false)
                     c.link?.close()
-                    clients.remove(c.contactId)
+                    clients.remove(c.key)
                     runCatching { g.close() }
                     repo.refresh()
                 }
@@ -269,6 +319,47 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            val svc = g.getService(service) ?: return g.disconnect()
+            if (c.contactId == null) {
+                // Probe: learn who this is from the 13-byte ad on Control.
+                val ctl = svc.getCharacteristic(control) ?: return g.disconnect()
+                g.readCharacteristic(ctl)
+                return
+            }
+            subscribe(g)
+        }
+
+        @Deprecated("API < 33 path")
+        override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT < 33) {
+                @Suppress("DEPRECATION")
+                onControl(g, ch, ch.value ?: ByteArray(0), status)
+            }
+        }
+
+        override fun onCharacteristicRead(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) =
+            onControl(g, ch, value, status)
+
+        private fun onControl(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            if (ch.uuid != control) return
+            io.execute {
+                val cid = if (status == BluetoothGatt.GATT_SUCCESS) repo.core.contactForAdvertisement(value) else null
+                val me = repo.core.identity()?.peerIdHex
+                // Not a contact, already connected, or they should dial us (tie-break).
+                if (cid == null || me == null || me >= cid || clients.containsKey(cid)) {
+                    endProbe(c, useful = false)
+                    g.disconnect()
+                    return@execute
+                }
+                endProbe(c, useful = true)
+                clients.remove(c.key)
+                c.contactId = cid
+                clients[cid] = c
+                subscribe(g)
+            }
+        }
+
+        private fun subscribe(g: BluetoothGatt) {
             val ch = g.getService(service)?.getCharacteristic(outbox) ?: return g.disconnect()
             g.setCharacteristicNotification(ch, true)
             val d = ch.getDescriptor(cccd) ?: return g.disconnect()
@@ -284,7 +375,8 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
             io.execute {
-                val link = runCatching { repo.core.openInitiatorLink(c.contactId) }.getOrNull() ?: return@execute
+                val cid = c.contactId ?: return@execute
+                val link = runCatching { repo.core.openInitiatorLink(cid) }.getOrNull() ?: return@execute
                 c.link = link
                 link.start().outgoing.forEach { c.writes.addLast(it) }
                 pumpWrites(c)

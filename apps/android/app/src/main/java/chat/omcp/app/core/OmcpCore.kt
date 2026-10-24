@@ -133,4 +133,6 @@ object OmcpGatt {
     const val CCCD = "00002902-0000-1000-8000-00805f9b34fb"
     /** Manufacturer-data company id for the 13-byte advertisement (0xFFFF = testing). */
     const val MANUFACTURER_ID = 0xFFFF
+    /** Local name iPhones put in the (foreground) advertisement; Android scans for it too. */
+    const val LOCAL_NAME = "OMCP"
 }
