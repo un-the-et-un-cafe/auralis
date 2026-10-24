@@ -13,80 +13,73 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.Identity
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun YouScreen(
+    identity: Identity?,
+    suiteLabel: String,
+    previews: Boolean,
+    onSetPreviews: (Boolean) -> Unit,
     onGateway: () -> Unit,
     onSecurity: () -> Unit,
+    onBackup: () -> Unit,
+    onMyQr: () -> Unit,
 ) {
     val c = LocalOmcpColors.current
+    var prev by remember { mutableStateOf(previews) }
     Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.tab_you)) }) }) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
+        Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.padding(16.dp)) {
-                Text("You", style = MaterialTheme.typography.headlineSmall)
+                Text(identity?.displayName ?: "You", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    "PeerID · omcp1…local-stub",
+                    "PeerID · " + shortPeerId(identity?.peerIdHex ?: ""),
                     fontFamily = FontFamily.Monospace,
                     color = c.ink2,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
-                Text(
-                    stringResource(R.string.mesh_placeholder),
-                    color = c.ink3,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-                Text(
-                    "Suite: ${OmcpCoreStub.SUITE_LABEL}",
-                    color = c.ink3,
-                    style = MaterialTheme.typography.labelSmall,
-                )
+                Text("Suite: $suiteLabel", color = c.ink3, style = MaterialTheme.typography.labelSmall)
             }
             HorizontalDivider()
+            Item(stringResource(R.string.contact_add_my_qr), stringResource(R.string.contact_add_my_qr_desc), onMyQr)
+            Item(stringResource(R.string.gateway_title), "Wi‑Fi-only default · 500 MB/day cap", onGateway)
+            Item(stringResource(R.string.security_centre), "Safety numbers, session, block list", onSecurity)
+            Item(stringResource(R.string.backup_settings_title), stringResource(R.string.backup_settings_desc), onBackup)
             ListItem(
-                headlineContent = { Text(stringResource(R.string.gateway_title)) },
-                supportingContent = { Text("Wi‑Fi-only default · 500 MB/day cap") },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onGateway),
-            )
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.security_centre)) },
-                supportingContent = { Text("Safety numbers, session, block list") },
-                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onSecurity),
-            )
-            ListItem(
-                headlineContent = { Text("Notifications") },
-                supportingContent = { Text("Previews off by default") },
-            )
-            ListItem(
-                headlineContent = { Text("Backup / restore") },
-                supportingContent = { Text("Encrypted local backup — deferred wiring") },
+                headlineContent = { Text(stringResource(R.string.notif_previews)) },
+                supportingContent = { Text(stringResource(R.string.notif_previews_desc)) },
+                trailingContent = { Switch(checked = prev, onCheckedChange = { prev = it; onSetPreviews(it) }) },
             )
             ListItem(
                 headlineContent = { Text("About") },
-                supportingContent = { Text("Open Mesh Chat · MIT · PROTOCOL.md") },
+                supportingContent = { Text("Hopla · built on the open OMCP protocol · MIT · beta (experimental)") },
             )
         }
     }
+}
+
+@Composable
+private fun Item(title: String, desc: String, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = { Text(desc) },
+        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+    )
 }

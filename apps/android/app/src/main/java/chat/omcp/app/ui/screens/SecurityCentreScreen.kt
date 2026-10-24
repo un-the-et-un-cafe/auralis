@@ -1,5 +1,8 @@
 package chat.omcp.app.ui.screens
 
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,13 +32,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.Contact
+import chat.omcp.app.ui.components.SafetyNumberBlock
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SecurityCentreScreen(
-    contactName: String = "Alex Rivera",
+    contact: Contact?,
+    suiteLabel: String,
+    onSetVerified: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     val c = LocalOmcpColors.current
@@ -66,17 +72,17 @@ fun SecurityCentreScreen(
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(16.dp),
             ) {
-                Text(contactName, style = MaterialTheme.typography.titleLarge)
+                Text(contact?.displayName ?: "—", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "PeerID · omcp1…stub",
+                    "PeerID · " + shortPeerId(contact?.id ?: ""),
                     fontFamily = FontFamily.Monospace,
                     color = c.ink2,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp),
                 )
                 Text(
-                    stringResource(R.string.verified_contact),
-                    color = c.ok,
+                    if (contact?.verified == true) stringResource(R.string.verified_contact) else stringResource(R.string.unverified),
+                    color = if (contact?.verified == true) c.ok else c.warn,
                     style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(top = 8.dp),
                 )
@@ -90,18 +96,15 @@ fun SecurityCentreScreen(
                     .padding(16.dp),
             ) {
                 Text("Safety number", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "12345 67890 12345 67890\n12345 67890 12345 67890\n12345 67890 12345 67890",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 12.dp),
-                )
+                Spacer(Modifier.height(12.dp))
+                SafetyNumberBlock(contact?.safetyNumber.orEmpty())
                 Row(
                     Modifier.padding(top = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    OutlinedButton(onClick = {}) { Text("Mark verified") }
-                    OutlinedButton(onClick = {}) { Text("Scan QR") }
+                    OutlinedButton(onClick = { onSetVerified(contact?.verified != true) }, enabled = contact != null) {
+                        Text(if (contact?.verified == true) "Mark unverified" else "Mark verified")
+                    }
                 }
             }
 
@@ -114,18 +117,20 @@ fun SecurityCentreScreen(
             ) {
                 Text("Session", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    OmcpCoreStub.encryptionSummary(),
+                    "End-to-end · Noise hybrid · $suiteLabel",
                     color = c.ink2,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 8.dp),
                 )
-                OutlinedButton(onClick = {}, modifier = Modifier.padding(top = 12.dp)) {
+                // TODO(M5.1): session reset + block list.
+                OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.padding(top = 12.dp)) {
                     Text("Reset session")
                 }
             }
 
             Button(
                 onClick = {},
+                enabled = false,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = c.danger,
                     contentColor = MaterialTheme.colorScheme.onError,

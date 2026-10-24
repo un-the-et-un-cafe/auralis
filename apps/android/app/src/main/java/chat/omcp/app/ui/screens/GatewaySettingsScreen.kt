@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,21 +36,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.components.PathChip
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 /** Product / design: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
  * Cap meter always starts at **0 of 500 MB** — never ship a fake “200 of 500” fill. */
-private const val DEFAULT_DAILY_CAP_MB = 500
-private const val USED_MB = 0 // real metering not wired yet; Designy lock-in: 0 used
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GatewaySettingsScreen(onBack: () -> Unit) {
+fun GatewaySettingsScreen(vm: chat.omcp.app.ui.vm.GatewayViewModel, onBack: () -> Unit) {
     val c = LocalOmcpColors.current
-    var gatewayOn by remember { mutableStateOf(false) }
-    var allowMobile by remember { mutableStateOf(false) } // Wi‑Fi-only default
+    // Cap comes from omcp-core (500 MB/day); usage stays 0 until real metering lands.
+    val DEFAULT_DAILY_CAP_MB = vm.dailyCapMb
+    val USED_MB = vm.usedMb
+    val gatewayOn by vm.gatewayOn.collectAsState()
+    val allowMobile by vm.allowMobile.collectAsState() // Wi‑Fi-only default
     var storeForward by remember { mutableStateOf(false) }
     var showDisclosure by remember { mutableStateOf(false) }
     var showMeteredWarn by remember { mutableStateOf(false) }
@@ -67,7 +69,7 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showDisclosure = false
-                    gatewayOn = true
+                    vm.setGateway(true)
                 }) { Text("Enable gateway") }
             },
             dismissButton = {
@@ -83,7 +85,7 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showMeteredWarn = false
-                    allowMobile = true
+                    vm.setAllowMobile(true)
                 }) { Text("Continue") }
             },
             dismissButton = {
@@ -134,7 +136,7 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
                     desc = stringResource(R.string.gateway_act_as_desc),
                     checked = gatewayOn,
                     onCheckedChange = { on ->
-                        if (on && !gatewayOn) showDisclosure = true else gatewayOn = on
+                        if (on && !gatewayOn) showDisclosure = true else vm.setGateway(on)
                     },
                 )
                 SettingToggle(
@@ -142,7 +144,7 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
                     desc = stringResource(R.string.gateway_mobile_data_desc),
                     checked = allowMobile,
                     onCheckedChange = { on ->
-                        if (on) showMeteredWarn = true else allowMobile = false
+                        if (on) showMeteredWarn = true else vm.setAllowMobile(false)
                     },
                 )
                 Text(stringResource(R.string.gateway_cap), style = MaterialTheme.typography.titleSmall)
@@ -180,10 +182,10 @@ fun GatewaySettingsScreen(onBack: () -> Unit) {
             SettingsCard {
                 Text("Path indicators", style = MaterialTheme.typography.titleMedium)
                 Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Legend(OmcpCoreStub.PathKind.Mesh, "Mesh", "Local BLE only")
-                    Legend(OmcpCoreStub.PathKind.Gateway, "Gateway", "Via a neighbour’s Internet")
-                    Legend(OmcpCoreStub.PathKind.Mixed, "Mixed", "Some via mesh, some via gateway")
-                    Legend(OmcpCoreStub.PathKind.Queued, "Queued", "Waiting for a path")
+                    Legend(PathKind.Mesh, "Mesh", "Local BLE only")
+                    Legend(PathKind.Gateway, "Gateway", "Via a neighbour’s Internet")
+                    Legend(PathKind.Mixed, "Mixed", "Some via mesh, some via gateway")
+                    Legend(PathKind.Queued, "Queued", "Waiting for a path")
                 }
             }
 
@@ -227,7 +229,7 @@ private fun SettingToggle(
 }
 
 @Composable
-private fun Legend(kind: OmcpCoreStub.PathKind, label: String, meaning: String) {
+private fun Legend(kind: PathKind, label: String, meaning: String) {
     val c = LocalOmcpColors.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         PathChip(kind, label)

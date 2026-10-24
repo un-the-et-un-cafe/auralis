@@ -28,3 +28,4 @@ apps/ios/OpenMeshChat.xcodeproj/
 apps/ios/OpenMeshChat.xcworkspace/
 apps/ios/DerivedData/
 **/xcuserdata/
+apps/android/.kotlin/

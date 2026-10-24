@@ -22,7 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import chat.omcp.app.core.OmcpCoreStub
+import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 data class ChatRowModel(
@@ -33,7 +33,7 @@ data class ChatRowModel(
     val initials: String,
     val verified: Boolean,
     val unread: Int = 0,
-    val path: OmcpCoreStub.PathKind? = null,
+    val path: PathKind? = null,
     val isGroup: Boolean = false,
 )
 
@@ -96,13 +96,13 @@ fun ChatRow(
                         )
                     }
                 }
-                model.path != null && model.path != OmcpCoreStub.PathKind.Mesh -> {
+                model.path != null && model.path != PathKind.Mesh -> {
                     PathChip(
                         kind = model.path,
                         label = when (model.path) {
-                            OmcpCoreStub.PathKind.Gateway -> "Gateway"
-                            OmcpCoreStub.PathKind.Mixed -> "Mixed"
-                            OmcpCoreStub.PathKind.Queued -> "Queued"
+                            PathKind.Gateway -> "Gateway"
+                            PathKind.Mixed -> "Mixed"
+                            PathKind.Queued -> "Queued"
                             else -> "Mesh"
                         },
                         micro = true,
