@@ -80,6 +80,14 @@ Store additions in v0.1.4a (PeerID = BLAKE2b-256 of the identity key):
   file and burn rows to its PeerID in one transaction, on the first verified handshake.
 - Identity backups carry `dh` per contact; older backups restore legacy contacts.
 
+Schema v2 (v0.1.4b, "Keep sent media"): table `kept_media` holds, per sent non-burn file,
+a small sealed index row (`KeptMediaRec`: message id, peer, content hash, kept time, size;
+grouped so eviction lists only these) and a separate sealed row with the bytes, both under
+the same row key and AAD scheme as every other table. Limits (`app:kept_media_limits`,
+default 90 days / 2 GB) are applied on insert, on start and when changed, oldest first.
+Burn-after-read and view-once media are never written here. Kept copies are re-keyed with
+the contact (v0.1.4a migration) and are not part of any backup.
+
 ## Known gaps
 
 - Filesystem and flash remnants (deleted journal blocks, wear-levelling) are outside what

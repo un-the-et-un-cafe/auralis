@@ -217,9 +217,11 @@ After a chat-backup restore (apps/REQUIREMENTS.md "Encrypted chat backup", CB3),
 |------|------|---------|
 | `0x31` | `MEDIA_REQUEST` | Sent automatically when a link to the partner comes up, or on tap. |
 | `0x32` | `MEDIA_UNAVAILABLE` | Reply: "I no longer have it" (also sent for unknown or burn items). |
-| `0x33` | `MEDIA_RESEND_ASK` | User-confirmed "Ask to resend"; the partner sees a prompt. |
+| `0x33` | `MEDIA_RESEND_ASK` | User-confirmed "Ask to resend"; the partner sees a prompt. v0.1.4b: MAY be followed by an optional UTF-8 note (≤ 280 bytes) — `type | locator | content_hash | note`. It is the **only** message sent; clients MUST NOT send a separate text. |
 
-The holder answers a request by re-sending the file as a normal §7 transfer under the **same** `transfer_id`. The requester MUST verify `BLAKE3(plaintext) == content_hash` from its placeholder before replacing it, and treats a mismatch as an integrity failure. Requests carry nothing beyond what the original offer already told the partner. Over a gateway, re-downloads are Wi-Fi only by default.
+The holder answers a request by re-sending the file as a normal §7 transfer under the **same** `transfer_id`. The requester MUST verify `BLAKE3(plaintext) == content_hash` from its placeholder before replacing it, and treats a mismatch as an integrity failure. Requests carry nothing beyond what the original offer already told the partner (plus the user's optional note on `0x33`). Over a gateway, re-downloads are Wi-Fi only by default.
+
+**Kept sent media (v0.1.4b).** The sender keeps a local copy of every non-burn file it sent, sealed in its encrypted store like every other row, for 90 days or up to 2 GB by default (oldest evicted first; both limits user-configurable). Burn-after-read and view-once media MUST NOT be kept or served. A `MEDIA_REQUEST` for a kept item is answered from the copy automatically, after checking its hash; otherwise the app is asked, and failing that `MEDIA_UNAVAILABLE` is sent.
 
 ---
 
@@ -474,6 +476,7 @@ omcp/
 | 0.1 | 2026-10-23 | Initial specification for Proggy / Pipely handoff |
 | 0.1.3 | 2026-10-24 | §19.1 burn after read (`burn` inner header, `OPENED` receipt) |
 | 0.1.4 | 2026-10-24 | §3.4 device certificates, restore indicator, safety number v2, QR v2; §7.1 media re-fetch controls `0x31`–`0x33`; §11.1 chat backup format |
+| 0.1.4b | 2026-10-24 | §7.1 one-message Ask to resend with optional note; kept sent media served to re-requests (RS3) |
 | 0.1.4a | 2026-10-24 | §3.1 PeerID = BLAKE2b-256(identity key), per-device X25519; §3.4 certificate v2, handshake device binding, QR v3, migration; §11.1 iCloud records |
 
 **Next editors:** Implementers SHOULD open PRs against this file for any wire-format change. Semantic versioning: breaking wire changes → 1.0 major after first production interop; until then 0.x may break with explicit changelog entries.
