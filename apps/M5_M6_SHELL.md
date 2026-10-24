@@ -57,3 +57,11 @@ Design pack: `design/` (mirror) ← Designy `/home/box/shared/omcp-design/`
 
 - **Android:** No JDK/SDK on agent box — not assembled here. Open `apps/android` in Android Studio or enable Pipely `android` job.
 - **iOS:** Structure + `project.yml` only; needs macOS `xcodegen` + Xcode.
+
+## M5 Android beta update (2026-10-24)
+
+See `apps/android/README.md`. `OmcpCoreStub` is replaced by the `OmcpCore` interface (real
+`RustOmcpCore` via `crates/omcp-ffi`, `FakeOmcpCore` for previews/tests). Display name is now
+**Hopla**; icon is a placeholder. Onboarding follows REQUIREMENTS “Onboarding & recovery backup
+(v0.1.1)” with plain layouts (the v0.1.1 recovery/confirm/restore mockups are superseded by that
+flow). Android CI job is enabled.

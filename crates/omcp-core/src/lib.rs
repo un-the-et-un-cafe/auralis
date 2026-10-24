@@ -24,7 +24,9 @@
 #![forbid(unsafe_code)]
 #![allow(missing_docs)] // field-level docs filled as API stabilizes
 
+pub mod backup;
 pub mod ble;
+pub mod burn;
 pub mod error;
 pub mod files;
 pub mod framing;
@@ -32,7 +34,9 @@ pub mod gateway;
 pub mod handshake;
 pub mod mls;
 pub mod negotiate;
+pub mod recovery;
 pub mod rendezvous;
+pub mod safety;
 pub mod suite;
 pub mod sync;
 

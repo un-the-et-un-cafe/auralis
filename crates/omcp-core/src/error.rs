@@ -56,6 +56,15 @@ pub enum OmcpError {
     #[error("MLS-PQ extension malformed: {0}")]
     MlsPqMalformed(&'static str),
 
+    #[error("backup error: {0}")]
+    Backup(&'static str),
+
+    #[error("backup authentication failed (wrong password or key)")]
+    BackupAuth,
+
+    #[error("file too large: {size} bytes exceeds max {max} bytes")]
+    FileTooLarge { size: u64, max: u64 },
+
     #[error("file chunk protocol error: {0}")]
     File(&'static str),
 
@@ -74,6 +83,9 @@ pub enum OmcpError {
     /// Scalable sync (§22) failure.
     #[error("sync: {0}")]
     Sync(&'static str),
+
+    #[error("burn-after-read error: {0}")]
+    Burn(&'static str),
 }
 
 /// Crate-wide result alias.
