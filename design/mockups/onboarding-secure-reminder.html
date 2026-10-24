@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Backup reminder</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="onboarding-secure-reminder" data-state="banner">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav"><h1>Chats</h1></div><div class="callout warn" role="status" style="margin:0;border-radius:0;display:flex;gap:10px;align-items:center;font-size:0.8125rem;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;color:var(--warn);" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><span style="flex:1;">Back up your account — <b>23 h left</b> before Hopla pauses.</span><button class="btn btn-sm btn-primary">Back up</button></div><div class="content"><div class="empty" style="padding:var(--s6) var(--s5);text-align:center;color:var(--ink-2);">No chats yet.<br>Add a contact to start.</div></div>
+  </div>
+  <p class="caption">“Remind me later” — persistent banner (24 h)</p>
+  <div class="phone" data-screen="onboarding-secure-reminder" data-state="expired">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav"><h1>Chats</h1></div><div class="callout warn" role="status" style="margin:0;border-radius:0;display:flex;gap:10px;align-items:center;font-size:0.8125rem;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;color:var(--warn);" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><span style="flex:1;">Back up your account — <b>23 h left</b> before Hopla pauses.</span><button class="btn btn-sm btn-primary">Back up</button></div><div class="content"><div class="empty" style="padding:var(--s6) var(--s5);text-align:center;color:var(--ink-2);">No chats yet.<br>Add a contact to start.</div></div><div class="sheet-scrim"></div>
+    <div class="sheet" role="alertdialog" aria-label="Back up to keep using Hopla"><div class="grab"></div>
+      <div style="width:56px;height:56px;border-radius:50%;background:var(--warn-soft);color:var(--warn);display:grid;place-items:center;"><svg viewBox="0 0 24 24" style="width:28px;height:28px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+      <h2 style="font-size:1.25rem;font-weight:700;margin-top:var(--s3);">Back up to keep using Hopla</h2>
+      <p style="font-size:0.875rem;color:var(--ink-2);margin:6px 0 var(--s4);">It’s been 24 hours. Choose a backup method so you can’t lose your identity. Your chats are safe on this phone.</p>
+      <button class="btn btn-primary btn-block">Choose a backup method</button>
+    </div>
+  </div>
+  <p class="caption">After 24 h — blocking until a method is completed</p>
+</body>
+</html>

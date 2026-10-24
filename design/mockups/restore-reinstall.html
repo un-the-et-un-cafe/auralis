@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Restore on reinstall</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="restore-reinstall" data-state="detected">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="onb" style="background:var(--surface);">
+      <div class="grow" style="max-height:40px;"></div>
+      <div style="width:64px;height:64px;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(11,110,106,.25);"><svg role="img" aria-label="Hopla logo" style="width:64px;height:64px;display:block;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="grdetected" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17A398"/><stop offset=".55" stop-color="#0B6E6A"/><stop offset="1" stop-color="#063F3D"/></linearGradient>
+<radialGradient id="hrdetected" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#grdetected)"/><rect width="1024" height="1024" fill="url(#hrdetected)"/><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M352 262V762" stroke="#fff" stroke-width="132"/>
+<path d="M352 560C352 430 430 372 520 372S688 430 688 560V600" stroke="#fff" stroke-width="132"/>
+</g><circle cx="688" cy="752" r="82" fill="#7FE0CF"/><circle cx="760" cy="262" r="50" fill="#8CC4F5"/></svg></div>
+      <h2 style="margin-top:var(--s4);">Welcome back</h2><p class="lede">We found a Hopla backup in your Google Drive.</p>
+      <div class="card" style="margin-top:var(--s5);"><div class="kv"><span>Account</span><span>sam.okafor@gmail.com</span></div><div class="kv"><span>Created</span><span>24 Oct 2026, 9:41</span></div><div class="kv"><span>From</span><span>Pixel 8</span></div></div>
+      <div class="grow"></div>
+      <button class="btn btn-primary btn-block">Restore from Google Drive</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);">Use my 24 words instead</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);color:var(--ink-2);">Start fresh</button>
+    </div>
+  </div>
+  <p class="caption">Fresh install — backup detected (Android / Drive)</p>
+  <div class="phone" data-screen="restore-reinstall" data-state="password">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="onb" style="background:var(--surface);">
+      <div class="grow" style="max-height:40px;"></div>
+      <div style="width:64px;height:64px;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(11,110,106,.25);"><svg role="img" aria-label="Hopla logo" style="width:64px;height:64px;display:block;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="grpassword" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17A398"/><stop offset=".55" stop-color="#0B6E6A"/><stop offset="1" stop-color="#063F3D"/></linearGradient>
+<radialGradient id="hrpassword" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#grpassword)"/><rect width="1024" height="1024" fill="url(#hrpassword)"/><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M352 262V762" stroke="#fff" stroke-width="132"/>
+<path d="M352 560C352 430 430 372 520 372S688 430 688 560V600" stroke="#fff" stroke-width="132"/>
+</g><circle cx="688" cy="752" r="82" fill="#7FE0CF"/><circle cx="760" cy="262" r="50" fill="#8CC4F5"/></svg></div>
+      <h2 style="margin-top:var(--s4);">Welcome back</h2><p class="lede">Enter the backup password you chose for this backup.</p>
+      <div class="field-label" style="margin-top:var(--s5);">Backup password</div>
+      <div class="field-box mono focus" style="">••••••••••</div>
+      
+      <div class="callout" style="margin-top:var(--s4);font-size:0.8125rem;">Forgot it? Hopla can’t reset it. Restore with your 24 words instead.</div>
+      <div class="grow"></div>
+      <button class="btn btn-primary btn-block">Restore</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);">Use my 24 words instead</button>
+    </div>
+  </div>
+  <p class="caption">Backup password entry</p>
+  <div class="phone" data-screen="restore-reinstall" data-state="wrong-password">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="onb" style="background:var(--surface);">
+      <div class="grow" style="max-height:40px;"></div>
+      <div style="width:64px;height:64px;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(11,110,106,.25);"><svg role="img" aria-label="Hopla logo" style="width:64px;height:64px;display:block;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="grwrong-password" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17A398"/><stop offset=".55" stop-color="#0B6E6A"/><stop offset="1" stop-color="#063F3D"/></linearGradient>
+<radialGradient id="hrwrong-password" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#grwrong-password)"/><rect width="1024" height="1024" fill="url(#hrwrong-password)"/><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M352 262V762" stroke="#fff" stroke-width="132"/>
+<path d="M352 560C352 430 430 372 520 372S688 430 688 560V600" stroke="#fff" stroke-width="132"/>
+</g><circle cx="688" cy="752" r="82" fill="#7FE0CF"/><circle cx="760" cy="262" r="50" fill="#8CC4F5"/></svg></div>
+      <h2 style="margin-top:var(--s4);">Welcome back</h2><p class="lede">Enter the backup password you chose for this backup.</p>
+      <div class="field-label" style="margin-top:var(--s5);">Backup password</div>
+      <div class="field-box mono " style="border-color:var(--danger);">••••••••••</div>
+      <div class="err-text" role="alert"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;margin-top:2px;" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>Wrong password. 2 tries left, then wait 5 minutes.</div>
+      <div class="callout" style="margin-top:var(--s4);font-size:0.8125rem;">Forgot it? Hopla can’t reset it. Restore with your 24 words instead.</div>
+      <div class="grow"></div>
+      <button class="btn btn-primary btn-block">Restore</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);">Use my 24 words instead</button>
+    </div>
+  </div>
+  <p class="caption">Wrong password — rate-limited, phrase fallback</p>
+  <div class="phone" data-screen="restore-reinstall" data-state="error">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="onb" style="background:var(--surface);">
+      <div class="grow" style="max-height:40px;"></div>
+      <div style="width:64px;height:64px;border-radius:14px;overflow:hidden;box-shadow:0 6px 18px rgba(11,110,106,.25);"><svg role="img" aria-label="Hopla logo" style="width:64px;height:64px;display:block;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="grerror" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17A398"/><stop offset=".55" stop-color="#0B6E6A"/><stop offset="1" stop-color="#063F3D"/></linearGradient>
+<radialGradient id="hrerror" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#grerror)"/><rect width="1024" height="1024" fill="url(#hrerror)"/><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M352 262V762" stroke="#fff" stroke-width="132"/>
+<path d="M352 560C352 430 430 372 520 372S688 430 688 560V600" stroke="#fff" stroke-width="132"/>
+</g><circle cx="688" cy="752" r="82" fill="#7FE0CF"/><circle cx="760" cy="262" r="50" fill="#8CC4F5"/></svg></div>
+      <h2 style="margin-top:var(--s4);">Welcome back</h2><p class="lede">We couldn’t load your iCloud backup.</p>
+      <div class="callout danger" role="alert" style="margin-top:var(--s5);display:flex;gap:10px;font-size:0.8125rem;color:var(--danger);"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;margin-top:1px;" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><span>Check that you’re online and signed in to iCloud with the same Apple Account, then try again.</span></div>
+      <div class="grow"></div>
+      <button class="btn btn-primary btn-block">Try again</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);">Use my 24 words instead</button>
+      <button class="btn btn-ghost btn-block" style="margin-top:var(--s2);color:var(--ink-2);">Start fresh</button>
+    </div>
+  </div>
+  <p class="caption">Error — iCloud backup unavailable (iOS)</p>
+</body>
+</html>

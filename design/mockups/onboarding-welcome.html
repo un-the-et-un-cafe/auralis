@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Welcome</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="onboarding-welcome" data-state="default">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="onb" style="background:var(--surface);">
+      <div class="steps" aria-label="Step 1 of 4"><i class="on"></i><i></i><i></i><i></i></div>
+      <div class="grow"></div>
+      <div style="width:88px;height:88px;border-radius:19px;overflow:hidden;box-shadow:0 6px 18px rgba(11,110,106,.25);"><svg role="img" aria-label="Hopla logo" style="width:88px;height:88px;display:block;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="gw" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17A398"/><stop offset=".55" stop-color="#0B6E6A"/><stop offset="1" stop-color="#063F3D"/></linearGradient>
+<radialGradient id="hw" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1024" height="1024" fill="url(#gw)"/><rect width="1024" height="1024" fill="url(#hw)"/><g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M352 262V762" stroke="#fff" stroke-width="132"/>
+<path d="M352 560C352 430 430 372 520 372S688 430 688 560V600" stroke="#fff" stroke-width="132"/>
+</g><circle cx="688" cy="752" r="82" fill="#7FE0CF"/><circle cx="760" cy="262" r="50" fill="#8CC4F5"/></svg></div>
+      <h2 style="margin-top:var(--s5);font-size:1.75rem;">Hopla</h2>
+      <p class="lede" style="font-size:1.0625rem;color:var(--ink);">Chat over Bluetooth mesh.<br>Internet optional.</p>
+      <p class="lede">No account, phone number or email needed. Your identity is created on this phone.</p>
+      <div class="grow"></div>
+      <div class="callout" style="font-size:0.8125rem;">Nobody can read your messages — not even gateways.</div>
+      <div class="actions">
+        <button class="btn btn-primary btn-block">Get started</button>
+        <button class="btn btn-ghost btn-block">Restore</button>
+      </div>
+      <p style="font-size:0.75rem;color:var(--ink-3);text-align:center;margin-top:var(--s2);">Built on the open OMCP protocol</p>
+    </div>
+  </div>
+  <p class="caption">Welcome (1/4) — Get started / Restore</p>
+</body>
+</html>

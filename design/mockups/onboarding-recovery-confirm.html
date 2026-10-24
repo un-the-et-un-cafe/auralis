@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>[DEPRECATED v0.1.2] Hopla (OMCP) — Confirm phrase</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="onboarding-recovery-confirm" data-state="in-progress">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1>Check your phrase</h1></div>
+    <div class="onb" style="padding-top:var(--s4);">
+      <div class="steps" aria-label="Step 3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <h2 style="font-size:1.25rem;">Enter 3 words from your list</h2>
+      <p class="lede" style="font-size:0.875rem;">Positions are random each time. This proves the phrase is written down correctly.</p>
+      <div style="margin-top:var(--s5);display:flex;flex-direction:column;gap:var(--s4);">
+        <div><div class="field-label">Word #4</div><div class="field-box mono" style="border-color:var(--ok);display:flex;justify-content:space-between;">cliff <span style="color:var(--ok);"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg></span></div></div>
+        <div><div class="field-label">Word #11</div><div class="field-box mono focus">fos<span style="border-left:2px solid var(--brand);margin-left:1px;"></span></div>
+          <div class="chips" aria-label="Suggestions"><span class="chip">fossil</span><span class="chip">foster</span></div></div>
+        <div><div class="field-label">Word #19</div><div class="field-box" style="color:var(--ink-3);">Word 19</div></div>
+      </div>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-block" style="margin-bottom:var(--s2);">Show phrase again</button>
+      <button class="btn btn-block disabled" disabled aria-disabled="true">Confirm</button>
+    </div>
+  </div>
+  <p class="caption"><b>Deprecated in v0.1.2</b> — replaced by onboarding-secure-phrase / -quiz / -done. Verify 3 random words — #11 with autocomplete</p>
+  <div class="phone" data-screen="onboarding-recovery-confirm" data-state="mismatch">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1>Check your phrase</h1></div>
+    <div class="onb" style="padding-top:var(--s4);">
+      <div class="steps" aria-label="Step 3 of 5"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <h2 style="font-size:1.25rem;">Enter 3 words from your list</h2>
+      <p class="lede" style="font-size:0.875rem;">Positions are random each time. This proves the phrase is written down correctly.</p>
+      <div style="margin-top:var(--s5);display:flex;flex-direction:column;gap:var(--s4);">
+        <div><div class="field-label">Word #4</div><div class="field-box mono" style="border-color:var(--ok);">cliff</div></div>
+        <div><div class="field-label">Word #11</div><div class="field-box mono" style="border-color:var(--danger);">canvas</div>
+          <div class="err-text" role="alert"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;margin-top:2px;" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>That’s not word #11. Check your paper copy.</div></div>
+        <div><div class="field-label">Word #19</div><div class="field-box mono" style="border-color:var(--ok);">violin</div></div>
+      </div>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-block" style="margin-bottom:var(--s2);">Show phrase again</button>
+      <button class="btn btn-block disabled" disabled aria-disabled="true">Confirm</button>
+    </div>
+  </div>
+  <p class="caption"><b>Deprecated in v0.1.2</b> — replaced by onboarding-secure-phrase / -quiz / -done. Mismatch — inline error, Confirm stays disabled</p>
+</body>
+</html>

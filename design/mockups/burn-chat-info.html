@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Burn after read — chat info timer</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+/* v0.1.4 local styles — tokens only (tokens.css untouched) */
+.warmbg{background:linear-gradient(165deg,color-mix(in srgb,var(--warn-soft) 80%,var(--surface)) 0%,var(--path-mixed-soft) 55%,var(--bg) 100%);}
+.nb-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em;background:var(--path-mixed-soft);color:var(--path-mixed);}
+.v03{display:inline-block;padding:1px 6px;border-radius:5px;font-size:10px;font-weight:700;background:var(--path-mixed);color:var(--surface);margin-left:6px;vertical-align:2px;}
+.ncard{background:var(--surface);border-radius:24px;box-shadow:0 10px 30px rgba(15,27,45,.14);overflow:hidden;border:1px solid var(--line);}
+.dist{display:inline-flex;gap:5px;align-items:center;padding:4px 10px;border-radius:999px;background:rgba(15,27,45,.62);color:#fff;font-size:12px;font-weight:600;}
+.tag{display:inline-flex;padding:5px 11px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);font-size:12.5px;font-weight:600;border:1px solid var(--line);}
+.tag.on{background:var(--path-mixed-soft);color:var(--path-mixed);border-color:transparent;}
+.rbtn{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;border:1px solid var(--line);background:var(--surface);box-shadow:0 4px 14px rgba(15,27,45,.12);}
+.rbtn svg{width:28px;height:28px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;}
+.rbtn.sm{width:48px;height:48px}.rbtn.sm svg{width:20px;height:20px}
+.rlab{font-size:11.5px;font-weight:600;color:var(--ink-2);text-align:center;margin-top:5px}
+.seg{display:flex;background:var(--surface-2);border-radius:10px;padding:3px;gap:3px}.seg span{flex:1;text-align:center;padding:8px 4px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink-2)}.seg span.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.grp{background:var(--surface);border-radius:14px;padding:14px 16px;margin:0 16px 14px;border:1px solid var(--line)}
+.lbl{font-size:12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:.05em;padding:14px 32px 6px}
+.lock{flex:1;display:flex;flex-direction:column;align-items:center;color:#fff;background:radial-gradient(120% 80% at 20% 10%,#2d6f73 0%,#1d3550 45%,#161a2e 100%);padding:0 12px}
+.lock .clock{font-size:76px;font-weight:300;letter-spacing:-2px;line-height:1;margin-top:34px}
+.lock .date{font-size:16px;font-weight:500;opacity:.9;margin-top:6px}
+.notif{width:100%;margin-top:10px;border-radius:22px;padding:12px 14px;display:flex;gap:11px;align-items:flex-start;background:rgba(255,255,255,.18);backdrop-filter:blur(18px);color:#fff}
+.notif.and{border-radius:26px;background:rgba(32,38,52,.82)}
+.notif.light{background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+.appic{width:38px;height:38px;border-radius:10px;background:#0b6e6a;display:grid;place-items:center;flex-shrink:0;color:#fff;font-weight:800;font-size:17px}
+.appic.s{width:20px;height:20px;border-radius:6px;font-size:10px}
+.nav-ios{height:var(--nav-h);display:flex;align-items:center;padding:0 8px;background:var(--surface);border-bottom:1px solid var(--line);position:relative}
+.nav-ios .t{position:absolute;left:0;right:0;text-align:center;font-weight:700;font-size:1.0625rem;pointer-events:none}
+.nav-ios .bk{color:var(--brand);font-size:1.0625rem;display:flex;align-items:center;gap:2px;padding:0 6px}
+.ring{position:relative;width:26px;height:26px;flex-shrink:0}
+.blurtxt{filter:blur(5px);user-select:none}
+.sysrow{align-self:center;max-width:88%;text-align:center;font-size:12.5px;color:var(--ink-2);background:var(--surface-2);padding:6px 12px;border-radius:999px;margin:6px 0}
+.armed{border:2px solid var(--warn)!important;background:var(--warn-soft)!important}
+.listrow{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}.listrow:last-child{border-bottom:none}
+.radio{width:22px;height:22px;border-radius:50%;border:2px solid var(--line-strong);flex-shrink:0}.radio.on{border:7px solid var(--brand)}
+.cbx{width:22px;height:22px;border-radius:6px;border:2px solid var(--line-strong);flex-shrink:0;display:grid;place-items:center}.cbx.on{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
+.a11y{align-self:center;text-align:center;margin:10px 16px 0;font-size:10px;color:var(--ink-3);font-family:var(--f-mono);opacity:.9}
+</style>
+</head>
+<body>
+  <div class="phone" data-screen="burn-chat-info" data-state="default">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1 style="flex:1">🔥 Burn after read</h1></div><div class="content"><div class="scroll"><p style="padding:16px 24px 4px;color:var(--ink-2);font-size:.9rem">New messages in this chat delete themselves on both sides after they’re read.</p>
+<div class="lbl">Timer after opening</div><div class="grp"><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">Off</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">On open</div><div style=font-size:.78rem;color:var(--ink-2)>Deleted when closed</div></div></div><div class="listrow" role="radio" aria-checked="true"><span class="radio on"></span><div style="flex:1"><div style="font-weight:600">10 s</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 min</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 h</div></div></div></div>
+<div class="lbl">Delete unread after</div><div class="grp"><div class="seg"><span>1 h</span><span>24 h</span><span class="on">7 d</span></div></div>
+<div class="callout warn" style="margin:0 16px;font-size:.85rem"><strong>What it can’t do</strong>No one can save these in Hopla, but someone can still photograph the screen with another device. Only send what you’d trust Alex with.</div>
+<p style="font-size:.75rem;color:var(--ink-2);padding:12px 24px">Never in notification previews, backups, search or share sheets.</p></div></div>
+  </div>
+  <p class="caption">Timer picker</p>
+  <div class="phone dark" style="color:var(--ink);background:var(--bg);" data-screen="burn-chat-info" data-state="dark">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1 style="flex:1">🔥 Burn after read</h1></div><div class="content"><div class="scroll"><p style="padding:16px 24px 4px;color:var(--ink-2);font-size:.9rem">New messages in this chat delete themselves on both sides after they’re read.</p>
+<div class="lbl">Timer after opening</div><div class="grp"><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">Off</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">On open</div><div style=font-size:.78rem;color:var(--ink-2)>Deleted when closed</div></div></div><div class="listrow" role="radio" aria-checked="true"><span class="radio on"></span><div style="flex:1"><div style="font-weight:600">10 s</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 min</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 h</div></div></div></div>
+<div class="lbl">Delete unread after</div><div class="grp"><div class="seg"><span>1 h</span><span>24 h</span><span class="on">7 d</span></div></div>
+<div class="callout warn" style="margin:0 16px;font-size:.85rem"><strong>What it can’t do</strong>No one can save these in Hopla, but someone can still photograph the screen with another device. Only send what you’d trust Alex with.</div>
+<p style="font-size:.75rem;color:var(--ink-2);padding:12px 24px">Never in notification previews, backups, search or share sheets.</p></div></div>
+  </div>
+  <p class="caption">Dark</p>
+  <div class="phone" data-screen="burn-chat-info" data-state="ios">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav-ios"><span class="bk"><svg viewBox="0 0 24 24" style="width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;" aria-hidden="true"><path d='M15 18l-6-6 6-6'/></svg>Back</span><span class="t">🔥 Burn after read</span><span style="flex:1"></span></div><div class="content"><div class="scroll"><p style="padding:16px 24px 4px;color:var(--ink-2);font-size:.9rem">New messages in this chat delete themselves on both sides after they’re read.</p>
+<div class="lbl">Timer after opening</div><div class="grp"><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">Off</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">On open</div><div style=font-size:.78rem;color:var(--ink-2)>Deleted when closed</div></div></div><div class="listrow" role="radio" aria-checked="true"><span class="radio on"></span><div style="flex:1"><div style="font-weight:600">10 s</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 min</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 h</div></div></div></div>
+<div class="lbl">Delete unread after</div><div class="grp"><div class="seg"><span>1 h</span><span>24 h</span><span class="on">7 d</span></div></div>
+<div class="callout warn" style="margin:0 16px;font-size:.85rem"><strong>What it can’t do</strong>No one can save these in Hopla, but someone can still photograph the screen with another device. Only send what you’d trust Alex with.</div>
+<p style="font-size:.75rem;color:var(--ink-2);padding:12px 24px">Never in notification previews, backups, search or share sheets.</p></div></div>
+  </div>
+  <p class="caption">iOS</p>
+  <div class="phone" data-screen="burn-chat-info" data-state="fr">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1 style="flex:1">🔥 Lecture unique</h1></div><div class="content"><div class="scroll"><p style="padding:16px 24px 4px;color:var(--ink-2);font-size:.9rem">Les nouveaux messages de cette discussion s’effacent des deux côtés après lecture.</p>
+<div class="lbl">Minuteur après ouverture</div><div class="grp"><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">Non</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">À l’ouverture</div><div style=font-size:.78rem;color:var(--ink-2)>Effacé à la fermeture</div></div></div><div class="listrow" role="radio" aria-checked="true"><span class="radio on"></span><div style="flex:1"><div style="font-weight:600">10 s</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 min</div></div></div><div class="listrow" role="radio" aria-checked="false"><span class="radio"></span><div style="flex:1"><div style="font-weight:600">1 h</div></div></div></div>
+<div class="lbl">S’efface sans lecture après</div><div class="grp"><div class="seg"><span>1 h</span><span>24 h</span><span class="on">7 j</span></div></div>
+<div class="callout warn" style="margin:0 16px;font-size:.85rem"><strong>Ce que ça ne peut pas faire</strong>Personne ne peut enregistrer ces messages dans Hopla, mais on peut toujours photographier l’écran avec un autre appareil. N’envoyez que ce que vous êtes prêt·e à confier à Alex.</div>
+<p style="font-size:.75rem;color:var(--ink-2);padding:12px 24px">Jamais dans les aperçus de notification, les sauvegardes, la recherche ou le partage.</p></div></div>
+  </div>
+  <p class="caption">FR</p>
+</body>
+</html>
