@@ -51,8 +51,8 @@ apply; padding fits the 1 MiB cap.
 **§22.7(12) / §21.9 (normative):** `HELLO` (0x48) and `DIGEST_REQ` (0x52)
 are 6-byte link-control frames `type | flags | digest_id u32-be`; flags bit0
 `HAS_DELTA`, bits 1–7 reserved and rejected if set; `DIGEST_REQ` id 0 = full.
-`digest_id` = low 32 bits of BLAKE2b-512 over the encoded want-digest, read
-as the last 4 output bytes big-endian (our interpretation of "low 32 bits").
+`digest_id` = unkeyed BLAKE2b with 32-bit output (nn = 4) over the canonical
+want-digest encoding, big-endian u32; 0 maps to 1.
 Idle at 32 neighbours ≈ 0.83 MB/day.
 
 ## Stubs / not done

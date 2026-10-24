@@ -38,12 +38,30 @@ pub const FLAG_HAS_DELTA: u8 = 0x01;
 /// `DIGEST_REQ` digest_id meaning "send me your full digest".
 pub const DIGEST_ID_FULL: u32 = 0;
 
-/// `digest_id` = low 32 bits of BLAKE2b(-512) over the encoded want-digest,
-/// i.e. the last 4 output bytes read as a big-endian u32.
+/// `digest_id` (§22.7(12)): unkeyed BLAKE2b with a 32-bit output (nn = 4,
+/// no salt/personalization) over the canonical want-digest encoding, read as
+/// a big-endian u32; 0 maps to 1 (0 means "full" in `DIGEST_REQ`).
 pub fn digest_id32(f: &CuckooFilter) -> u32 {
-    use blake2::{Blake2b512, Digest};
-    let h = Blake2b512::digest(f.encode());
-    u32::from_be_bytes([h[60], h[61], h[62], h[63]])
+    digest_id_of_bytes(&f.encode())
+}
+
+/// [`digest_id32`] over raw canonical bytes.
+pub fn digest_id_of_bytes(bytes: &[u8]) -> u32 {
+    use blake2::digest::{Update, VariableOutput};
+    let mut h = blake2::Blake2bVar::new(4).expect("4 is a valid BLAKE2b output size");
+    h.update(bytes);
+    let mut out = [0u8; 4];
+    h.finalize_variable(&mut out).expect("output size 4");
+    nonzero_digest_id(u32::from_be_bytes(out))
+}
+
+/// Map a raw 32-bit hash to a `digest_id`: 0 becomes 1.
+pub fn nonzero_digest_id(raw: u32) -> u32 {
+    if raw == 0 {
+        1
+    } else {
+        raw
+    }
 }
 
 /// 6-byte link-control frame: `type u8 | flags u8 | digest_id u32-be`
@@ -242,14 +260,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn digest_id_known_answers_and_zero_maps_to_one() {
+        // BLAKE2b, nn = 4, unkeyed (cross-checked with Python hashlib).
+        assert_eq!(digest_id_of_bytes(b""), 0x1271_cf25);
+        assert_eq!(digest_id_of_bytes(b"abc"), 0x6390_6248);
+        // Not a truncation of BLAKE2b-512.
+        use blake2::{Blake2b512, Digest};
+        let h = Blake2b512::digest(b"abc");
+        assert_ne!(
+            u32::from_be_bytes(h[60..64].try_into().unwrap()),
+            0x6390_6248
+        );
+        assert_ne!(u32::from_be_bytes(h[..4].try_into().unwrap()), 0x6390_6248);
+        assert_eq!(nonzero_digest_id(0), 1);
+        assert_eq!(nonzero_digest_id(7), 7);
+        assert_eq!(nonzero_digest_id(u32::MAX), u32::MAX);
+    }
+
+    #[test]
     fn link_control_frames_exact_layout() {
         let mut rng = SplitMix64(4);
         let f = CuckooFilter::build_digest(&[[1; 8]], 16, &mut rng).unwrap();
-        // digest_id = low 32 bits (last 4 bytes, BE) of BLAKE2b-512(digest).
-        use blake2::{Blake2b512, Digest};
-        let h = Blake2b512::digest(f.encode());
-        let want = u32::from_be_bytes(h[60..64].try_into().unwrap());
-        assert_eq!(digest_id32(&f), want);
+        let want = digest_id32(&f);
+        assert_eq!(want, digest_id_of_bytes(&f.encode()));
         let hello = LinkControl::hello_for(&f, true);
         let b = hello.encode();
         assert_eq!(b[0], 0x48);
