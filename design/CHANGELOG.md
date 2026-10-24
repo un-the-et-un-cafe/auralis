@@ -1,5 +1,22 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.16 — 2026-10-24
+
+One-tap Ask to resend, and Keep media you sent (decisions approved by the maintainer). `DESIGN_SPEC.md` §5.100, §5.101.
+
+### Changed
+- `media-missing`: **Ask to resend** is now one tap with an optional **Add a note**; sent state shows status in the bubble and a toast with Undo. Re-rendered `--gone`, `--sent`, `--gone-fr`, `--sent-fr`; added `--ios-gone`. §5.94 confirm sheet marked superseded.
+
+### Added
+- `media-resend-note`: note field expanded (typed / empty) and sent-with-note state. 9 frames, EN/FR, light/dark, iOS.
+- `settings-storage`: Settings › Storage with **Keep media you sent** (default 90 days or 2 GB, whichever first), edit sheet with presets (30 days–Forever, 500 MB–No limit), off state with warning. 13 frames.
+
+### Removed
+- `media-missing--confirm.png`, `--confirm-fr.png`, `--ios-confirm.png` (confirm-before-send dialog replaced).
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. Fictional contacts only. Generator `/workspace/omcp-v0116/`. Mirror updated.
+
 ## v0.1.15 — 2026-10-24
 
 Restored members in groups and communities (REQUIREMENTS, Q25). `DESIGN_SPEC.md` §5.99.

@@ -1,4 +1,4 @@
-# OMCP App Design Pack v0.1.15 — Hopla
+# OMCP App Design Pack v0.1.16 — Hopla
 
 **Date:** 2026-10-24 (Europe/Paris) · v0.1.14 2026-10-24 · v0.1.13 2026-10-24 · v0.1.12 2026-10-24 · v0.1.11 2026-10-24 · v0.1.10 2026-10-24 · v0.1.9 2026-10-24 · v0.1.8 2026-10-24 · v0.1.7 2026-10-24 · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
 **App name:** Hopla (consumer app) · **Protocol:** OMCP. Logo: approved `brand/hopla-v2/icon.svg` (inlined in welcome, done, restore mockups).  
@@ -123,10 +123,12 @@ design/
     onboarding-secure-reminder.html (+ .png, --expired) v0.1.2
     onboarding-done.html (+ .png)                     v0.1.2
     settings-backup.html (+ .png, --queued, --view-phrase-auth, --delete-confirm) v0.1.2
-    media-missing.html (+ .png, --requested, --syncing, --restored, --reduced-motion, --video, --gone, --group, --dark, --ios, --ios-dark, --fr, --syncing-fr, --gone-fr, --confirm, --sent, --wifi, --wifi-dark, --confirm-fr, --sent-fr, --wifi-fr, --ios-confirm)  v0.1.11, v0.1.12 HERO
+    media-missing.html (+ .png, --requested, --syncing, --restored, --reduced-motion, --video, --gone, --group, --dark, --ios, --ios-dark, --fr, --syncing-fr, --gone-fr, --sent, --wifi, --wifi-dark, --sent-fr, --wifi-fr, --ios-gone)  v0.1.11, v0.1.12, v0.1.16 HERO
     settings-media-backup.html (+ .png, --on, --uploading, --near-full, --full, --confirm-off, --deleting, --dark, --ios, --ios-dark, --fr, --confirm-off-fr, --near-full-fr, --deleting-fr)  v0.1.13 HERO
     restore-media.html (+ .png, --success, --partial, --partial-fr, --partial-dark, --dark, --ios, --success-dark, --success-ios, --fr, --success-fr)  v0.1.13, v0.1.14 HERO
     group-restored.html (+ .png, --members, --sheet, --dark, --members-dark, --ios, --ios-members, --ios-dark, --fr, --members-fr, --sheet-fr)  v0.1.15 HERO
+    media-resend-note.html (+ .png, --empty, --sent, --dark, --sent-dark, --ios, --ios-sent, --fr, --sent-fr)  v0.1.16 HERO
+    settings-storage.html (+ .png, --edit, --edit-custom, --edit-off, --off, --forever, --dark, --edit-dark, --ios, --ios-edit, --fr, --edit-fr, --off-fr)  v0.1.16 HERO
     restore-notice.html (+ .png, --sheet, --list, --self, --qr, --reverified, --list-reverified, --dark, --sheet-dark, --reverified-dark, --ios, --ios-list, --ios-self-dark, --ios-reverified, --fr, --sheet-fr, --list-fr, --self-fr, --qr-fr, --reverified-fr)  v0.1.12, v0.1.14 HERO
     settings-missing-media.html (+ .png, --on, --dark, --ios, --fr)  v0.1.12
     chats-restored.html (+ .png, --dark, --ios, --ios-dark, --fr)  v0.1.11

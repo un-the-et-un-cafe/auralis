@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.15
+# OMCP Smartphone Apps — Design Spec v0.1.16
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -1144,7 +1144,7 @@ All message text (1:1, groups, joined community chats, reactions, edits, timesta
   | Requested | Requested · we’ll fetch it as soon as it’s in reach / Demandé · on le récupère dès qu’il est à portée + toast “Requested” (v0.1.12) | none (tap is a no-op for 30 s) |
   | Syncing | Getting it via mesh · 62% / Récupération via le mesh · 62 % (or gateway / une passerelle) + 4 px bar | none |
   | Restored | “Restored” chip on the media, fades after 2 s | normal media |
-  | Partner no longer has it | {name} doesn’t have this anymore. | “Ask to resend” → confirm sheet (v0.1.12, §5.94) |
+  | Partner no longer has it | {name} doesn’t have this anymore. | “Ask to resend” — one tap, optional note (v0.1.16, §5.100) |
 - **“Nearby”** means reachable over the BLE mesh or a gateway. Groups: “when a member is nearby”, and any member holding the file can serve it.
 - **Auto-fetch.** When a partner holding the file is reachable, the app requests it by stored locator and hash (§7, 64 KiB chunks), verifies the hash, then swaps. Target: within 10 s of a partner coming in range (CB3). A tap only moves the request to the front of the queue.
 - **Swap motion.** Placeholder crossfades to the media over 240 ms ease-out, with a 12→0 px blur-up. Bubble height animates over 200 ms if the aspect ratio differs. The “Restored” chip fades out after 2 s. **Reduced motion:** instant swap, no blur, no height animation; the chip is still shown and announced.
@@ -1158,7 +1158,7 @@ A dismissible card at the top: “Chats restored · 1,284 messages in 23 chats�
 ### 5.94 v0.1.12 — Ask to resend, privacy, data use (REQUIREMENTS “Encrypted chat backup”, approved 2026-10-24)
 Generator `/workspace/omcp-v0112/gen.py`. `media-missing` adds the frames `--confirm`, `--sent`, `--wifi`, `--wifi-dark`, `--confirm-fr`, `--sent-fr`, `--wifi-fr` and `--ios-confirm`. There's a new mockup `settings-missing-media` (+`--on`, `--dark`, `--ios`, `--fr`).
 - **Partner no longer has it** (`--gone`): “{name} doesn’t have this anymore.” / « {name} ne l’a plus sur son téléphone. » One-tap pill **Ask to resend** / **Demander un renvoi**. This state replaces the v0.1.11 “Ask {name}” wording.
-- **Confirm sheet** (`--confirm`): “Ask Alex to resend? · Alex will get this message in your chat:” shows a quoted media reference (type, date, caption) and an editable message preview, “Hi! Could you send me this photo again? 🙂” / « Salut ! Tu peux me renvoyer cette photo ? 🙂 ». Below it: “Nothing else is shared. You can edit the text before sending.” Actions: **Send request** (primary) and Edit message. Nothing is sent before the user confirms. The message doesn't mention the restore.
+- *(Superseded v0.1.16, §5.100: one-tap request, no confirm sheet; `--confirm`, `--confirm-fr`, `--ios-confirm` removed.)* **Confirm sheet** (`--confirm`): “Ask Alex to resend? · Alex will get this message in your chat:” shows a quoted media reference (type, date, caption) and an editable message preview, “Hi! Could you send me this photo again? 🙂” / « Salut ! Tu peux me renvoyer cette photo ? 🙂 ». Below it: “Nothing else is shared. You can edit the text before sending.” Actions: **Send request** (primary) and Edit message. Nothing is sent before the user confirms. The message doesn't mention the restore.
 - **Sent** (`--sent`): toast “Sent” / « Envoyé ». The placeholder reads “Request sent to {name} · it’ll appear here if they resend it.” The resent file is matched by hash and swaps in like any other restore.
 - **Privacy (revised in this bump, superseding the earlier “partner never told” decision):** the restore itself is announced to contacts (§5.95). Media re-requests carry no extra metadata. The toast still says “Requested”, and the Settings footnote saying contacts aren't told was removed.
 - **Data use:** over direct BLE mesh, media always re-downloads. Over a gateway it's Wi-Fi only unless **Settings › Backup › Missing media › Use mobile data for missing media** is on (off by default). The placeholder state `--wifi` reads “Waiting for Wi-Fi · available via a gateway” / « En attente du Wi-Fi · disponible via une passerelle », with the link “Use mobile data…” going to that setting. Items available over mesh keep syncing at the same time. Settings shows the waiting count and size, plus a fixed row “Nearby devices (Bluetooth mesh) · Always”.
@@ -1223,6 +1223,43 @@ Follows REQUIREMENTS “Groups and communities” (Q25). Generator `/workspace/o
 - **Tap:** the tag opens the same verify sheet as §5.98 (safety number changed · Verify in person (QR) · Block · It was Alex).
 - **Member list:** a footnote explains the tag: “‘Restored, not verified’: this member restored Hopla on a new device. Tap the tag to verify in person.”
 - **A11y:** the tag is `role=button` labelled “Restored, not verified. Tap to verify”. The sender line reads “Alex Rivera, restored, not verified”. The touch target is extended to 44 pt via padding on the name row.
+
+## 5O. v0.1.16 — One-tap Ask to resend; keep media you sent (approved by the maintainer, 2026-10-24)
+
+Generator `/workspace/omcp-v0116/gen.py` (renders with `render.py`, system python3 Playwright + `/usr/bin/google-chrome`). New mockups `media-resend-note`, `settings-storage`; `media-missing` re-rendered.
+
+### 5.100 Ask to resend — one tap with optional note — `media-missing` (`--gone`, `--sent`, `--ios-gone`, `--gone-fr`, `--sent-fr`), `media-resend-note` (+`--empty`, `--sent`, `--dark`, `--sent-dark`, `--ios`, `--ios-sent`, `--fr`, `--sent-fr`)
+Replaces the v0.1.12 confirm sheet (§5.94).
+- **Gone state:** “{name} doesn’t have this anymore.” with the pill **Ask to resend** / **Demander un renvoi** and a secondary text button **Add a note** / **Ajouter un mot**.
+- **One tap sends.** Tapping Ask to resend sends the request right away: a fixed system request that carries the media reference (type, date, hash locator) and nothing else. It doesn't mention the restore. Status in the bubble: “Request sent to {name} · it’ll appear here if they resend it.” Toast: “Request sent to {name}” with **Undo** for 5 s (Undo recalls the request before delivery; after that it's a no-op and the toast is gone).
+- **Optional note:** Add a note expands an inline field in the bubble (label “Note to {name} · optional”, placeholder “Add a note (optional)”, max 140 characters, counter, helper “Sent with the photo reference only”). Actions: filled **Ask to resend** and Cancel. An empty note sends the same as one tap.
+- **Sent with note:** the note is quoted under the status (“Your note: “…””). The recipient sees the request with the note in the chat.
+- The resent file is matched by hash and swaps in like any other restore (§5.92). One active request per item; tapping the pill again after sending does nothing (it's replaced by the status).
+- **A11y:** the pill is a button “Ask {name} to resend this photo”; Add a note is a button that moves focus into the field; the field is a multiline textbox labelled “Note to {name}, optional”; the counter is announced on reaching 120; Request sent and Undo go through `role=status`, and Undo is reachable by keyboard / switch access for its 5 s window (extended to 10 s when a screen reader is on).
+
+| Copy | EN | FR |
+|------|----|----|
+| Pill | Ask to resend | Demander un renvoi |
+| Secondary | Add a note | Ajouter un mot |
+| Field | Note to {name} · optional | Mot pour {name} · facultatif |
+| Toast | Request sent to {name} · Undo | Demande envoyée à {name} · Annuler |
+| Status | Request sent to {name} · it’ll appear here if they resend it | Demande envoyée à {name} · elle apparaîtra ici si elle est renvoyée |
+
+### 5.101 Settings › Storage › Keep media you sent — `settings-storage` (+`--edit`, `--edit-custom`, `--edit-off`, `--off`, `--forever`, `--dark`, `--edit-dark`, `--ios`, `--ios-edit`, `--fr`, `--edit-fr`, `--off-fr`)
+- **Storage screen:** usage card (“2.6 GB used by Hopla”, bar split into Media you sent / Media you received / Chats), then section “Media you sent” with the row **Keep media you sent · 90 days or 2 GB ›** and the explanation “Copies of photos, videos and files you sent, so you can resend them when a contact asks (for example after they restore Hopla).” Footnote: oldest sent media is removed first when a limit is reached; messages and captions stay. Other rows: Media you received, Review large files, Auto-download on mobile data.
+- **Defaults:** on, **90 days or 2 GB, whichever limit is reached first.** Both can be changed.
+- **Edit sheet** (`--edit`): title “Sent media”, master toggle **Keep media you sent** (“Lets you resend files to contacts who lost them.”), then two segmented controls: **Keep for** 30 days · **90 days** · 1 year · Forever, and **Up to** 500 MB · **2 GB** · 5 GB · No limit. A live summary says what the combination does and current usage. Actions: Save, Reset to default (90 days or 2 GB). Forever + No limit is allowed (row reads “Forever”).
+- **Off** (`--edit-off`): toggle off greys out the limits; warn callout “Sent media is removed after delivery. 1.4 GB will be freed. Contacts who lose a file can’t ask you to resend it.” Primary becomes **Turn off and free 1.4 GB**; secondary Keep media (default focus). On the Storage screen the row reads Off and a warn callout repeats the consequence (`--off`). Warn style, never danger.
+- **Link with §5.100:** when the sender no longer has the file (pruned or off), the requester's request still arrives; the sender sees “You no longer have this file” and can reply in chat. Lowering a limit prunes oldest-first on Save.
+- **A11y:** the row is a button reading the current value; the toggle is `role=switch`; each segmented control is a `radiogroup` labelled “Keep for” / “Up to”; the summary is `role=status`; the usage bar is `role=img` with a full text label.
+
+| Copy | EN | FR |
+|------|----|----|
+| Row | Keep media you sent | Garder les médias envoyés |
+| Default value | 90 days or 2 GB | 90 jours ou 2 Go |
+| Groups | Keep for / Up to | Durée / Jusqu’à |
+| Presets | 30 days, 90 days, 1 year, Forever · 500 MB, 2 GB, 5 GB, No limit | 30 j, 90 j, 1 an, Toujours · 500 Mo, 2 Go, 5 Go, Sans limite |
+
 
 ## 6. Path indicator component (normative UX)
 
@@ -1392,6 +1429,7 @@ Open (v0.1.10):
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
 | 0.1.15 | 2026-10-24 | Restored tag in groups and communities (§5.99), `group-restored`; Q24–Q25 resolved; mobile-data toggle confirmed by REQUIREMENTS |
+| 0.1.16 | 2026-10-24 | One-tap Ask to resend with optional note (§5.100, supersedes §5.94 confirm sheet); Settings › Storage › Keep media you sent, default 90 days or 2 GB (§5.101); 2 new + 1 updated mockups |
 | 0.1.14 | 2026-10-24 | Re-verification after restore (§5.98, RS2): verified badge reset, “Restored, not verified” until QR re-verify, badge earned back; restore copy; Q20 resolved; Q24–Q25; media daily Wi-Fi pass copy, partial media restore frame; Q21–Q23 resolved |
 | 0.1.13 | 2026-10-24 | Media backup setting (§5N, 5.96–5.97): toggles, size, quota, turn-off delete, first upload; `restore-media`; placeholders only for media not in the backup; Q21–Q23 |
 | 0.1.12 | 2026-10-24 | Ask to resend + confirm/sent, Wi-Fi-only gateway re-fetch with a mobile-data setting, re-requests carry no extra metadata (§5.94); Q17–Q19 resolved; restore indicator: contact notice, sheet, 7-day Restored badge, restored-phone banner (§5.95) |
