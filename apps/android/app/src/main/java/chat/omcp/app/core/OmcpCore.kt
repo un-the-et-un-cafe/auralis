@@ -26,7 +26,16 @@ data class Contact(
 data class RestoreNoticeInfo(val contactId: String, val restoredAtMs: Long?, val msgId: String)
 
 /** A partner asks for a media item again ([localPath] = our copy, if any). */
-data class MediaRequestInfo(val contactId: String, val msgId: String, val hash: String, val name: String, val mime: String, val localPath: String?)
+data class MediaRequestInfo(
+    val contactId: String, val msgId: String, val hash: String, val name: String, val mime: String, val localPath: String?,
+    /** "Ask to resend" only: the requester's optional note, carried in the same message. */
+    val note: String? = null,
+)
+
+/** Settings > Storage > Keep sent media (defaults 90 days / 2 GB, oldest deleted first). */
+data class KeptMediaPrefs(val maxDays: Int = 90, val maxBytes: Long = 2_000_000_000L)
+
+data class KeptMediaUsageInfo(val count: Int, val bytes: Long)
 
 /** Placeholder state change; [state] = a `FileAttachment.State` name. */
 data class MediaUpdateInfo(val contactId: String, val msgId: String, val state: String)
@@ -269,8 +278,13 @@ interface OmcpCore {
     fun restoreMediaFromBackup(msgId: String, blob: ByteArray): ByteArray = throw UnsupportedOperationException("no media backup")
     /** Tap on a placeholder: request it again from the partner. */
     fun requestMedia(msgId: String) {}
-    /** User-confirmed "Ask to resend". */
-    fun askToResend(msgId: String) {}
+    /** User-confirmed "Ask to resend": ONE message with the optional [note] (≤ 280 bytes). */
+    fun askToResend(msgId: String, note: String?) {}
+    fun keptMediaSettings(): KeptMediaPrefs = KeptMediaPrefs()
+    /** Applies at once; returns how many kept copies were evicted (oldest first). */
+    fun setKeptMediaSettings(p: KeptMediaPrefs, nowMs: Long): Int = 0
+    fun keptMediaUsage(): KeptMediaUsageInfo = KeptMediaUsageInfo(0, 0)
+    fun evictKeptMedia(nowMs: Long): Int = 0
     /** Answer a partner's [MediaRequestInfo] with our copy, or null = we no longer have it. */
     fun answerMediaRequest(contactId: String, msgId: String, bytes: ByteArray?) {}
     /** After restoring on a new install: new device key stamped `restored_at` (RS1). */

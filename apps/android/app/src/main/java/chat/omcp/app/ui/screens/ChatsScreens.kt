@@ -370,7 +370,9 @@ fun ChatThreadScreen(
                     Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { mediaBannerOff = true })
             }
             resendAsks.filter { it.contactId == vm.contactId }.forEach { a ->
-                Callout(stringResource(R.string.media_resend_asked, peer, a.name), CalloutKind.Info,
+                val askText = a.note?.let { stringResource(R.string.media_resend_asked_note, peer, a.name, it) }
+                    ?: stringResource(R.string.media_resend_asked, peer, a.name)
+                Callout(askText, CalloutKind.Info,
                     Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { vm.dismissResendAsk(a.msgId) })
             }
             LazyColumn(

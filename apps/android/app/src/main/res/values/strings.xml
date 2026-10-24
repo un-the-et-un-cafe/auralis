@@ -256,11 +256,10 @@
     <string name="media_ask_resend">Ask to resend</string>
     <string name="media_request_sent">Request sent to %1$s · it’ll appear here if they resend it.</string>
     <string name="media_resend_title">Ask %1$s to resend?</string>
-    <string name="media_resend_body">%1$s will get this message in your chat:</string>
-    <string name="media_resend_default">Hi! Could you send me this file again? 🙂</string>
-    <string name="media_resend_note">Nothing else is shared. You can edit the text before sending.</string>
+    <string name="media_resend_body">%1$s will get one request for this file. You can add a short note.</string>
+    <string name="media_resend_note">Nothing else is shared.</string>
     <string name="media_resend_send">Send request</string>
-    <string name="media_resend_label">Message to %1$s</string>
+    <string name="media_resend_label">Note (optional)</string>
     <string name="media_banner">%1$d media waiting for %2$s · Your text came back. Photos and files return when %2$s is nearby (mesh or gateway).</string>
     <string name="media_resend_asked">%1$s asked you to resend “%2$s”. You no longer have it on this phone.</string>
     <string name="restored_notice">%1$s restored Hopla on a new device · %2$s</string>
@@ -295,4 +294,12 @@
     <string name="mediabackup_off_confirm">Turn off and delete media backup</string>
     <string name="mediabackup_keep">Keep backing up</string>
     <string name="restore_chats_done">Chats restored · %1$d messages</string>
+    <string name="media_resend_asked_note">%1$s asked you to resend “%2$s”: “%3$s”. You no longer have it on this phone.</string>
+    <string name="storage_title">Storage</string>
+    <string name="storage_keep_title">Keep sent media</string>
+    <string name="storage_keep_body">Hopla keeps an encrypted copy of photos and files you send, so it can resend them if a contact restores a new phone. The oldest are deleted first. Burn-after-read and view-once media are never kept.</string>
+    <string name="storage_keep_days">Keep for</string>
+    <string name="storage_keep_size">Up to</string>
+    <string name="storage_days">%1$d days</string>
+    <string name="storage_usage">%1$d items · %2$s used</string>
 </resources>

@@ -52,7 +52,7 @@ class ChatThreadViewModel(
     val resendAsks = repo.resendAsks
     val restoredAtMs = repo.restoredAtMs
     fun requestMedia(msgId: String) = repo.requestMedia(contactId, msgId)
-    fun askToResend(msgId: String, text: String) = repo.askToResend(contactId, msgId, text)
+    fun askToResend(msgId: String, note: String?) = repo.askToResend(contactId, msgId, note)
     fun dismissResendAsk(msgId: String) = repo.dismissResendAsk(msgId)
     fun waitingMedia() = repo.waitingMedia(contactId)
 

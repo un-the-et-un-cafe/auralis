@@ -41,6 +41,7 @@ fun YouScreen(
     onGateway: () -> Unit,
     onSecurity: () -> Unit,
     onBackup: () -> Unit,
+    onStorage: () -> Unit = {},
     onMyQr: () -> Unit,
 ) {
     val c = LocalOmcpColors.current
@@ -64,6 +65,7 @@ fun YouScreen(
             Item(stringResource(R.string.gateway_title), "Wi‑Fi-only default · 500 MB/day cap", onGateway)
             Item(stringResource(R.string.security_centre), "Safety numbers, session, block list", onSecurity)
             Item(stringResource(R.string.backup_settings_title), stringResource(R.string.backup_settings_desc), onBackup)
+            Item(stringResource(R.string.storage_title), stringResource(R.string.storage_keep_title), onStorage)
             ListItem(
                 headlineContent = { Text(stringResource(R.string.notif_private)) },
                 supportingContent = { Text(stringResource(R.string.notif_private_desc)) },

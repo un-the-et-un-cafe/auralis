@@ -257,11 +257,10 @@
     <string name="media_ask_resend">Demander un renvoi</string>
     <string name="media_request_sent">Demande envoyée à %1$s · le fichier apparaîtra ici s’il est renvoyé.</string>
     <string name="media_resend_title">Demander à %1$s de renvoyer ?</string>
-    <string name="media_resend_body">%1$s recevra ce message dans votre conversation :</string>
-    <string name="media_resend_default">Salut ! Tu peux me renvoyer ce fichier ? 🙂</string>
-    <string name="media_resend_note">Rien d’autre n’est partagé. Vous pouvez modifier le texte avant l’envoi.</string>
+    <string name="media_resend_body">%1$s recevra une seule demande pour ce fichier. Vous pouvez ajouter une courte note.</string>
+    <string name="media_resend_note">Rien d’autre n’est partagé.</string>
     <string name="media_resend_send">Envoyer la demande</string>
-    <string name="media_resend_label">Message à %1$s</string>
+    <string name="media_resend_label">Note (facultative)</string>
     <string name="media_banner">%1$d médias en attente de %2$s · Vos messages sont revenus. Photos et fichiers reviennent quand %2$s est à proximité (mesh ou passerelle).</string>
     <string name="media_resend_asked">%1$s vous demande de renvoyer « %2$s ». Vous ne l’avez plus sur ce téléphone.</string>
     <string name="restored_notice">%1$s a restauré Hopla sur un nouvel appareil · %2$s</string>
@@ -296,4 +295,12 @@
     <string name="mediabackup_off_confirm">Désactiver et supprimer la sauvegarde des médias</string>
     <string name="mediabackup_keep">Continuer la sauvegarde</string>
     <string name="restore_chats_done">Conversations restaurées · %1$d messages</string>
+    <string name="media_resend_asked_note">%1$s vous demande de renvoyer « %2$s » : « %3$s ». Vous ne l’avez plus sur ce téléphone.</string>
+    <string name="storage_title">Stockage</string>
+    <string name="storage_keep_title">Conserver les médias envoyés</string>
+    <string name="storage_keep_body">Hopla conserve une copie chiffrée des photos et fichiers que vous envoyez, pour pouvoir les renvoyer si un contact restaure un nouveau téléphone. Les plus anciens sont supprimés en premier. Les médias à autodestruction et à vue unique ne sont jamais conservés.</string>
+    <string name="storage_keep_days">Conserver pendant</string>
+    <string name="storage_keep_size">Jusqu’à</string>
+    <string name="storage_days">%1$d jours</string>
+    <string name="storage_usage">%1$d éléments · %2$s utilisés</string>
 </resources>

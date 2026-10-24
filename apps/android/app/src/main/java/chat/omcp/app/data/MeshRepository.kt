@@ -221,10 +221,10 @@ class MeshRepository(
         kick?.kick(contactId)
     }
 
-    /** "Ask to resend", after the confirm sheet: the (editable) message plus the media reference. */
-    fun askToResend(contactId: String, msgId: String, message: String) {
-        runCatching { core.askToResend(msgId) }
-        send(contactId, message)
+    /** "Ask to resend", after the confirm sheet: ONE request carrying the optional note. */
+    fun askToResend(contactId: String, msgId: String, note: String?) {
+        runCatching { core.askToResend(msgId, note?.trim()?.takeIf { it.isNotEmpty() }) }
+        kick?.kick(contactId)
     }
 
     /** How many media placeholders wait in a chat (chat banner, §5.92). */
@@ -246,6 +246,8 @@ class MeshRepository(
             java.io.File("$path-journal").delete()
             core.open(phrase, name, path, key)
         }
+        // Keep sent media: age limit is applied on start too (size limit on every insert).
+        runCatching { core.evictKeptMedia(clock()) }
     }
 
     /** Reload chats from the core's encrypted store (after a restart or a restore). */

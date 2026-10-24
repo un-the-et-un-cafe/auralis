@@ -147,10 +147,9 @@ fun MissingMediaBubble(mine: Boolean, f: FileAttachment, peerName: String, onReq
 
 /** "Ask {name} to resend?" confirm sheet with an editable message (§5.94). Nothing is sent before Send. */
 @Composable
-fun ResendDialog(peerName: String, fileName: String, onSend: (String) -> Unit, onDismiss: () -> Unit) {
+fun ResendDialog(peerName: String, fileName: String, onSend: (String?) -> Unit, onDismiss: () -> Unit) {
     val c = LocalOmcpColors.current
-    val default = stringResource(R.string.media_resend_default)
-    var text by remember { mutableStateOf(default) }
+    var text by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.media_resend_title, peerName)) },
@@ -158,11 +157,11 @@ fun ResendDialog(peerName: String, fileName: String, onSend: (String) -> Unit, o
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.media_resend_body, peerName))
                 Text("“$fileName”", color = c.ink2)
-                OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text(stringResource(R.string.media_resend_label, peerName)) })
+                OutlinedTextField(value = text, onValueChange = { if (it.toByteArray().size <= 280) text = it }, label = { Text(stringResource(R.string.media_resend_label)) })
                 Text(stringResource(R.string.media_resend_note), style = MaterialTheme.typography.labelSmall, color = c.ink2)
             }
         },
-        confirmButton = { TextButton(onClick = { onSend(text) }, enabled = text.isNotBlank()) { Text(stringResource(R.string.media_resend_send)) } },
+        confirmButton = { TextButton(onClick = { onSend(text.trim().ifEmpty { null }) }) { Text(stringResource(R.string.media_resend_send)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(android.R.string.cancel)) } },
     )
 }

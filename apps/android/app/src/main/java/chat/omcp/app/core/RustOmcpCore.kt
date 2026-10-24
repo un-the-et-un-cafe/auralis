@@ -163,7 +163,12 @@ class RustOmcpCore : OmcpCore {
     override fun mediaPlaceholders() = n().mediaPlaceholders().map { it.toApp() }
     override fun restoreMediaFromBackup(msgId: String, blob: ByteArray): ByteArray = n().restoreMediaFromBackup(msgId, blob)
     override fun requestMedia(msgId: String) = n().requestMedia(msgId)
-    override fun askToResend(msgId: String) = n().askToResend(msgId)
+    override fun askToResend(msgId: String, note: String?) = n().askToResend(msgId, note)
+    override fun keptMediaSettings() = n().keptMediaSettings().let { KeptMediaPrefs(it.maxDays.toInt(), it.maxBytes.toLong()) }
+    override fun setKeptMediaSettings(p: KeptMediaPrefs, nowMs: Long) =
+        n().setKeptMediaSettings(chat.omcp.ffi.KeptMediaSettings(p.maxDays.toUInt(), p.maxBytes.toULong()), nowMs.toULong()).toInt()
+    override fun keptMediaUsage() = n().keptMediaUsage().let { KeptMediaUsageInfo(it.count.toInt(), it.bytes.toLong()) }
+    override fun evictKeptMedia(nowMs: Long) = n().evictKeptMedia(nowMs.toULong()).toInt()
     override fun answerMediaRequest(contactId: String, msgId: String, bytes: ByteArray?) =
         n().answerMediaRequest(contactId, msgId, bytes)
     override fun markRestored(nowMs: Long) = n().markRestored(nowMs.toULong()).toApp()
@@ -254,7 +259,7 @@ private fun chat.omcp.ffi.MediaBackupItem.toApp() = MediaBackupItemInfo(msgIdHex
 
 private fun chat.omcp.ffi.DeviceInfo.toApp() = DeviceKeyInfo(deviceKeyHex, fingerprint, restoredAtMs?.toLong())
 
-private fun chat.omcp.ffi.MediaRequestEvent.toApp() = MediaRequestInfo(contactId, msgIdHex, hashHex, name, mime, localPath)
+private fun chat.omcp.ffi.MediaRequestEvent.toApp() = MediaRequestInfo(contactId, msgIdHex, hashHex, name, mime, localPath, note)
 
 private fun chat.omcp.ffi.StoredFileState.label() = when (this) {
     chat.omcp.ffi.StoredFileState.MISSING -> "Missing"
