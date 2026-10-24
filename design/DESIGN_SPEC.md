@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.9
+# OMCP Smartphone Apps — Design Spec v0.1.16
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -350,7 +350,7 @@ Copy button: **absent** by default (spec §5.1 “Copy disabled”); optional lo
 | Title | Restore identity | Restaurer l’identité |
 | Headline | Enter your 24 words | Saisissez vos 24 mots |
 | Body | Type each word in order. Suggestions come from the standard word list only. | Saisissez chaque mot dans l’ordre. Les suggestions viennent uniquement de la liste standard. |
-| Backup note | If a local encrypted backup is found, contacts and verification states are restored too. | Si une sauvegarde chiffrée locale est trouvée, les contacts et leurs états de vérification sont aussi restaurés. |
+| Backup note | If a local encrypted backup is found, contacts and verification states are restored too. | Si une sauvegarde chiffrée locale est trouvée, les contacts et leurs états de vérification sont aussi restaurés. | *(v0.1.14: your own verifications of others are restored, but every contact must re-verify **you**, because your safety number changes on restore, §5.98.)*
 | CTA | Restore | Restaurer |
 
 **A11y:** slot labels “Word 7 of 24, invalid”; progress announced “13 of 24 words entered”. Same keyboard flags as §5.16.
@@ -637,7 +637,7 @@ Entry: Settings › Backup and Security centre (§5.9) row “Backup”.
 
 **A11y:** status badge text, not colour; destructive row announced “Delete cloud backup, button, destructive”. **Android/iOS:** same layout; iOS shows “iCloud” and “iCloud Keychain key” in the protection line when no password.
 
-### 5.31 Restore on reinstall — `restore-reinstall` (+ `--password`, `--wrong-password`, `--error`)
+### 5.31 Restore on reinstall — `restore-reinstall` (+ `--password`, `--wrong-password`, `--error`) — *extended v0.1.10 by §5L (new frames supersede these visuals; rules here stay normative)*
 
 On first launch the app checks Drive `appDataFolder` (after Credential Manager account pick) / CloudKit private DB. If a backup exists this screen replaces Welcome; otherwise Welcome shows. The 24-word restore (`onboarding-restore`, §5.17) is always reachable.
 
@@ -646,7 +646,7 @@ On first launch the app checks Drive `appDataFolder` (after Credential Manager a
 | Detected | Logo, “Welcome back”, kv card (account, created, device hint from blob), Restore from {service} · Use my 24 words instead · Start fresh |
 | Password | Shown only if the blob has a password KDF; iCloud no-password backups skip straight to restoring |
 | Wrong password | Inline error with remaining tries; after 3 failures, 5-minute cooldown with countdown (O4 rate limit); phrase fallback always enabled |
-| Restoring | Progress “Restoring contacts and verification…” then Chats (O3) |
+| Restoring | Progress “Restoring contacts and verification…” then Chats (O3) | *(v0.1.14: “verification” means your verifications of others; contacts' verification of you resets, §5.98.)*
 | Error | Danger callout (offline / not signed in / record unreadable); Try again · Use my 24 words instead · Start fresh |
 | Start fresh | Confirm: “Start fresh? Your old identity stays in {service} until you delete it.” |
 
@@ -1078,6 +1078,189 @@ Frames: `nearby-area-indicator` (+`--ios-live-activity[-paused-night][-private]`
 | checkin.desc | Counts visible time only, not pauses. Next one after {t} more visible time. | Compte seulement le temps visible (pas les pauses). Prochain dans {t} de visibilité. |
 | area.title / sub | Area mode · Visible in your area (~5 km) until you turn it off | Mode secteur · Visible dans votre secteur (~5 km) jusqu’à désactivation |
 
+## 5L. v0.1.10 — Restore from backup (reinstall-first) — extends §5.17, §5.26, §5.30, §5.31
+
+Generator `/workspace/omcp-v0110/gen.py` (render: `/workspace/omcp-v0110/render.py`, system Chrome). Mockups: `restore-detect`, `restore-source`, `restore-password`, `restore-progress`, `restore-success`, `restore-error`. They supersede the visual frames of `restore-reinstall` (§5.31 rules stay normative: lockout, Start fresh, phrase fallback). **Hero screens:** detected backup card, password, progress, Welcome back.
+
+### 5.83 Journey and entry points
+1. **Primary — auto-detect on first launch** (`restore-detect--checking` → `restore-detect`). Before onboarding, the app checks the signed-in account: Android = Credential Manager account already on device → Drive `appDataFolder` (`drive.appdata` only); iOS = CloudKit private DB `OMCPBackup` (and Drive if a Google account was previously linked — only via the manual path). Timeout 3 s; if nothing found or offline, show Welcome (no error on first launch).
+2. **Fallback — Welcome › Restore** (`restore-source`): iOS lists iCloud (recommended), Google Drive, My 24 words; Android lists Google Drive, My 24 words. Google → system account picker (Android Credential Manager sheet / iOS `ASWebAuthenticationSession` Google sign-in). **No backup found** → Try another account · Use my 24 words · Start fresh.
+3. **Settings › Backup › Restore:** not offered (dropped). Restoring over a live identity is “replace identity”, out of scope; Settings keeps §5.30 management only.
+
+### 5.84 Detected backup — `restore-detect` (+`--ios`, `--dark`, `--ios-dark`, `--checking`, `--start-fresh`, `--fr`, `--ios-fr`)
+“Welcome back · We found your Hopla backup. Restore your chats, contacts and verified badges. *(v0.1.11 wording)*” Card: service, Found badge, Account, Backed up (`created_at`), Device (`device_hint`), Size, Protection (Password / iCloud Keychain key). CTA **Restore**; secondary **Start fresh** (confirm sheet: new identity, contacts must re-add you, old backup stays until deleted; default focus **Restore instead**); links Use my 24 words · Other account.
+
+### 5.85 Password and lockout — `restore-password` (+`--wrong`, `--lockout`, `--dark`, `--ios`, `--keychain`, `--keychain-missing`, `--keychain-dark`, `--fr`, `--lockout-fr`, `--keychain-fr`)
+- Shown only for password-KDF blobs. Argon2id runs on device (expect 0.5–1.5 s; button shows spinner, not progress).
+- Wrong: inline `role=alert` “Wrong password. 2 tries left, then a 5-minute wait.” Lockout (§5.31): after 3 fails, 5-min pause, escalating per round (5 → 15 → 60 min); field and Restore disabled; remaining time in minutes, announced once per minute; 24-word path always enabled. Lockout survives app restart (stored locally).
+- iCloud no-password: “No password needed · Key found in iCloud Keychain” → Restore. Keychain not synced yet: steps to enable Passwords & Keychain sync, Try again, Use my 24 words.
+
+### 5.86 Progress — `restore-progress` (+`--download`, `--decrypt`, `--dark`, `--ios`, `--reduced-motion`, `--background-android`, `--background-ios`, `--fr`)
+Stages: **Download** (2.4 MB from {service}, text only) → **Decrypt** (on your phone) → **Contacts and chats** (v0.1.11: 23 chats, 1,284 messages — text history restored). Determinate bar + stage list (`aria-current=step`). “You can leave the app. We’ll keep going in the background.” Android: `WorkManager` expedited job + ongoing notification “Restoring Hopla · step 3 of 3”. iOS: `BGProcessingTask`/background URLSession; local notification “Hopla is restored. Welcome back!” when done. Reduced motion: no ring pulse, bar jumps per stage.
+
+### 5.87 Welcome back — `restore-success` (+`--dark`, `--ios`, `--ios-dark`, `--fr`)
+“Welcome back, Sam · You’re all set. Your contacts will recognise you.” **Restored:** identity, contacts, verified badges (v0.1.14: “Still verified on your side”. Your verifications of others carry over, but contacts must re-verify you, §5.98), profile and settings. ~~Not restored: message history~~ → *v0.1.11: chats and message text are restored; media comes back later (§5.91).* Not restored: burn-after-read / view-once (never backed up), Nearby profile (separate rotating keys). CTA Open my chats.
+
+### 5.88 Errors — `restore-error` (+`--permission`, `--quota`, `--corrupted`, `--too-new`, `--dark`, `--ios`, `--fr`, `--offline-fr`)
+| Error | Title | Primary / secondary |
+|---|---|---|
+| Offline | You’re offline (mesh and gateways are never used for backups) | Try again / Use my 24 words |
+| Permission revoked | {service} access was removed | Allow access / Use my 24 words |
+| Quota full | {service} storage is full — restore still works, next backup can’t | Restore anyway / Use my 24 words |
+| Corrupted | This backup can’t be read — nothing changed on your phone | Use my 24 words / Try another account |
+| Version too new | Update Hopla to restore (blob `v` > supported) | Update Hopla / Use my 24 words |
+On first-launch auto-detect, errors fall back silently to Welcome; error screens appear only after the user chose Restore.
+
+### 5.89 Copy (EN / FR)
+| Key | EN | FR |
+|---|---|---|
+| detect.title / body | Welcome back · We found your Hopla backup. Restore your chats, contacts and verified badges. *(v0.1.11 wording)* | Bon retour · Nous avons trouvé votre sauvegarde Hopla. Restaurez vos discussions, vos contacts et vos vérifications. |
+| checking | Looking for your backup… | Recherche de votre sauvegarde… |
+| fresh | Start fresh? You’ll get a new identity, so your contacts will need to add you again. Your old backup stays in {service} until you delete it. · Restore instead · Create a new identity | Repartir de zéro ? Vous aurez une nouvelle identité : vos contacts devront vous rajouter. Votre ancienne sauvegarde reste dans {service} jusqu’à ce que vous la supprimiez. · Restaurer plutôt · Créer une nouvelle identité |
+| nobackup | No backup found · There’s no Hopla backup in {service} for {account}. It may be on another account. | Aucune sauvegarde trouvée · Aucune sauvegarde Hopla dans le {service} de {account}. Elle est peut-être sur un autre compte. |
+| pw | Enter your backup password · Forgot it? Hopla can’t reset it, but your 24 words always work. | Saisissez votre mot de passe · Oublié ? Hopla ne peut pas le réinitialiser, mais vos 24 mots fonctionnent toujours. |
+| lockout | Security pause: {n} min · Too many tries… Each new round of mistakes makes the wait longer. | Pause de sécurité : {n} min · Trop d’essais… Chaque nouvelle série d’erreurs allonge l’attente. |
+| keychain | No password needed · Key not here yet | Aucun mot de passe nécessaire · Clé introuvable pour l’instant |
+| progress | Restoring your Hopla · You can leave the app. We’ll keep going in the background. | Restauration en cours · Vous pouvez quitter l’app, on continue en arrière-plan. |
+| success | Welcome back, {name} · You’re all set. Your contacts will recognise you. · Open my chats | Bon retour, {name} · Tout est prêt. Vos contacts vous reconnaîtront. · Ouvrir mes discussions |
+
+### 5.90 Accessibility & reduced motion
+Hero headings are `h1`; backup card is a list of label/value pairs; errors `role=alert`; progress `role=progressbar` with stage text announced on change only. Password field supports password managers (`autofill=password`, iOS `textContentType=.password`) and paste. Reduced motion: no pulse, no cross-fades between stages (instant), success check appears without scale.
+
+## 5M. v0.1.11 — Text chat backup: restored chats and missing-media placeholders
+
+Follows REQUIREMENTS “Encrypted chat backup (v0.1.4, text only)”. Generator `/workspace/omcp-v0111/gen.py`. New mockups `media-missing`, `chats-restored`; `restore-detect`, `restore-progress`, `restore-success` re-rendered with the new copy.
+
+### 5.91 What the backup now holds
+All message text (1:1, groups, joined community chats, reactions, edits, timestamps, contact names) is backed up, encrypted on device (HKDF `hopla/chat-backup/v1`, XChaCha20-Poly1305). It's incremental, padded to 64 KiB buckets, Wi-Fi only by default, at most hourly. Images, videos, voice notes and files are **not** backed up. Burn-after-read and view-once messages are never backed up. **Restore copy changes (supersedes §5.84/§5.86/§5.87 wording):** detect body is “Restore your chats, contacts and verified badges”; backup card size is “2.4 MB · text only”; progress stage 3 reads “23 chats, 1,284 messages”; success subtitle is “Your chats are back”, with three groups: **Restored** (identity, chats and messages, contacts, verified badges, profile/settings), **Coming back later** (photos, videos, voice notes, files: “come back when a contact who has them is nearby (mesh or gateway)”), **Not restored** (burn-after-read and view-once, Nearby profile).
+
+### 5.92 Missing-media placeholder — `media-missing` (+`--requested`, `--syncing`, `--restored`, `--reduced-motion`, `--video`, `--gone`, `--group`, `--dark`, `--ios`, `--ios-dark`, `--fr`, `--syncing-fr`, `--gone-fr`)
+- **Scope (v0.1.13):** only for media not in the backup (§5.97).
+- **Anatomy.** The bubble keeps its side, sender (groups), time and caption. Photo and video use a calm diagonal-hatch tile (brand 7% over `--surface-2`) at the original aspect ratio, a centred type glyph on a surface disc, and a small caps tag “NOT RESTORED YET”. Under it: type name and size (video adds duration). Voice notes and files use a compact 44 px hatched tile with name, size/duration and the tag. No red, no warning icons.
+- **States.**
+  | State | Status line (EN / FR) | Action |
+  |---|---|---|
+  | Waiting | Comes back when {name} is nearby / Revient quand {name} est à proximité | “Request again” pill (whole bubble is the target) |
+  | Requested | Requested · we’ll fetch it as soon as it’s in reach / Demandé · on le récupère dès qu’il est à portée + toast “Requested” (v0.1.12) | none (tap is a no-op for 30 s) |
+  | Syncing | Getting it via mesh · 62% / Récupération via le mesh · 62 % (or gateway / une passerelle) + 4 px bar | none |
+  | Restored | “Restored” chip on the media, fades after 2 s | normal media |
+  | Partner no longer has it | {name} doesn’t have this anymore. | “Ask to resend” — one tap, optional note (v0.1.16, §5.100) |
+- **“Nearby”** means reachable over the BLE mesh or a gateway. Groups: “when a member is nearby”, and any member holding the file can serve it.
+- **Auto-fetch.** When a partner holding the file is reachable, the app requests it by stored locator and hash (§7, 64 KiB chunks), verifies the hash, then swaps. Target: within 10 s of a partner coming in range (CB3). A tap only moves the request to the front of the queue.
+- **Swap motion.** Placeholder crossfades to the media over 240 ms ease-out, with a 12→0 px blur-up. Bubble height animates over 200 ms if the aspect ratio differs. The “Restored” chip fades out after 2 s. **Reduced motion:** instant swap, no blur, no height animation; the chip is still shown and announced.
+- **Burn-after-read / view-once.** These are never in the backup, so they leave no placeholder and no trace in restored history.
+- **Chat banner** (top of thread, dismissible per chat): “3 media waiting for Alex · Your text came back. Photos and files return when Alex is nearby (mesh or gateway).” For groups: “12 media waiting in this group”. Hidden once the count is 0.
+- **A11y.** The bubble is `role=button` with label “{type}, {size}, not restored yet. {status}. Tap to request again.” Status changes go through `aria-live=polite` (Requested, Getting it, Restored), and progress is announced at most every 25%. The hatch is decorative; contrast of the text on the tile is ≥ 4.5:1 in light and dark.
+
+### 5.93 Chats list after restore — `chats-restored` (+`--dark`, `--ios`, `--ios-dark`, `--fr`)
+A dismissible card at the top: “Chats restored · 1,284 messages in 23 chats”, with an inset “12 photos and 4 files waiting for partners · They come back when your contacts are nearby.” Rows with waiting media show “📷 Photo · waiting” as the preview and a small clock pill with the count. The card auto-hides when everything is restored or after 7 days.
+
+### 5.94 v0.1.12 — Ask to resend, privacy, data use (REQUIREMENTS “Encrypted chat backup”, approved 2026-10-24)
+Generator `/workspace/omcp-v0112/gen.py`. `media-missing` adds the frames `--confirm`, `--sent`, `--wifi`, `--wifi-dark`, `--confirm-fr`, `--sent-fr`, `--wifi-fr` and `--ios-confirm`. There's a new mockup `settings-missing-media` (+`--on`, `--dark`, `--ios`, `--fr`).
+- **Partner no longer has it** (`--gone`): “{name} doesn’t have this anymore.” / « {name} ne l’a plus sur son téléphone. » One-tap pill **Ask to resend** / **Demander un renvoi**. This state replaces the v0.1.11 “Ask {name}” wording.
+- *(Superseded v0.1.16, §5.100: one-tap request, no confirm sheet; `--confirm`, `--confirm-fr`, `--ios-confirm` removed.)* **Confirm sheet** (`--confirm`): “Ask Alex to resend? · Alex will get this message in your chat:” shows a quoted media reference (type, date, caption) and an editable message preview, “Hi! Could you send me this photo again? 🙂” / « Salut ! Tu peux me renvoyer cette photo ? 🙂 ». Below it: “Nothing else is shared. You can edit the text before sending.” Actions: **Send request** (primary) and Edit message. Nothing is sent before the user confirms. The message doesn't mention the restore.
+- **Sent** (`--sent`): toast “Sent” / « Envoyé ». The placeholder reads “Request sent to {name} · it’ll appear here if they resend it.” The resent file is matched by hash and swaps in like any other restore.
+- **Privacy (revised in this bump, superseding the earlier “partner never told” decision):** the restore itself is announced to contacts (§5.95). Media re-requests carry no extra metadata. The toast still says “Requested”, and the Settings footnote saying contacts aren't told was removed.
+- **Data use:** over direct BLE mesh, media always re-downloads. Over a gateway it's Wi-Fi only unless **Settings › Backup › Missing media › Use mobile data for missing media** is on (off by default). The placeholder state `--wifi` reads “Waiting for Wi-Fi · available via a gateway” / « En attente du Wi-Fi · disponible via une passerelle », with the link “Use mobile data…” going to that setting. Items available over mesh keep syncing at the same time. Settings shows the waiting count and size, plus a fixed row “Nearby devices (Bluetooth mesh) · Always”.
+- **A11y:** Ask to resend is a button; the sheet is a `role=dialog` with focus on the title; the message preview is an editable field labelled “Message to Alex”; “Sent” is announced via `role=status`. The Wi-Fi link has `role=link` and the label “Use mobile data for missing media, setting”.
+
+### 5.95 v0.1.12 — Restore indicator (security), `restore-notice` (+`--sheet`, `--list`, `--self`, `--dark`, `--sheet-dark`, `--ios`, `--ios-list`, `--ios-self-dark`, `--fr`, `--sheet-fr`, `--list-fr`, `--self-fr`)
+Follows REQUIREMENTS “Restore indicator (security)” and RS1. The restored device creates a new device key, signed by the identity key, with `restored_at`. The old device key is marked superseded, and the restored device can't suppress the notice.
+- **Contact side, in-chat system notice** (centred, neutral surface, not red): “Alex restored Hopla on a new device · Oct 24” / « Alex a restauré Hopla sur un nouvel appareil · 24 oct. », with the link “Not expected? Check it” / « Ce n’était pas Alex ? Vérifier ». It must show within 5 s of syncing (RS1).
+- **Sheet** (tap the notice): “Alex restored Hopla · On {date} at {time}, on a new device, using their 24 words. That’s normal after a phone change. If Alex didn’t mention it, check with them in person or another way.” Rows: Safety number (Verified {date} · re-check suggested), Old device (Superseded). Actions: **Verify safety number** (primary), **Block Alex** (danger text, secondary), It was Alex (dismisses). *(Superseded v0.1.14, §5.98: safety number changed; primary action Verify in person (QR).)*
+- **Restored badge:** a neutral grey pill with a sync glyph, “Restored” / « Restauré », shown for 7 days in the chat row and the chat header. It sits **after** the mint verified badge. Per REQUIREMENTS, verification isn't reset (O3 restores verification state; the identity key is unchanged), so the verified badge stays, and the pill plus the sheet suggest a re-check, as with a safety-number change. Chat row preview shows the notice text until a newer message arrives. Screen readers hear “Alex Rivera, verified, restored recently”. *(Superseded v0.1.14, §5.98: the verified badge is removed and the pill reads “Restored, not verified” until re-verified.)*
+- **Restored phone:** a dismissible banner at the top of each chat: “You restored this account. Your contacts were notified.” / « Vous avez restauré ce compte. Vos contacts ont été prévenus. » It sits above the media-waiting banner. `restore-success` adds the note “Your contacts will see you restored Hopla on a new device.” *(v0.1.14 copy: “…Your contacts were notified and need to verify you again in person (QR). Show my QR”.)*
+- **A11y:** the notice is `role=button` with a full label including the date; the sheet is a `role=dialog` with focus on the title; Block needs the standard block confirmation (§5.6x moderation); the banner is `role=status`, announced once. No motion beyond the standard sheet; reduced motion has no effect.
+
+## 5N. v0.1.13 — Media backup setting (REQUIREMENTS “Include media”, CB5)
+
+Generator `/workspace/omcp-v0113/gen.py`. New mockups: `settings-media-backup` and `restore-media`.
+
+### 5.96 Settings › Backup › Photos, videos and files — `settings-media-backup` (+`--on`, `--uploading`, `--near-full`, `--full`, `--confirm-off`, `--deleting`, `--dark`, `--ios`, `--ios-dark`, `--fr`, `--confirm-off-fr`, `--near-full-fr`, `--deleting-fr`)
+- **Master toggle, off by default:** “Also back up photos, videos and files · Added to the same encrypted backup. Backed up daily on Wi-Fi.” / « Sauvegarder aussi photos, vidéos et fichiers · Ajoutés à la même sauvegarde chiffrée. Sauvegarde quotidienne en Wi-Fi. » *(v0.1.14: media runs as a separate daily pass, Wi-Fi only by default; chats stay at most hourly.)* When it's off, the footnote reads: “Off: only your chats are backed up (2.4 MB). Photos and files come back from contacts when they’re nearby.” No media bytes are uploaded (CB5).
+- **On:**
+  - Per-type toggles (Photos, Videos, Voice notes, Files), each showing its local size. Turning on the master toggle selects all types by default except Videos (size; Q21 resolved).
+  - Estimated backup size card: “Estimated backup size 1.6 GB · Chats 2.4 MB (hourly) + selected media (daily). Free in {service}: 3.1 GB”.
+  - Row “Back up media on mobile data · Off: daily on Wi-Fi only (default).” REQUIREMENTS (v0.1.15) now explicitly accepts this optional toggle, off by default.
+- **First upload** (`--uploading`): brand-soft card “First media backup · 34% · 550 MB / 1.6 GB · On Wi-Fi, in the background. Paused while on mobile data.” Android uses a WorkManager long-running job with a foreground notification; iOS uses a `BGProcessingTask` with background URLSession.
+- **Quota:**
+  - Nearly full (< 2× the remaining estimate): warn callout “{service} is almost full”, explaining that chats are backed up first.
+  - Full: callout “{service} is full · Media backup is paused. Your chats are still backed up.” with a Manage storage link. Chats always take priority over media.
+  - Warn style, never danger.
+- **Turn off** (`--confirm-off`): `alertdialog` “Stop backing up media? · This deletes the 1.6 GB of photos, videos and files already in {service}. Your chats stay backed up, and media on this phone isn’t touched. After a future restore, media comes back only from contacts.” Primary danger button **Turn off and delete media backup**; Keep backing up. Default focus is Keep.
+- **Deleting** (`--deleting`): neutral progress card “Deleting media backup… 60% · You can leave this screen. Your chats backup is unaffected.” The toggle shows off immediately. If deletion fails offline, it's retried and the status says so.
+- **A11y:** toggles are `role=switch` with the full type name; progress cards are `role=progressbar` with text; quota callouts are `role=status` (near full) or `role=alert` (full); the danger button label repeats “delete”.
+- The mobile-data rule for **re-fetching missing media from contacts** stays in §5.94 (separate setting).
+
+### 5.97 Restore with media in the backup — `restore-media` (+`--success`, `--dark`, `--ios`, `--success-dark`, `--success-ios`, `--fr`, `--success-fr`)
+- **Detect:** the body reads “Restore your chats, photos, voice notes, files, contacts and verified badges.” The card size reads “1.6 GB · chats + media”. When media backup was off, the existing `restore-detect` copy applies (“2.4 MB · text only”).
+- **Progress:** same stages. The download is larger, so stage 1 shows MB/GB and the background notice matters more.
+- **Success:** **Restored** adds “Photos, voice notes, files · 842 items, each checked” (hash verified, CB5). **Coming back later** lists only the types that were off, e.g. “Videos (not in your backup)”. **Not restored** is unchanged.
+- **Partial media restore** (`--partial`, `--partial-fr`, `--partial-dark`, v0.1.14, Q23): Restored shows “Photos, voice notes, files · 610 of 842 restored, each checked”. Coming back later shows “232 items didn’t download + videos (not in backup) · Shown as placeholders · they refill when a contact who has them is nearby”. The missing items use the §5.92 placeholder flow automatically.
+- **Placeholders (§5.92) apply only to media that isn't in the backup** (types that were off, or items added after the last backup). Media that was backed up appears directly, with no placeholder and no swap animation.
+
+### 5.98 v0.1.14 — Re-verification after restore (REQUIREMENTS “Re-verification after restore”, RS2)
+Generator `/workspace/omcp-v0114/gen.py`. `restore-notice` was re-rendered (20 frames: `default`, `sheet`, `list`, `self`, `qr`, `reverified`, `list-reverified`, `dark`, `sheet-dark`, `reverified-dark`, `ios`, `ios-list`, `ios-self-dark`, `ios-reverified`, `fr`, `sheet-fr`, `list-fr`, `self-fr`, `qr-fr`, `reverified-fr`), along with `restore-success` and `restore-media`.
+- **Safety number** = identity key + current device key, so it changes after a restore. The old QR code no longer verifies (RS2).
+- **Contact side:**
+  - The mint verified badge is removed for every contact.
+  - The pill reads **“Restored, not verified” / « Restauré, non vérifié »**, in the chat header and chat row. It stays **until re-verified**, not for 7 days: the 7-day rule covers only the “Restored” notice emphasis, and REQUIREMENTS says “until then” for the unverified state.
+  - Row preview: “Alex restored Hopla · safety number changed”.
+  - Notice link: “Safety number changed · Verify”.
+- **Sheet:** “…That’s normal after a phone change, but Alex’s safety number has changed, so they’re no longer verified. Scan Alex’s QR code in person to verify again.” Safety number row: “Changed Oct 24 · not verified”. Primary **Verify in person (QR)**, secondary Block Alex, tertiary It was Alex (dismisses; Alex stays not verified). Calm neutral tone, no red except the Block text.
+- **QR re-verify** (`--qr`): “Scan Alex’s QR code · On their new phone, in person” → “Safety numbers match”. Note: “Alex’s old QR code no longer works; it must be the one from their new device.”
+- **Badge earned back** (`--reverified`, `--list-reverified`): a system line “✓ You verified Alex in person · today 4:40 PM” (mint tint). The pill is removed and the mint verified badge returns in the header and row.
+- **Restored phone:**
+  - Banner: “You restored this account. Your contacts were notified and need to verify you again in person (QR). Show my QR” / « …Vos contacts ont été prévenus et doivent vous revérifier en personne (QR). Montrer mon QR ».
+  - `restore-success` note: “Your safety number changed. Contacts need to verify you again in person (QR).”
+  - Verified badges row: “Still verified on your side”. O3 restores *your* verifications of others, since their keys didn't change.
+- **A11y:** the pill label is “Restored, not verified”; the row reads “Alex Rivera, restored, not verified”; the QR match is announced via `role=status`; the re-verified system line is `role=status`. Colour is never the only carrier: the pill has text and a glyph.
+
+### 5.99 v0.1.15 — Restored tag in groups and communities — `group-restored` (+`--members`, `--sheet`, `--dark`, `--members-dark`, `--ios`, `--ios-members`, `--ios-dark`, `--fr`, `--members-fr`, `--sheet-fr`)
+Follows REQUIREMENTS “Groups and communities” (Q25). Generator `/workspace/omcp-v0115/gen.py`.
+- **Compact tag:** a smaller version of the 1:1 pill (10 px text, 16 px tall, 9 px sync glyph, neutral `--surface-2` with a `--line` border): “Restored, not verified” / « Restauré, non vérifié ». It appears after the member's name on **every message sender name** and in the **member list**. It replaces the verified badge until that member is re-verified (§5.98), then disappears.
+- **No system notice in groups or communities.** The full “<name> restored Hopla on a new device” notice appears only in 1:1 chats.
+- **Tap:** the tag opens the same verify sheet as §5.98 (safety number changed · Verify in person (QR) · Block · It was Alex).
+- **Member list:** a footnote explains the tag: “‘Restored, not verified’: this member restored Hopla on a new device. Tap the tag to verify in person.”
+- **A11y:** the tag is `role=button` labelled “Restored, not verified. Tap to verify”. The sender line reads “Alex Rivera, restored, not verified”. The touch target is extended to 44 pt via padding on the name row.
+
+## 5O. v0.1.16 — One-tap Ask to resend; keep media you sent (approved by the maintainer, 2026-10-24)
+
+Generator `/workspace/omcp-v0116/gen.py` (renders with `render.py`, system python3 Playwright + `/usr/bin/google-chrome`). New mockups `media-resend-note`, `settings-storage`; `media-missing` re-rendered.
+
+### 5.100 Ask to resend — one tap with optional note — `media-missing` (`--gone`, `--sent`, `--ios-gone`, `--gone-fr`, `--sent-fr`), `media-resend-note` (+`--empty`, `--sent`, `--dark`, `--sent-dark`, `--ios`, `--ios-sent`, `--fr`, `--sent-fr`)
+Replaces the v0.1.12 confirm sheet (§5.94).
+- **Gone state:** “{name} doesn’t have this anymore.” with the pill **Ask to resend** / **Demander un renvoi** and a secondary text button **Add a note** / **Ajouter un mot**.
+- **One tap sends.** Tapping Ask to resend sends the request right away: a fixed system request that carries the media reference (type, date, hash locator) and nothing else. It doesn't mention the restore. Status in the bubble: “Request sent to {name} · it’ll appear here if they resend it.” Toast: “Request sent to {name}” with **Undo** for 5 s (Undo recalls the request before delivery; after that it's a no-op and the toast is gone).
+- **Optional note:** Add a note expands an inline field in the bubble (label “Note to {name} · optional”, placeholder “Add a note (optional)”, max 140 characters, counter, helper “Sent with the photo reference only”). Actions: filled **Ask to resend** and Cancel. An empty note sends the same as one tap.
+- **Sent with note:** the note is quoted under the status (“Your note: “…””). The recipient sees the request with the note in the chat.
+- The resent file is matched by hash and swaps in like any other restore (§5.92). One active request per item; tapping the pill again after sending does nothing (it's replaced by the status).
+- **A11y:** the pill is a button “Ask {name} to resend this photo”; Add a note is a button that moves focus into the field; the field is a multiline textbox labelled “Note to {name}, optional”; the counter is announced on reaching 120; Request sent and Undo go through `role=status`, and Undo is reachable by keyboard / switch access for its 5 s window (extended to 10 s when a screen reader is on).
+
+| Copy | EN | FR |
+|------|----|----|
+| Pill | Ask to resend | Demander un renvoi |
+| Secondary | Add a note | Ajouter un mot |
+| Field | Note to {name} · optional | Mot pour {name} · facultatif |
+| Toast | Request sent to {name} · Undo | Demande envoyée à {name} · Annuler |
+| Status | Request sent to {name} · it’ll appear here if they resend it | Demande envoyée à {name} · elle apparaîtra ici si elle est renvoyée |
+
+### 5.101 Settings › Storage › Keep media you sent — `settings-storage` (+`--edit`, `--edit-custom`, `--edit-off`, `--off`, `--forever`, `--dark`, `--edit-dark`, `--ios`, `--ios-edit`, `--fr`, `--edit-fr`, `--off-fr`)
+- **Storage screen:** usage card (“2.6 GB used by Hopla”, bar split into Media you sent / Media you received / Chats), then section “Media you sent” with the row **Keep media you sent · 90 days or 2 GB ›** and the explanation “Copies of photos, videos and files you sent, so you can resend them when a contact asks (for example after they restore Hopla).” Footnote: oldest sent media is removed first when a limit is reached; messages and captions stay. Other rows: Media you received, Review large files, Auto-download on mobile data.
+- **Defaults:** on, **90 days or 2 GB, whichever limit is reached first.** Both can be changed.
+- **Edit sheet** (`--edit`): title “Sent media”, master toggle **Keep media you sent** (“Lets you resend files to contacts who lost them.”), then two segmented controls: **Keep for** 30 days · **90 days** · 1 year · Forever, and **Up to** 500 MB · **2 GB** · 5 GB · No limit. A live summary says what the combination does and current usage. Actions: Save, Reset to default (90 days or 2 GB). Forever + No limit is allowed (row reads “Forever”).
+- **Off** (`--edit-off`): toggle off greys out the limits; warn callout “Sent media is removed after delivery. 1.4 GB will be freed. Contacts who lose a file can’t ask you to resend it.” Primary becomes **Turn off and free 1.4 GB**; secondary Keep media (default focus). On the Storage screen the row reads Off and a warn callout repeats the consequence (`--off`). Warn style, never danger.
+- **Link with §5.100:** when the sender no longer has the file (pruned or off), the requester's request still arrives; the sender sees “You no longer have this file” and can reply in chat. Lowering a limit prunes oldest-first on Save.
+- **A11y:** the row is a button reading the current value; the toggle is `role=switch`; each segmented control is a `radiogroup` labelled “Keep for” / “Up to”; the summary is `role=status`; the usage bar is `role=img` with a full text label.
+
+| Copy | EN | FR |
+|------|----|----|
+| Row | Keep media you sent | Garder les médias envoyés |
+| Default value | 90 days or 2 GB | 90 jours ou 2 Go |
+| Groups | Keep for / Up to | Durée / Jusqu’à |
+| Presets | 30 days, 90 days, 1 year, Forever · 500 MB, 2 GB, 5 GB, No limit | 30 j, 90 j, 1 an, Toujours · 500 Mo, 2 Go, 5 Go, Sans limite |
+
+
 ## 6. Path indicator component (normative UX)
 
 **`PathChip`:** pill, 7 px dot + label, colours from §2.1. Used in list rows (micro), status strip, settings legend.
@@ -1221,6 +1404,20 @@ Resolved 2026-10-24:
 
 No open questions. (Note: REQUIREMENTS Decision 4 “Honest status” still quotes an old chip example with minutes left; the pack uses “Live nearby” / “Paused” / “Area mode”.)
 
+Open (v0.1.10):
+14. ~~**Message history in backup**~~ → **Resolved v0.1.11:** all message text is backed up (REQUIREMENTS “Encrypted chat backup”, v0.1.4 text only); media comes back via missing-media placeholders (§5M).
+15. **Where contacts/settings live:** the blob format `{v,kdf,salt,nonce,ct,created_at,device_hint}` carries the phrase; O3 requires contacts + verification restored. Is a second encrypted contacts record uploaded alongside (size shown as 4 KB assumes identity + contacts)? *(v0.1.14: O3’s verification state is your verifications of others; contacts' verification of you resets, RS2.)*
+16. **Lockout escalation:** 5 → 15 → 60 min is a design assumption (O4 says only “rate-limited”). Confirm with the Rust core.
+17. ~~**Partner no longer has the file:**~~ → **Resolved 2026-10-24** (§5.94) REQUIREMENTS only covers re-fetch from a partner who still holds it. `media-missing--gone` assumes the protocol gets a “not found” reply for the hash. Is there such a reply, or does the placeholder wait forever (and for how long)?
+18. ~~**Requester privacy:**~~ → **Resolved 2026-10-24** (§5.94; superseded by the restore indicator §5.95: the restore is announced, and re-requests carry no extra metadata) does an auto re-request reveal to the partner that I restored (and when)? Copy assumes it's fine.
+19. ~~**Chunk resume / Wi-Fi:**~~ → **Resolved 2026-10-24** (§5.94) should media re-fetch over a gateway respect the backup's Wi-Fi-only default, or always use mesh/gateway freely?
+20. ~~**Safety number after a restore**~~ → **Resolved 2026-10-24 (maintainer: yes)**: the safety number covers the identity key + current device key, a restore resets every contact's verified badge, and re-verification is in person by QR (§5.98, RS2).
+21. ~~**Default types when media backup is turned on:**~~ → **Resolved 2026-10-24:** every type is pre-selected except Videos, as mocked.  the mockup pre-selects everything except Videos (size). Confirm, or select all?
+22. ~~**Media backup cadence:**~~ → **Resolved 2026-10-24:** media is backed up in a separate daily pass, Wi-Fi only by default. Copy: “Backed up daily on Wi-Fi” (§5.96).  the chat backup runs at most hourly, padded to 64 KiB buckets. Should media follow the same cadence and padding (padding large videos gets costly), or use a separate daily pass?
+23. ~~**Partial restore:**~~ → **Resolved 2026-10-24:** a partial media restore falls back to placeholders that refill from nearby contacts (`restore-media--partial`, §5.97).  if media download fails mid-restore (quota or offline), do the remaining items fall back to placeholders and contact re-fetch automatically? Assumed yes.
+24. ~~**REQUIREMENTS O3 wording:**~~ → **Resolved 2026-10-24:** REQUIREMENTS O3 is reworded (“your verifications of contacts are restored; contacts' verification of you resets, RS2”).
+25. ~~**Group / community chats:**~~ → **Resolved 2026-10-24:** compact tag in groups and communities, with the system notice in 1:1 only (§5.99).
+
 ---
 
 ## Document control
@@ -1231,6 +1428,13 @@ No open questions. (Note: REQUIREMENTS Decision 4 “Honest status” still quot
 | 0.1.1 | 2026-10-24 | Hopla naming; §5.14–5.24 onboarding, contact add, file transfer; 11 new mockups (17 PNG frames); resolved v0.1.0 questions |
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
+| 0.1.15 | 2026-10-24 | Restored tag in groups and communities (§5.99), `group-restored`; Q24–Q25 resolved; mobile-data toggle confirmed by REQUIREMENTS |
+| 0.1.16 | 2026-10-24 | One-tap Ask to resend with optional note (§5.100, supersedes §5.94 confirm sheet); Settings › Storage › Keep media you sent, default 90 days or 2 GB (§5.101); 2 new + 1 updated mockups |
+| 0.1.14 | 2026-10-24 | Re-verification after restore (§5.98, RS2): verified badge reset, “Restored, not verified” until QR re-verify, badge earned back; restore copy; Q20 resolved; Q24–Q25; media daily Wi-Fi pass copy, partial media restore frame; Q21–Q23 resolved |
+| 0.1.13 | 2026-10-24 | Media backup setting (§5N, 5.96–5.97): toggles, size, quota, turn-off delete, first upload; `restore-media`; placeholders only for media not in the backup; Q21–Q23 |
+| 0.1.12 | 2026-10-24 | Ask to resend + confirm/sent, Wi-Fi-only gateway re-fetch with a mobile-data setting, re-requests carry no extra metadata (§5.94); Q17–Q19 resolved; restore indicator: contact notice, sheet, 7-day Restored badge, restored-phone banner (§5.95) |
+| 0.1.11 | 2026-10-24 | Text chat backup: missing-media placeholders §5M (5.91–5.93), `media-missing`, `chats-restored`; restore copy now says chats come back; Q14 resolved; Q17–Q19 |
+| 0.1.10 | 2026-10-24 | Restore from backup, reinstall-first §5.83–5.90; 6 new mockups (52 PNG frames); §12 Q14–Q16 |
 | 0.1.9 | 2026-10-24 | Area-mode persistent indicator §5.81; check-in counts visible time §5.82; Q11–Q13 resolved |
 | 0.1.8 | 2026-10-24 | Nearby stays on until turned off: auto-pause, 4 h check-in, persistent indicator §5.75–5.80; `nearby-checkin`, `settings-nearby` new |
 | 0.1.7 | 2026-10-24 | Approved decisions §5.71–5.74: toggle copy aligned to REQUIREMENTS, private Live Activity/Island, recents by toggle, session length; §12 Q4–Q10 resolved |
