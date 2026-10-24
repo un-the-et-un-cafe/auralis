@@ -1,4 +1,4 @@
-//! Open Mesh Chat Protocol (`omcp-core`) — M1 + M2 core library.
+//! Open Mesh Chat Protocol (`omcp-core`) — M1 + M2 + M3 core library.
 //!
 //! Provides:
 //! - Canonical [`framing::EnvelopeV1`] encode/decode (PROTOCOL §10.1, §21.1–§21.4)
@@ -6,16 +6,21 @@
 //! - Noise_IK + ML-KEM-768 hybrid (`OMCP-Noise-Hybrid-v1`, PROTOCOL §21.5)
 //! - BLE loopback transport: fragment AEAD, discovery, gossip seen-cache, and
 //!   two-peer encrypted text chat over an in-memory GATT pipe (PROTOCOL §8, §10.2)
+//! - MLS small groups via OpenMLS + OMCP-MLS-PQ hybrid mix helper (PROTOCOL §6.2)
+//! - Chunked encrypted file sharing with BLAKE3 + Content Key wrap (PROTOCOL §7)
 //!
-//! Not in scope yet: real phone BLE bindings, MLS groups, gateway, production hardware.
+//! Not in scope yet: real phone BLE bindings, gateway, production hardware,
+//! full OpenMLS PQ extension registration on the wire.
 
 #![forbid(unsafe_code)]
 #![allow(missing_docs)] // field-level docs filled as API stabilizes
 
 pub mod ble;
 pub mod error;
+pub mod files;
 pub mod framing;
 pub mod handshake;
+pub mod mls;
 pub mod negotiate;
 pub mod suite;
 
@@ -164,5 +169,150 @@ mod m2_integration {
         let text_ba =
             open_text_envelope(&link_b.send_key(), &peer_b, &got_ba, &mut app_recv_a).unwrap();
         assert_eq!(text_ba, "hello from B — M2 complete");
+    }
+}
+
+#[cfg(test)]
+mod m3_integration {
+    //! M3: MLS group of 3 + text app message + file chunk round-trip (in-memory bus).
+
+    use crate::files::{
+        decrypt_and_reassemble, encrypt_file, wrapped_key_for, FileMeta, FileRecipientSecrets,
+        DEFAULT_CHUNK_PLAINTEXT_LEN,
+    };
+    use crate::mls::OmcpMlsMember;
+
+    /// In-memory fan-out bus for MLS ciphertext / file blobs (stands in for BLE/mesh).
+    struct MemBus {
+        /// Broadcast queue: each peer drains copies addressed to them by index.
+        queues: Vec<Vec<Vec<u8>>>,
+    }
+
+    impl MemBus {
+        fn new(n: usize) -> Self {
+            Self {
+                queues: (0..n).map(|_| Vec::new()).collect(),
+            }
+        }
+
+        fn broadcast(&mut self, from: usize, msg: Vec<u8>) {
+            for (i, q) in self.queues.iter_mut().enumerate() {
+                if i != from {
+                    q.push(msg.clone());
+                }
+            }
+        }
+
+        #[allow(dead_code)]
+        fn send_to(&mut self, to: usize, msg: Vec<u8>) {
+            self.queues[to].push(msg);
+        }
+
+        fn drain(&mut self, peer: usize) -> Vec<Vec<u8>> {
+            std::mem::take(&mut self.queues[peer])
+        }
+    }
+
+    #[test]
+    fn mls_group_three_peers_text_and_file_chunks() {
+        let mut alice = OmcpMlsMember::generate(b"alice").unwrap();
+        let mut bob = OmcpMlsMember::generate(b"bob").unwrap();
+        let mut charlie = OmcpMlsMember::generate(b"charlie").unwrap();
+
+        // File wrap keys (separate from MLS sig keys; M3 out-of-band)
+        let mut alice_id = [0u8; 32];
+        alice_id[0] = b'A';
+        let mut bob_id = [0u8; 32];
+        bob_id[0] = b'B';
+        let mut charlie_id = [0u8; 32];
+        charlie_id[0] = b'C';
+        let alice_file = FileRecipientSecrets::generate(alice_id).unwrap();
+        let bob_file = FileRecipientSecrets::generate(bob_id).unwrap();
+        let charlie_file = FileRecipientSecrets::generate(charlie_id).unwrap();
+
+        alice.create_group().unwrap();
+        let bob_kp = bob.take_key_package().unwrap();
+        let (_c1, welcome_bob) = alice.add_members(&[bob_kp]).unwrap();
+        bob.join_from_welcome(&welcome_bob).unwrap();
+
+        let charlie_kp = charlie.take_key_package().unwrap();
+        let (commit_charlie, welcome_charlie) = alice.add_members(&[charlie_kp]).unwrap();
+        bob.process_protocol_message(&commit_charlie).unwrap();
+        charlie.join_from_welcome(&welcome_charlie).unwrap();
+
+        assert_eq!(alice.member_count().unwrap(), 3);
+        assert_eq!(bob.member_count().unwrap(), 3);
+        assert_eq!(charlie.member_count().unwrap(), 3);
+
+        let mut bus = MemBus::new(3);
+
+        // --- A sends MLS text to group ---
+        let text_ct = alice
+            .encrypt_app_message(b"hello from Alice in MLS group")
+            .unwrap();
+        bus.broadcast(0, text_ct);
+
+        for msg in bus.drain(1) {
+            let pt = bob.decrypt_app_message(&msg).unwrap();
+            assert_eq!(pt, b"hello from Alice in MLS group");
+        }
+        for msg in bus.drain(2) {
+            let pt = charlie.decrypt_app_message(&msg).unwrap();
+            assert_eq!(pt, b"hello from Alice in MLS group");
+        }
+
+        // --- A sends a small file to B and C via chunk protocol ---
+        let file_plain = b"OMCP M3 file payload for the group";
+        let (meta, _ck, chunks) = encrypt_file(
+            file_plain,
+            "note.txt",
+            "text/plain",
+            &[bob_file.public_keys(), charlie_file.public_keys()],
+            DEFAULT_CHUNK_PLAINTEXT_LEN,
+        )
+        .unwrap();
+
+        // Deliver meta + chunks over the bus as opaque blobs (could ride MLS app
+        // messages in a follow-up; M3 proves the chunk crypto + group context).
+        let meta_bytes = meta.encode().unwrap();
+        bus.broadcast(0, meta_bytes);
+        for ch in &chunks {
+            bus.broadcast(0, ch.encode());
+        }
+
+        for peer in [1usize, 2] {
+            let msgs = bus.drain(peer);
+            assert!(msgs.len() >= 2);
+            let meta = FileMeta::decode(&msgs[0]).unwrap();
+            let file_chunks: Vec<_> = msgs[1..]
+                .iter()
+                .map(|m| crate::files::FileChunk::decode(m).unwrap())
+                .collect();
+            let secrets = if peer == 1 { &bob_file } else { &charlie_file };
+            let w = wrapped_key_for(&meta, &secrets.recipient_id).unwrap();
+            let ck = secrets.open_content_key(w).unwrap();
+            let out = decrypt_and_reassemble(&meta, &ck, &file_chunks).unwrap();
+            assert_eq!(out, file_plain);
+        }
+
+        // Alice (non-recipient) must not open Bob's wrap
+        let meta_again = {
+            let (m, _, _) =
+                encrypt_file(b"x", "x", "text/plain", &[bob_file.public_keys()], 64).unwrap();
+            m
+        };
+        let w_bob = wrapped_key_for(&meta_again, &bob_file.recipient_id).unwrap();
+        assert!(alice_file.open_content_key(w_bob).is_err());
+
+        // PQ hybrid present for current epoch
+        let others = [
+            (bob.own_leaf_index().unwrap(), *bob.pq_kem.public_bytes()),
+            (
+                charlie.own_leaf_index().unwrap(),
+                *charlie.pq_kem.public_bytes(),
+            ),
+        ];
+        let (_ext, _ss, hybrid) = alice.build_pq_epoch_secrets(&others).unwrap();
+        assert_ne!(hybrid, alice.hybrid_exporter(&[]).unwrap());
     }
 }

@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Errors returned by framing, negotiation, handshake, and BLE transport APIs.
+/// Errors returned by framing, negotiation, handshake, BLE, MLS, and file APIs.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OmcpError {
     #[error("buffer truncated: need at least {need} bytes, have {have}")]
@@ -49,6 +49,18 @@ pub enum OmcpError {
 
     #[error("application AEAD failure (tamper, wrong keys, or bad UTF-8)")]
     AppAead,
+
+    #[error("MLS operation failed: {0}")]
+    Mls(&'static str),
+
+    #[error("MLS-PQ extension malformed: {0}")]
+    MlsPqMalformed(&'static str),
+
+    #[error("file chunk protocol error: {0}")]
+    File(&'static str),
+
+    #[error("file content hash mismatch")]
+    FileHashMismatch,
 }
 
 /// Crate-wide result alias.
