@@ -348,7 +348,7 @@ Desktop clients, Tor transport, voice/video calls (non-livestream), public globa
 
 ## 12. Open product questions (max 3)
 
-See final report to Jakob/Writey — mirrored here:
+See final report to product/spec owners — mirrored here:
 
 1. **Tab visibility in MVP:** Show Communities + Live tabs with “Coming in v0.2” empty states, or hide behind feature flag until M-community?
 2. **Gateway data cap default:** 500 MB/day Wi‑Fi-only as in mockup — confirm numbers and whether metered cellular should hard-block vs warn.

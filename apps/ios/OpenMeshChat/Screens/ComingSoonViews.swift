@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Jakob: keep Communities + Live tabs visible with Coming in v0.2 empty states.
+/// Product decision: keep Communities + Live tabs visible with Coming in v0.2 empty states.
 struct CommunitiesHomeView: View {
     var body: some View {
         NavigationStack {

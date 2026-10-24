@@ -39,7 +39,7 @@ import chat.omcp.app.core.OmcpCoreStub
 import chat.omcp.app.ui.components.PathChip
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
-/** Jakob / Designy: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
+/** Product / design: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
  * Cap meter always starts at **0 of 500 MB** — never ship a fake “200 of 500” fill. */
 private const val DEFAULT_DAILY_CAP_MB = 500
 private const val USED_MB = 0 // real metering not wired yet; Designy lock-in: 0 used

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Jakob / Designy: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
+/// Product / design: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
 /// Cap meter always starts at **0 of 500 MB** — never ship a fake “200 of 500” fill.
 /// iOS BLE pause callout lives here (You → Gateway), next to the Android companion recommendation —
 /// not on the Chats/thread path banner.

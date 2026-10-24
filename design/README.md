@@ -1,7 +1,7 @@
 # OMCP App Design Pack v0.1.0
 
 **Date:** 2026-10-23 (Europe/Paris)  
-**Audience:** Proggy (Android/iOS implementers), Pipely (release), Jakob / Writey (product)  
+**Audience:** Proggy (Android/iOS implementers), Pipely (release), product / spec owners (product)  
 **Source of truth for product rules:** `../PROTOCOL.md` §13, §20 and `../apps/REQUIREMENTS.md`  
 **This pack:** visual language, IA, screen specs, and static HTML mockups — not wire protocol.
 
@@ -40,7 +40,7 @@ Mockups marked **Communities** and **Live** are forward-looking so capacity can 
 4. **Path indicator** is a first-class UI element (chat list row, thread banner, settings legend) — not a debug overlay.
 5. **Do not** treat HTML mockups as production UI; they are layout + state references. Native widgets and platform HIG win on spacing micro-adjustments.
 6. **Platform constraints** (§ Platform notes): Android persistent BLE foreground notification; iOS background BLE limits with clear user messaging.
-7. Open product questions at the end of DESIGN_SPEC — resolve with Jakob/Writey before locking v0.1 UI freeze.
+7. Open product questions at the end of DESIGN_SPEC — resolve with product/spec owners before locking v0.1 UI freeze.
 
 ## Files
 
