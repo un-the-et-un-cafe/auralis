@@ -137,18 +137,28 @@ pub struct DeviceInfo {
     pub restored_at_ms: Option<u64>,
 }
 
+/// This install's device keys. New installs get a random X25519 key; an install
+/// from before per-device keys (`legacy_install`, or a stored pre-v2 device)
+/// keeps its seed-derived X25519 key so contacts that pinned it still reach it.
 pub(crate) fn load_or_create_device(
     db: &Store,
     seed: &[u8; 32],
     peer_id: [u8; 32],
+    legacy_install: bool,
     now: u64,
 ) -> Result<OwnDevice, FfiError> {
-    if let Some(d) = db.get_meta::<OwnDevice>(META_DEVICE)? {
-        if d.cert().is_ok_and(|c| c.peer_id == peer_id) {
-            return Ok(d);
+    let stored = db.get_meta::<OwnDevice>(META_DEVICE).ok().flatten();
+    if let Some(d) = &stored {
+        if d.valid_for(&peer_id) {
+            return Ok(d.clone());
         }
     }
-    let d = OwnDevice::generate(seed, peer_id, now, None)?;
+    let restored_at = db.get_meta::<u64>(META_RESTORED_AT).ok().flatten();
+    let d = if legacy_install || stored.is_some() {
+        OwnDevice::generate_with_dh_seed(seed, seed, now, restored_at)?
+    } else {
+        OwnDevice::generate(seed, now, None)?
+    };
     db.put_meta(META_DEVICE, &d)?;
     Ok(d)
 }
@@ -189,16 +199,17 @@ impl NodeState {
     pub(crate) fn apply_peer_cert(
         &mut self,
         peer: [u8; 32],
-        payload: &[u8],
+        cert: &core_device::DeviceCert,
         now: u64,
         out: &mut LinkOutput,
     ) -> Result<(), FfiError> {
-        let cert = core_device::parse_handshake_payload(payload)?;
         let Some(c) = self.contacts.get_mut(&peer) else {
             return Ok(());
         };
-        let before = c.device.clone();
-        let ev = core_device::on_peer_cert(&mut c.device, &peer, cert.as_ref(), now)?;
+        let before = (c.device.clone(), c.dh);
+        let ev = core_device::on_peer_cert(&mut c.device, &peer, cert, now)?;
+        // Their (new) device's X25519 key, certified by their identity key.
+        c.dh = cert.dh;
         if ev.is_notice() {
             c.verified = false;
             let restored_at_ms = c.device.restored_at_ms;
@@ -222,10 +233,63 @@ impl NodeState {
                 msg_id_hex: hex::encode(id),
             });
         }
-        if self.contacts.get(&peer).map(|c| &c.device) != Some(&before) || ev.is_notice() {
+        if self.contacts.get(&peer).map(|c| (c.device.clone(), c.dh)) != Some(before)
+            || ev.is_notice()
+        {
             self.persist_contact(&peer)?;
         }
         Ok(())
+    }
+
+    /// The contact a verified certificate belongs to. `expected` is the contact
+    /// we dialled / matched; a legacy contact (id = X25519 key) is re-keyed to the
+    /// certificate's PeerID here (store + memory), v0.1.4a migration.
+    pub(crate) fn resolve_peer(
+        &mut self,
+        expected: [u8; 32],
+        cert: &core_device::DeviceCert,
+    ) -> Result<[u8; 32], FfiError> {
+        if cert.peer_id == expected {
+            return Ok(expected);
+        }
+        let legacy = self
+            .contacts
+            .get(&expected)
+            .is_some_and(|c| c.legacy(&expected) && cert.dh == expected);
+        if !legacy {
+            return Err(FfiError::Protocol {
+                msg: "device certificate for another identity".into(),
+            });
+        }
+        if self.contacts.contains_key(&cert.peer_id) {
+            // Added twice (old and new QR): keep the PeerID entry.
+            self.contacts.remove(&expected);
+            self.db.delete_contact(&expected)?;
+        }
+        self.rekey(&expected, &cert.peer_id)?;
+        Ok(cert.peer_id)
+    }
+
+    fn rekey(&mut self, old: &[u8; 32], new: &[u8; 32]) -> Result<(), FfiError> {
+        self.db.rekey_peer(old, new)?;
+        if let Some(c) = self.contacts.remove(old) {
+            self.contacts.insert(*new, c);
+        }
+        if let Some(q) = self.queues.remove(old) {
+            self.queues.entry(*new).or_default().extend(q);
+        }
+        for m in self.burn_meta.values_mut() {
+            if &m.peer == old {
+                m.peer = *new;
+            }
+        }
+        for p in self.links_up.values_mut() {
+            if p == old {
+                *p = *new;
+            }
+        }
+        self.files.rekey(old, new);
+        self.persist_contact(new)
     }
 
     /// CB3: queue `MEDIA_REQUEST` for every placeholder in the chat with `peer`.
@@ -389,7 +453,7 @@ impl OmcpNode {
     /// verifications of others are kept (O3, design §5.98 "Still verified on
     /// your side"): their keys didn't change.
     pub fn mark_restored(&self, now_ms: u64) -> Result<DeviceInfo, FfiError> {
-        let d = OwnDevice::generate(&self.inner.seed, self.inner.peer_id, now_ms, Some(now_ms))?;
+        let d = OwnDevice::generate(&self.inner.seed, now_ms, Some(now_ms))?;
         let st = self.inner.lock();
         st.db().put_meta(META_DEVICE, &d)?;
         st.db().put_meta(META_RESTORED_AT, &now_ms)?;
@@ -411,7 +475,8 @@ impl OmcpNode {
     /// Verify a contact by scanning their QR in person (RS2). Fails if the code
     /// doesn't carry their current device key (e.g. a QR from before a restore).
     pub fn verify_contact_from_qr(&self, payload: String) -> Result<crate::ContactInfo, FfiError> {
-        let (id, _name, qr_dev) = self.parse_qr(&payload)?;
+        let q = self.parse_qr(&payload)?;
+        let (id, qr_dev) = (q.id, q.device);
         let mut st = self.inner.lock();
         let c = st.contacts.get_mut(&id).ok_or(FfiError::UnknownContact)?;
         let ok = match (c.device.current_key(), qr_dev) {

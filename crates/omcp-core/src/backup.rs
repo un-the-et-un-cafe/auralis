@@ -50,6 +50,11 @@ pub struct BackupContact {
     pub peer_id: [u8; 32],
     pub name: String,
     pub verified: bool,
+    /// The contact's current X25519 Noise key (v0.1.4a). `None` in older blobs,
+    /// where `peer_id` was that X25519 key (a legacy contact id, re-keyed to the
+    /// PeerID on the first handshake).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dh: Option<Vec<u8>>,
 }
 
 /// Decrypted backup contents.
@@ -351,6 +356,7 @@ mod tests {
                 peer_id: [7u8; 32],
                 name: "Alex".into(),
                 verified: true,
+                dh: None,
             }],
             display_name: Some("Sam".into()),
             history: None,

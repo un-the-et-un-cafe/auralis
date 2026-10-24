@@ -277,3 +277,17 @@ pub(crate) fn on_chunk(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
         Err(_) => fail(out, &id, &peer, "integrity"),
     }
 }
+
+impl FileState {
+    /// v0.1.4a migration: a legacy contact id became a PeerID.
+    pub(crate) fn rekey(&mut self, old: &[u8; 32], new: &[u8; 32]) {
+        if let Some(q) = self.out.remove(old) {
+            self.out.entry(*new).or_default().extend(q);
+        }
+        for f in self.incoming.values_mut() {
+            if &f.peer == old {
+                f.peer = *new;
+            }
+        }
+    }
+}

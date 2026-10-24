@@ -45,6 +45,7 @@ fn survives_reopen_and_is_encrypted_at_rest() {
             name: "Zanzibar Quokka".into(),
             verified: true,
             device: None,
+            dh: None,
         })
         .unwrap();
         s.put_message(&msg(1, "meet at the old lighthouse", 10))
@@ -318,4 +319,36 @@ fn history_export_excludes_burn_and_imports() {
     );
     assert_eq!(t.outbox().unwrap().len(), 1);
     assert!(t.import_history(b"junk").is_err());
+}
+
+#[test]
+fn v014a_rekey_legacy_peer_and_owner() {
+    let s = Store::open_in_memory(&KEY).unwrap();
+    let legacy_owner = [1; 32];
+    let owner = [2; 32];
+    s.bind_owner(&legacy_owner).unwrap();
+    assert!(s.rebind_owner(&legacy_owner, &owner).unwrap());
+    assert!(!s.rebind_owner(&legacy_owner, &owner).unwrap());
+    assert!(s.bind_owner(&legacy_owner).is_err());
+    s.put_contact(&ContactRec {
+        peer: PEER,
+        name: "Legacy".into(),
+        verified: true,
+        device: None,
+        dh: None,
+    })
+    .unwrap();
+    s.put_message(&msg(1, "before the upgrade", 10)).unwrap();
+    let new = [0x42; 32];
+    s.rekey_peer(&PEER, &new).unwrap();
+    let cs = s.contacts().unwrap();
+    assert_eq!(cs.len(), 1);
+    assert_eq!(cs[0].peer, new);
+    assert!(cs[0].verified);
+    assert!(s.messages(&PEER).unwrap().is_empty());
+    let ms = s.messages(&new).unwrap();
+    assert_eq!(ms.len(), 1);
+    assert_eq!(ms[0].peer, new);
+    assert!(s.chat(&new).unwrap().is_some());
+    assert!(s.chat(&PEER).unwrap().is_none());
 }

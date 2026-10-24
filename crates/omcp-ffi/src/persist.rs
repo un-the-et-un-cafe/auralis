@@ -152,6 +152,7 @@ impl NodeState {
                 name: c.name.clone(),
                 verified: c.verified,
                 device: Some(c.device.clone()),
+                dh: Some(c.dh.to_vec()),
             })?;
         }
         Ok(())
@@ -374,6 +375,11 @@ impl NodeState {
                     name: c.name.clone(),
                     verified: c.verified,
                     device: c.device.clone().unwrap_or_default(),
+                    dh: c
+                        .dh
+                        .as_deref()
+                        .and_then(|d| d.try_into().ok())
+                        .unwrap_or(c.peer),
                 },
             );
         }

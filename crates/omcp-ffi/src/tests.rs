@@ -818,10 +818,18 @@ fn backup_all(n: &OmcpNode, now: u64, blobs: &mut Vec<Vec<u8>>) {
 
 /// Restore `a` onto a new device from its 24 words and the chat backup.
 fn restore_device(a: &OmcpNode, blobs: &[Vec<u8>], dir: &std::path::Path) -> Arc<OmcpNode> {
-    let phrase = a.recovery_phrase().unwrap();
-    let a2 = open_node(&phrase, "Alice", dir);
-    for c in a.contacts() {
-        a2.restore_contact(c.contact_id, c.display_name, c.verified)
+    // Identity backup (contacts with their X25519 keys) → new install.
+    let key = generate_backup_key().unwrap();
+    let r = open_backup_with_key(
+        a.create_backup_with_key(key.clone(), "t".into(), 1)
+            .unwrap(),
+        key,
+    )
+    .unwrap();
+    let a2 = open_node(&r.phrase, "Alice", dir);
+    for c in r.contacts {
+        assert!(c.dh_hex.is_some(), "v0.1.4a backups carry the X25519 key");
+        a2.restore_contact_with_key(c.contact_id, c.display_name, c.verified, c.dh_hex)
             .unwrap();
     }
     a2.mark_restored(now_ms()).unwrap();
@@ -1185,4 +1193,241 @@ fn rs2_safety_number_changes_verified_cleared_old_qr_fails() {
     ));
     let v = b.verify_contact_from_qr(a2.qr_payload()).unwrap();
     assert!(v.verified && !v.restored_unverified);
+}
+
+// ---- v0.1.4a: device binding (c) and PeerID / migration (d) ----
+
+/// Send a hand-built message 1 (initiator static `id`, payload from `payload(h)`)
+/// to a fresh responder link of `b`. Returns whether `b` refused it.
+fn raw_msg1_refused(
+    id: StaticIdentity,
+    b: &OmcpNode,
+    b_dh: [u8; 32],
+    payload: impl FnOnce(&[u8]) -> omcp_core::error::Result<Vec<u8>>,
+) -> bool {
+    let mut init = HybridInitiator::new(id, &b_dh).unwrap();
+    let m1 = init.write_message_1_with(payload).unwrap();
+    let mut pdus = Vec::new();
+    chunk_handshake(&m1, &mut pdus).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let mut refused = false;
+    for p in pdus {
+        refused |= lb.on_pdu(p).is_err();
+    }
+    refused && !lb.is_established()
+}
+
+#[test]
+fn c_missing_certificate_or_binding_fails_the_handshake() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let b_dh = b.inner.dh_public();
+    // No certificate at all (a pre-v0.1.4a or modified client).
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |_| { Ok(b"omcp-ffi-v1".to_vec()) }
+    ));
+    // Certificate without the device-key signature over the handshake hash.
+    let cert = a.inner.device().cert().unwrap().encode();
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |_| {
+            let mut p = b"omcp-ffi-v1\x01".to_vec();
+            p.extend_from_slice(&cert);
+            Ok(p)
+        }
+    ));
+    // The genuine payload still works.
+    assert!(!raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |h| { a.inner.handshake_payload(h) }
+    ));
+}
+
+#[test]
+fn c_replayed_old_certificate_is_rejected_and_notice_still_shows() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    // An attacker captured a payload of the old device from an earlier session.
+    let old_payload = a
+        .inner
+        .handshake_payload(b"an earlier session hash")
+        .unwrap();
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    let b_dh = b.inner.dh_public();
+    // A modified restored client replays it (with its own Noise key): rejected,
+    // the binding signature is over another handshake hash and the cert's
+    // X25519 key isn't this session's.
+    let replay = old_payload.clone();
+    assert!(raw_msg1_refused(
+        a2.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        move |_| Ok(replay)
+    ));
+    // Even with the old Noise key it can't sign the fresh hash with the old device key.
+    let replay = old_payload;
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        move |_| Ok(replay)
+    ));
+    // Nothing was applied: the genuine restored device still raises the notice.
+    let (_l, _lb, outs) = link(&a2, &b);
+    assert_eq!(
+        outs.iter().map(|o| o.restore_notices.len()).sum::<usize>(),
+        1
+    );
+    // And the old device key, now superseded, can't connect even signing a fresh hash.
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b.inner.dh_public(),
+        |h| { a.inner.handshake_payload(h) }
+    ));
+}
+
+#[test]
+fn d_peer_id_is_blake2b_of_identity_key_and_contacts_key_by_it() {
+    use blake2::digest::consts::U32;
+    use blake2::{Blake2b, Digest};
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let ik = omcp_core::device::identity_signing_key(&a.inner.seed)
+        .unwrap()
+        .verifying_key()
+        .to_bytes();
+    let mut h = Blake2b::<U32>::new();
+    h.update(ik);
+    let want = hex::encode::<[u8; 32]>(h.finalize().into());
+    assert_eq!(a.identity().peer_id_hex, want);
+    assert_eq!(b.contacts()[0].contact_id, want);
+    // X25519 is per device and not the id.
+    assert_ne!(hex::encode(a.inner.dh_public()), want);
+    let qr = a.qr_payload();
+    assert!(qr.starts_with(&format!("omcp:3:{want}:{}:", hex::encode(ik))));
+    // A QR whose identity key doesn't hash to the PeerID is refused.
+    let bad = qr.replacen(&want, &"00".repeat(32), 1);
+    assert!(b.preview_contact_from_qr(bad).is_err());
+    // The advertisement carries the PeerID prefix and maps back to the contact.
+    let adv = a.advertisement();
+    let prefix = parse_advertisement(adv).unwrap();
+    assert_eq!(b.contact_for_prefix(prefix), Some(want));
+}
+
+/// A store as written before v0.1.4a: owner and contact ids are X25519 keys.
+fn legacy_store(dir: &std::path::Path, own_phrase: &str, peer_phrase: &str, peer_name: &str) {
+    let own = recovery::phrase_to_seed(own_phrase).unwrap();
+    let peer = recovery::phrase_to_seed(peer_phrase).unwrap();
+    let db = Store::open(&dir.join("omcp.db"), &SKEY).unwrap();
+    db.bind_owner(&omcp_core::device::legacy_dh_public(&own).unwrap())
+        .unwrap();
+    let pid = omcp_core::device::legacy_dh_public(&peer).unwrap();
+    db.put_contact(&st::ContactRec {
+        peer: pid,
+        name: peer_name.into(),
+        verified: true,
+        device: None,
+        dh: None,
+    })
+    .unwrap();
+    db.put_message(&st::MessageRec {
+        id: [7; 16],
+        peer: pid,
+        mine: true,
+        time_ms: 10,
+        status: st::STATUS_SENT,
+        text: format!("hi {peer_name}, from before the upgrade"),
+        mime: None,
+        burn: None,
+        burn_state: st::BURN_NONE,
+        burn_at_ms: None,
+        file: None,
+    })
+    .unwrap();
+}
+
+#[test]
+fn d_legacy_store_migrates_to_peer_ids_on_first_handshake() {
+    let pa = generate_recovery_phrase().unwrap();
+    let pb = generate_recovery_phrase().unwrap();
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    legacy_store(da.path(), &pa, &pb, "Bob");
+    legacy_store(db.path(), &pb, &pa, "Alice");
+    let a = open_node(&pa, "Alice", da.path());
+    let b = open_node(&pb, "Bob", db.path());
+    // Migrated installs keep their X25519 key, so legacy contacts can still dial.
+    let legacy_b = hex::encode(
+        omcp_core::device::legacy_dh_public(&recovery::phrase_to_seed(&pb).unwrap()).unwrap(),
+    );
+    assert_eq!(hex::encode(b.inner.dh_public()), legacy_b);
+    assert_eq!(a.contacts()[0].contact_id, legacy_b);
+    let sn_before = a.contacts()[0].safety_number.clone();
+    assert_eq!(sn_before, b.contacts()[0].safety_number);
+    // Legacy contacts still find a migrated install by its advertisement.
+    assert_eq!(
+        a.contact_for_prefix(parse_advertisement(b.advertisement()).unwrap()),
+        Some(legacy_b.clone())
+    );
+    let la = a.open_initiator_link(legacy_b).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    pump_out(&la, &lb, la.start().unwrap());
+    assert!(la.is_established() && lb.is_established());
+    let (pid_a, pid_b) = (a.identity().peer_id_hex, b.identity().peer_id_hex);
+    assert_eq!(a.contacts()[0].contact_id, pid_b);
+    assert_eq!(b.contacts()[0].contact_id, pid_a);
+    assert!(
+        a.contacts()[0].verified && b.contacts()[0].verified,
+        "verification kept"
+    );
+    assert!(
+        b.contacts()[0].restored_at_ms.is_none(),
+        "an upgrade is not a restore"
+    );
+    assert_eq!(a.contacts()[0].safety_number, b.contacts()[0].safety_number);
+    let ms = a.stored_messages(pid_b.clone()).unwrap();
+    assert!(ms[0].text.contains("before the upgrade"));
+    // Persisted: survives a restart under the new ids.
+    drop((la, lb, a));
+    let a = open_node(&pa, "Alice", da.path());
+    assert_eq!(a.contacts()[0].contact_id, pid_b);
+    assert_eq!(a.stored_messages(pid_b).unwrap().len(), 1);
+}
+
+#[test]
+fn d_old_identity_backup_restores_legacy_contacts() {
+    let r = restored(backup::BackupContents {
+        entropy: Zeroizing::new([5; 32]),
+        contacts: vec![backup::BackupContact {
+            peer_id: [9; 32],
+            name: "Old".into(),
+            verified: true,
+            dh: None,
+        }],
+        display_name: None,
+        history: None,
+    })
+    .unwrap();
+    assert_eq!(r.contacts[0].dh_hex, None);
+    let n = node("Me");
+    let c = &r.contacts[0];
+    n.restore_contact_with_key(
+        c.contact_id.clone(),
+        c.display_name.clone(),
+        c.verified,
+        None,
+    )
+    .unwrap();
+    // A legacy contact: dialled by its id (the X25519 key) until re-keyed.
+    assert_eq!(n.inner.lock().contacts[&[9; 32]].dh, [9; 32]);
 }

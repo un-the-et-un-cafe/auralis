@@ -46,6 +46,10 @@ pub struct ContactRec {
     /// Device-key state learned from this contact's device certificates (RS1).
     #[serde(default)]
     pub device: Option<crate::device::ContactDevice>,
+    /// Current X25519 Noise key (v0.1.4a). `None` = legacy record whose `peer`
+    /// is that X25519 key; re-keyed to the PeerID on the first handshake.
+    #[serde(default, with = "opt_bytes")]
+    pub dh: Option<Vec<u8>>,
 }
 
 /// One 1:1 conversation.

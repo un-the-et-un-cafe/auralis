@@ -259,6 +259,56 @@ impl Store {
         }
     }
 
+    /// v0.1.4a migration: move the owner binding from the legacy X25519 id to the PeerID.
+    /// Returns true when the store was bound to the legacy id (an install from
+    /// before per-device keys).
+    pub fn rebind_owner(&self, legacy: &[u8; 32], peer_id: &[u8; 32]) -> Result<bool> {
+        match self.get_raw(Table::Meta, b"owner")? {
+            Some(p) if p.as_slice() == legacy => {
+                self.put_raw(Table::Meta, b"owner", None, peer_id)?;
+                Ok(true)
+            }
+            _ => self.bind_owner(peer_id).map(|_| false),
+        }
+    }
+
+    /// v0.1.4a migration: re-key everything stored under a legacy contact id
+    /// (their X25519 key) to their PeerID: contact, chat, messages, queue,
+    /// outgoing files and burn entries. All-or-nothing.
+    pub fn rekey_peer(&self, old: &[u8; 32], new: &[u8; 32]) -> Result<()> {
+        self.transaction(|s| {
+            if let Some(mut c) = s.get::<ContactRec>(Table::Contacts, old)? {
+                c.peer = *new;
+                s.put(Table::Contacts, new, None, &c)?;
+                s.del_raw(Table::Contacts, old)?;
+            }
+            if let Some(mut c) = s.get::<ChatRec>(Table::Chats, old)? {
+                c.peer = *new;
+                s.put(Table::Chats, new, None, &c)?;
+                s.del_raw(Table::Chats, old)?;
+            }
+            for mut m in s.list::<MessageRec>(Table::Messages, Some(old))? {
+                m.peer = *new;
+                s.put(Table::Messages, &m.id, Some(new), &m)?;
+            }
+            for mut q in s.list::<OutboxRec>(Table::Outbox, Some(old))? {
+                q.peer = *new;
+                s.put(Table::Outbox, &q.id, Some(new), &q)?;
+            }
+            for mut f in s.list::<OutFileRec>(Table::OutFiles, Some(old))? {
+                f.peer = *new;
+                s.put(Table::OutFiles, &f.id, Some(new), &f)?;
+            }
+            for mut b in s.list::<BurnRec>(Table::Burn, None)? {
+                if &b.peer == old {
+                    b.peer = *new;
+                    s.put(Table::Burn, &b.id, None, &b)?;
+                }
+            }
+            Ok(())
+        })
+    }
+
     /// Sealed app/core settings in the `meta` table (chat-backup state, device key).
     pub fn put_meta<T: Serialize>(&self, key: &[u8], v: &T) -> Result<()> {
         let mut k = b"app:".to_vec();

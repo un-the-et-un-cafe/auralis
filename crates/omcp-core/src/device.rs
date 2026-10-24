@@ -1,21 +1,25 @@
-//! Device keys and the restore indicator (REQUIREMENTS "Restore indicator
-//! (security)" RS1, "Re-verification after restore" RS2; PROTOCOL §3.2, §3.4).
+//! Device keys, PeerID and the restore indicator (REQUIREMENTS "Restore indicator
+//! (security)" RS1, "Re-verification after restore" RS2, "Implementation
+//! clarifications (v0.1.4a)"; PROTOCOL §3.1, §3.4).
 //!
-//! Every installation holds a random Ed25519 **device key**. Its public half is
-//! published in a [`DeviceCert`] signed by the **identity signing key**, which is
-//! derived from the 24-word master seed (so it survives a restore):
-//! `HKDF-SHA-384(salt = "OMCP-Identity-Seed-v1", ikm = seed, info = "ed25519")`.
-//! A restore from the 24 words always mints a *new* device key whose certificate
-//! carries `restored_at`.
-//!
-//! The certificate travels in the Noise handshake payload of every link
-//! ([`handshake_payload`]), so a contact learns about the new device on the very
-//! first connection after the restore. The contact's own device decides whether
-//! to show the notice ([`on_peer_cert`]); nothing the restored device sends (or
-//! omits) can suppress it: a different device key, a `restored_at`, or a missing
-//! certificate after one was pinned all raise it, clear "Verified" and mark the
-//! old device key superseded.
+//! * **Identity signing key** (Ed25519) is derived from the 24-word master seed:
+//!   `HKDF-SHA-384(salt = "OMCP-Identity-Seed-v1", ikm = seed, info = "ed25519")`.
+//!   It survives a restore.
+//! * **PeerID** = BLAKE2b-256(identity signing public key) ([`peer_id_from_identity`]).
+//!   Contacts are keyed by PeerID.
+//! * Every installation holds a random Ed25519 **device key** and its own
+//!   **X25519 Noise static key** (per device). Both are published in a
+//!   [`DeviceCert`] signed by the identity key. A restore always mints new ones
+//!   with `restored_at`.
+//! * **Device binding (c):** in every handshake the device key signs the Noise
+//!   handshake hash ([`OwnDevice::handshake_payload`]). The peer checks the
+//!   certificate, that its X25519 key is the Noise remote static, and the
+//!   signature ([`verify_handshake_payload`]). A missing certificate or a
+//!   superseded device key fails the handshake, so an old certificate can't be
+//!   replayed to suppress the restore notice.
 
+use blake2::digest::consts::U32;
+use blake2::{Blake2b, Digest};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
@@ -23,19 +27,23 @@ use sha2::Sha384;
 use zeroize::Zeroizing;
 
 use crate::error::{OmcpError, Result};
+use crate::handshake::StaticIdentity;
 
-/// Wire version of [`DeviceCert`].
-pub const DEVICE_CERT_VERSION: u8 = 1;
-/// `ver | peer_id 32 | identity_sign 32 | device 32 | created_ms u64 BE | restored_at_ms u64 BE (0 = none) | sig 64`.
-pub const DEVICE_CERT_LEN: usize = 1 + 32 + 32 + 32 + 8 + 8 + 64;
+/// Wire version of [`DeviceCert`] (v2 adds the X25519 key and PeerID = BLAKE2b).
+pub const DEVICE_CERT_VERSION: u8 = 2;
+/// `ver | peer_id 32 | identity_sign 32 | device 32 | dh 32 | created_ms u64 BE | restored_at_ms u64 BE (0 = none) | sig 64`.
+pub const DEVICE_CERT_LEN: usize = 1 + 32 + 32 + 32 + 32 + 8 + 8 + 64;
 /// The "Restored" badge stays on the contact for 7 days.
 pub const RESTORED_BADGE_MS: u64 = 7 * 24 * 3600 * 1000;
 /// Prefix of the Noise handshake payload (unchanged from v0.1).
 pub const HANDSHAKE_PAYLOAD_PREFIX: &[u8] = b"omcp-ffi-v1";
 /// Handshake payload extension tag: a [`DeviceCert`] follows.
 pub const HANDSHAKE_EXT_DEVICE_CERT: u8 = 0x01;
+/// Handshake payload extension tag: device-key signature over the handshake hash.
+pub const HANDSHAKE_EXT_DEVICE_BIND: u8 = 0x02;
 
-const SIG_CONTEXT: &[u8] = b"OMCP-DeviceCert-v1";
+const SIG_CONTEXT: &[u8] = b"OMCP-DeviceCert-v2";
+const BIND_CONTEXT: &[u8] = b"OMCP-DeviceBind-v1";
 
 /// The identity signing key (Ed25519), deterministic from the master seed.
 pub fn identity_signing_key(seed: &[u8; 32]) -> Result<SigningKey> {
@@ -46,13 +54,37 @@ pub fn identity_signing_key(seed: &[u8; 32]) -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&sk))
 }
 
-/// A device certificate: "this device key belongs to this identity".
+/// PeerID = BLAKE2b-256 of the Ed25519 identity public key (PROTOCOL §3.1).
+pub fn peer_id_from_identity(identity_sign: &[u8; 32]) -> [u8; 32] {
+    let mut h = Blake2b::<U32>::new();
+    h.update(identity_sign);
+    h.finalize().into()
+}
+
+/// PeerID of the identity behind a master seed.
+pub fn peer_id_from_seed(seed: &[u8; 32]) -> Result<[u8; 32]> {
+    Ok(peer_id_from_identity(
+        &identity_signing_key(seed)?.verifying_key().to_bytes(),
+    ))
+}
+
+/// The pre-v0.1.4a X25519 static key, derived from the master seed. Installs that
+/// existed before per-device keys keep it as their device X25519 key so contacts
+/// that pinned it can still reach them (legacy contact ids were this key).
+pub fn legacy_dh_public(seed: &[u8; 32]) -> Result<[u8; 32]> {
+    Ok(StaticIdentity::from_seed(seed)?.dh_public())
+}
+
+/// A device certificate: "this device key and X25519 key belong to this identity".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCert {
-    /// The X25519 static key the contact knows us by (PeerID in the reference).
+    /// BLAKE2b-256(identity_sign); checked on decode.
     pub peer_id: [u8; 32],
     pub identity_sign: [u8; 32],
+    /// Ed25519 device key (signs the handshake hash).
     pub device: [u8; 32],
+    /// X25519 Noise static key of this device.
+    pub dh: [u8; 32],
     pub created_ms: u64,
     /// Set when the device was created by a restore from the 24 words.
     pub restored_at_ms: Option<u64>,
@@ -67,24 +99,27 @@ impl DeviceCert {
         v.extend_from_slice(&self.peer_id);
         v.extend_from_slice(&self.identity_sign);
         v.extend_from_slice(&self.device);
+        v.extend_from_slice(&self.dh);
         v.extend_from_slice(&self.created_ms.to_be_bytes());
         v.extend_from_slice(&self.restored_at_ms.unwrap_or(0).to_be_bytes());
         v
     }
 
-    /// Issue a certificate for `device` signed by the identity key from `seed`.
+    /// Issue a certificate for `device` + `dh` signed by the identity key from `seed`.
     pub fn issue(
         seed: &[u8; 32],
-        peer_id: [u8; 32],
         device: [u8; 32],
+        dh: [u8; 32],
         created_ms: u64,
         restored_at_ms: Option<u64>,
     ) -> Result<Self> {
         let id = identity_signing_key(seed)?;
+        let identity_sign = id.verifying_key().to_bytes();
         let mut c = Self {
-            peer_id,
-            identity_sign: id.verifying_key().to_bytes(),
+            peer_id: peer_id_from_identity(&identity_sign),
+            identity_sign,
             device,
+            dh,
             created_ms,
             restored_at_ms: restored_at_ms.filter(|t| *t != 0),
             sig: [0; 64],
@@ -99,7 +134,7 @@ impl DeviceCert {
         v
     }
 
-    /// Decode and verify the identity signature.
+    /// Decode and verify the PeerID and the identity signature.
     pub fn decode(b: &[u8]) -> Result<Self> {
         if b.len() != DEVICE_CERT_LEN || b[0] != DEVICE_CERT_VERSION {
             return Err(OmcpError::Crypto("device cert format"));
@@ -110,10 +145,14 @@ impl DeviceCert {
             peer_id: a32(1),
             identity_sign: a32(33),
             device: a32(65),
-            created_ms: u64at(97),
-            restored_at_ms: Some(u64at(105)).filter(|t| *t != 0),
-            sig: b[113..177].try_into().expect("len"),
+            dh: a32(97),
+            created_ms: u64at(129),
+            restored_at_ms: Some(u64at(137)).filter(|t| *t != 0),
+            sig: b[145..209].try_into().expect("len"),
         };
+        if peer_id_from_identity(&c.identity_sign) != c.peer_id {
+            return Err(OmcpError::Crypto("device cert peer id"));
+        }
         let vk = VerifyingKey::from_bytes(&c.identity_sign)
             .map_err(|_| OmcpError::Crypto("device cert identity key"))?;
         vk.verify(&c.tbs(), &Signature::from_bytes(&c.sig))
@@ -122,41 +161,55 @@ impl DeviceCert {
     }
 }
 
-/// This installation's device key (kept sealed in the local store).
+/// This installation's device keys (kept sealed in the local store).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OwnDevice {
     secret: Vec<u8>,
     cert: Vec<u8>,
+    /// Seed of this device's Noise static identity (X25519 + ML-KEM).
+    #[serde(default)]
+    dh_seed: Vec<u8>,
 }
 
 impl Drop for OwnDevice {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.secret.zeroize();
+        self.dh_seed.zeroize();
     }
 }
 
 impl OwnDevice {
-    /// Mint a fresh device key (and certificate). `restored_at_ms` marks a restore.
-    pub fn generate(
+    /// Mint fresh device keys (random device key and X25519). `restored_at_ms` marks a restore.
+    pub fn generate(seed: &[u8; 32], now_ms: u64, restored_at_ms: Option<u64>) -> Result<Self> {
+        let mut dh_seed = Zeroizing::new([0u8; 32]);
+        getrandom::getrandom(dh_seed.as_mut()).map_err(|_| OmcpError::Crypto("getrandom"))?;
+        Self::generate_with_dh_seed(seed, &dh_seed, now_ms, restored_at_ms)
+    }
+
+    /// Like [`Self::generate`] with a given X25519 seed. Migrated pre-v0.1.4a
+    /// installs pass the master seed so their X25519 key stays the same.
+    pub fn generate_with_dh_seed(
         seed: &[u8; 32],
-        peer_id: [u8; 32],
+        dh_seed: &[u8; 32],
         now_ms: u64,
         restored_at_ms: Option<u64>,
     ) -> Result<Self> {
         let mut sk = Zeroizing::new([0u8; 32]);
         getrandom::getrandom(sk.as_mut()).map_err(|_| OmcpError::Crypto("getrandom"))?;
         let dev = SigningKey::from_bytes(&sk);
+        let dh = StaticIdentity::from_seed(dh_seed)?.dh_public();
         let cert = DeviceCert::issue(
             seed,
-            peer_id,
             dev.verifying_key().to_bytes(),
+            dh,
             now_ms,
             restored_at_ms,
         )?;
         Ok(Self {
             secret: sk.to_vec(),
             cert: cert.encode(),
+            dh_seed: dh_seed.to_vec(),
         })
     }
 
@@ -164,29 +217,83 @@ impl OwnDevice {
         DeviceCert::decode(&self.cert)
     }
 
+    /// Ed25519 device public key.
     pub fn public(&self) -> Result<[u8; 32]> {
         Ok(self.cert()?.device)
     }
-}
 
-/// Noise handshake payload carrying our device certificate.
-pub fn handshake_payload(cert: &DeviceCert) -> Vec<u8> {
-    let mut v = HANDSHAKE_PAYLOAD_PREFIX.to_vec();
-    v.push(HANDSHAKE_EXT_DEVICE_CERT);
-    v.extend_from_slice(&cert.encode());
-    v
-}
-
-/// Parse a peer's handshake payload. `Ok(None)` = an older peer without a cert.
-pub fn parse_handshake_payload(p: &[u8]) -> Result<Option<DeviceCert>> {
-    let Some(rest) = p.strip_prefix(HANDSHAKE_PAYLOAD_PREFIX) else {
-        return Ok(None);
-    };
-    match rest.split_first() {
-        None => Ok(None),
-        Some((&HANDSHAKE_EXT_DEVICE_CERT, c)) => Ok(Some(DeviceCert::decode(c)?)),
-        Some(_) => Ok(None), // unknown extension: ignore (forward compatible)
+    /// This device's Noise static identity (X25519 + ML-KEM).
+    pub fn static_identity(&self) -> Result<StaticIdentity> {
+        let s: [u8; 32] = self
+            .dh_seed
+            .as_slice()
+            .try_into()
+            .map_err(|_| OmcpError::Crypto("device dh seed"))?;
+        let s = Zeroizing::new(s);
+        StaticIdentity::from_seed(&s)
     }
+
+    /// True when the stored keys are complete and belong to `seed`'s identity.
+    pub fn valid_for(&self, peer_id: &[u8; 32]) -> bool {
+        self.cert().is_ok_and(|c| &c.peer_id == peer_id)
+            && self
+                .static_identity()
+                .is_ok_and(|s| self.cert().is_ok_and(|c| c.dh == s.dh_public()))
+    }
+
+    /// Noise handshake payload: certificate + device-key signature over `h`,
+    /// the handshake hash at the point the payload is encrypted.
+    pub fn handshake_payload(&self, h: &[u8]) -> Result<Vec<u8>> {
+        let sk: [u8; 32] = self
+            .secret
+            .as_slice()
+            .try_into()
+            .map_err(|_| OmcpError::Crypto("device key"))?;
+        let sk = SigningKey::from_bytes(&Zeroizing::new(sk));
+        let mut v = HANDSHAKE_PAYLOAD_PREFIX.to_vec();
+        v.push(HANDSHAKE_EXT_DEVICE_CERT);
+        v.extend_from_slice(&self.cert);
+        v.push(HANDSHAKE_EXT_DEVICE_BIND);
+        v.extend_from_slice(&sk.sign(&bind_tbs(h)).to_bytes());
+        Ok(v)
+    }
+}
+
+fn bind_tbs(h: &[u8]) -> Vec<u8> {
+    let mut m = BIND_CONTEXT.to_vec();
+    m.extend_from_slice(h);
+    m
+}
+
+/// Verify a peer's handshake payload against the handshake hash `h` and the
+/// Noise remote static key. A missing certificate or signature, a certificate
+/// for another X25519 key, or a bad signature fails.
+pub fn verify_handshake_payload(
+    p: &[u8],
+    h: &[u8],
+    remote_static: &[u8; 32],
+) -> Result<DeviceCert> {
+    let rest = p
+        .strip_prefix(HANDSHAKE_PAYLOAD_PREFIX)
+        .ok_or(OmcpError::Crypto("handshake payload"))?;
+    let rest = match rest.split_first() {
+        Some((&HANDSHAKE_EXT_DEVICE_CERT, r)) if r.len() >= DEVICE_CERT_LEN => r,
+        _ => return Err(OmcpError::Crypto("missing device certificate")),
+    };
+    let (cert_b, rest) = rest.split_at(DEVICE_CERT_LEN);
+    let cert = DeviceCert::decode(cert_b)?;
+    if &cert.dh != remote_static {
+        return Err(OmcpError::Crypto("device cert not for this session key"));
+    }
+    let sig = match rest.split_first() {
+        Some((&HANDSHAKE_EXT_DEVICE_BIND, s)) if s.len() >= 64 => &s[..64],
+        _ => return Err(OmcpError::Crypto("missing device binding")),
+    };
+    let vk = VerifyingKey::from_bytes(&cert.device).map_err(|_| OmcpError::Crypto("device key"))?;
+    let sig: [u8; 64] = sig.try_into().expect("len");
+    vk.verify(&bind_tbs(h), &Signature::from_bytes(&sig))
+        .map_err(|_| OmcpError::Crypto("device binding signature"))?;
+    Ok(cert)
 }
 
 /// What we know about a contact's devices (stored with the contact).
@@ -227,27 +334,14 @@ impl DeviceEvent {
     }
 }
 
-/// Apply a peer's handshake certificate (or its absence) to their state.
+/// Apply a peer's verified handshake certificate to their state. A superseded
+/// device key or a different identity is an error (the handshake fails).
 pub fn on_peer_cert(
     st: &mut ContactDevice,
     peer_id: &[u8; 32],
-    cert: Option<&DeviceCert>,
+    c: &DeviceCert,
     now_ms: u64,
 ) -> Result<DeviceEvent> {
-    let Some(c) = cert else {
-        // A contact that used to send a certificate stopped: treat as a device change.
-        if let Some(old) = st.current.take() {
-            st.superseded.push(old.clone());
-            st.restored_at_ms = None;
-            st.badge_until_ms = Some(now_ms + RESTORED_BADGE_MS);
-            st.restored_unverified = true;
-            return Ok(DeviceEvent::Changed {
-                restored_at_ms: None,
-                old_device: old.try_into().ok(),
-            });
-        }
-        return Ok(DeviceEvent::Unchanged);
-    };
     if &c.peer_id != peer_id {
         return Err(OmcpError::Crypto("device cert for another peer"));
     }
@@ -298,7 +392,7 @@ impl ContactDevice {
     }
 }
 
-/// Short display fingerprint of a device key (QR `omcp:2` field).
+/// Short display fingerprint of a device key.
 pub fn device_fingerprint(device: &[u8; 32]) -> String {
     blake3::hash(device).as_bytes()[..8]
         .iter()
@@ -311,95 +405,123 @@ mod tests {
     use super::*;
 
     const SEED: [u8; 32] = [3; 32];
-    const PEER: [u8; 32] = [9; 32];
+
+    fn peer() -> [u8; 32] {
+        peer_id_from_seed(&SEED).unwrap()
+    }
+
+    #[test]
+    fn peer_id_is_blake2b_of_identity_key() {
+        let vk = identity_signing_key(&SEED)
+            .unwrap()
+            .verifying_key()
+            .to_bytes();
+        let mut h = Blake2b::<U32>::new();
+        h.update(vk);
+        let want: [u8; 32] = h.finalize().into();
+        assert_eq!(peer(), want);
+        assert_ne!(peer(), legacy_dh_public(&SEED).unwrap());
+    }
 
     #[test]
     fn cert_roundtrip_and_tamper() {
-        let d = OwnDevice::generate(&SEED, PEER, 10, Some(10)).unwrap();
+        let d = OwnDevice::generate(&SEED, 10, Some(10)).unwrap();
         let c = d.cert().unwrap();
         assert_eq!(c.restored_at_ms, Some(10));
+        assert_eq!(c.peer_id, peer());
+        assert_eq!(c.dh, d.static_identity().unwrap().dh_public());
         let mut b = c.encode();
         assert_eq!(b.len(), DEVICE_CERT_LEN);
         assert_eq!(DeviceCert::decode(&b).unwrap(), c);
         b[70] ^= 1;
         assert!(DeviceCert::decode(&b).is_err());
-        let p = handshake_payload(&c);
-        assert_eq!(parse_handshake_payload(&p).unwrap(), Some(c));
-        assert_eq!(parse_handshake_payload(b"omcp-ffi-v1").unwrap(), None);
+        assert!(d.valid_for(&peer()));
     }
 
     #[test]
-    fn identity_key_survives_restore_device_key_does_not() {
-        let a = OwnDevice::generate(&SEED, PEER, 1, None).unwrap();
-        let b = OwnDevice::generate(&SEED, PEER, 2, Some(2)).unwrap();
+    fn binding_signature_over_handshake_hash() {
+        let d = OwnDevice::generate(&SEED, 1, None).unwrap();
+        let dh = d.cert().unwrap().dh;
+        let p = d.handshake_payload(b"hash-1").unwrap();
         assert_eq!(
-            a.cert().unwrap().identity_sign,
-            b.cert().unwrap().identity_sign
+            verify_handshake_payload(&p, b"hash-1", &dh).unwrap(),
+            d.cert().unwrap()
         );
-        assert_ne!(a.public().unwrap(), b.public().unwrap());
+        // Replayed into another session (other hash): rejected.
+        assert!(verify_handshake_payload(&p, b"hash-2", &dh).is_err());
+        // Wrong Noise static: rejected.
+        assert!(verify_handshake_payload(&p, b"hash-1", &[7; 32]).is_err());
+        // Missing certificate / binding: rejected.
+        assert!(verify_handshake_payload(b"omcp-ffi-v1", b"hash-1", &dh).is_err());
+        let cut = &p[..p.len() - 65];
+        assert!(verify_handshake_payload(cut, b"hash-1", &dh).is_err());
+    }
+
+    #[test]
+    fn legacy_install_keeps_its_x25519_key() {
+        let d = OwnDevice::generate_with_dh_seed(&SEED, &SEED, 1, None).unwrap();
+        assert_eq!(d.cert().unwrap().dh, legacy_dh_public(&SEED).unwrap());
+    }
+
+    #[test]
+    fn identity_key_survives_restore_device_keys_do_not() {
+        let a = OwnDevice::generate(&SEED, 1, None).unwrap().cert().unwrap();
+        let b = OwnDevice::generate(&SEED, 2, Some(2))
+            .unwrap()
+            .cert()
+            .unwrap();
+        assert_eq!(a.identity_sign, b.identity_sign);
+        assert_eq!(a.peer_id, b.peer_id);
+        assert_ne!(a.device, b.device);
+        assert_ne!(a.dh, b.dh);
     }
 
     #[test]
     fn rs1_restore_raises_notice_and_supersedes_old_key() {
+        let p = peer();
         let mut st = ContactDevice::default();
-        let a = OwnDevice::generate(&SEED, PEER, 1, None)
-            .unwrap()
-            .cert()
-            .unwrap();
+        let a = OwnDevice::generate(&SEED, 1, None).unwrap().cert().unwrap();
         assert_eq!(
-            on_peer_cert(&mut st, &PEER, Some(&a), 5).unwrap(),
+            on_peer_cert(&mut st, &p, &a, 5).unwrap(),
             DeviceEvent::Pinned
         );
         assert_eq!(
-            on_peer_cert(&mut st, &PEER, Some(&a), 6).unwrap(),
+            on_peer_cert(&mut st, &p, &a, 6).unwrap(),
             DeviceEvent::Unchanged
         );
-        let b = OwnDevice::generate(&SEED, PEER, 100, Some(100))
+        let b = OwnDevice::generate(&SEED, 100, Some(100))
             .unwrap()
             .cert()
             .unwrap();
-        let ev = on_peer_cert(&mut st, &PEER, Some(&b), 200).unwrap();
+        let ev = on_peer_cert(&mut st, &p, &b, 200).unwrap();
         assert!(ev.is_notice());
         assert!(st.is_superseded(&a.device));
         assert!(st.badge_active(200) && !st.badge_active(200 + RESTORED_BADGE_MS));
         // The old device key is never accepted again.
-        assert!(on_peer_cert(&mut st, &PEER, Some(&a), 300).is_err());
+        assert!(on_peer_cert(&mut st, &p, &a, 300).is_err());
         // Another identity can't impersonate.
-        let evil = OwnDevice::generate(&[4; 32], PEER, 1, None)
+        let evil = OwnDevice::generate(&[4; 32], 1, None)
             .unwrap()
             .cert()
             .unwrap();
-        assert!(on_peer_cert(&mut st, &PEER, Some(&evil), 300).is_err());
+        assert!(on_peer_cert(&mut st, &p, &evil, 300).is_err());
     }
 
     #[test]
     fn rs1_notice_cannot_be_suppressed() {
-        // Omitting the certificate after one was pinned still raises the notice.
-        let mut st = ContactDevice::default();
-        let a = OwnDevice::generate(&SEED, PEER, 1, None)
-            .unwrap()
-            .cert()
-            .unwrap();
-        on_peer_cert(&mut st, &PEER, Some(&a), 1).unwrap();
-        assert!(on_peer_cert(&mut st, &PEER, None, 2).unwrap().is_notice());
+        let p = peer();
+        let a = OwnDevice::generate(&SEED, 1, None).unwrap().cert().unwrap();
         // A new device without `restored_at` still counts as a change.
         let mut st = ContactDevice::default();
-        on_peer_cert(&mut st, &PEER, Some(&a), 1).unwrap();
-        let b = OwnDevice::generate(&SEED, PEER, 3, None)
-            .unwrap()
-            .cert()
-            .unwrap();
-        assert!(on_peer_cert(&mut st, &PEER, Some(&b), 3)
-            .unwrap()
-            .is_notice());
+        on_peer_cert(&mut st, &p, &a, 1).unwrap();
+        let b = OwnDevice::generate(&SEED, 3, None).unwrap().cert().unwrap();
+        assert!(on_peer_cert(&mut st, &p, &b, 3).unwrap().is_notice());
         // A restored device seen for the first time also shows it.
         let mut st = ContactDevice::default();
-        let r = OwnDevice::generate(&SEED, PEER, 3, Some(3))
+        let r = OwnDevice::generate(&SEED, 3, Some(3))
             .unwrap()
             .cert()
             .unwrap();
-        assert!(on_peer_cert(&mut st, &PEER, Some(&r), 3)
-            .unwrap()
-            .is_notice());
+        assert!(on_peer_cert(&mut st, &p, &r, 3).unwrap().is_notice());
     }
 }

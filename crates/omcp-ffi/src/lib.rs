@@ -76,6 +76,8 @@ const PDU_LINK: u8 = 0x02;
 const QR_PREFIX: &str = "omcp:1:";
 /// v0.1.4 QR: `omcp:2:<peer id hex>:<device key hex>:<name>` (RS2).
 const QR_PREFIX_V2: &str = "omcp:2:";
+/// v0.1.4a: `omcp:3:<PeerID>:<identity key>:<device key>:<X25519 key>:<name>`.
+const QR_PREFIX_V3: &str = "omcp:3:";
 const TTL_HOPS: u8 = 8;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 
@@ -359,6 +361,8 @@ pub struct BackupContact {
     pub contact_id: String,
     pub display_name: String,
     pub verified: bool,
+    /// The contact's X25519 Noise key (v0.1.4a); pass it to `restore_contact_with_key`.
+    pub dh_hex: Option<String>,
 }
 
 /// Decrypted backup: the phrase (to load an [`OmcpNode`]) + contacts to restore.
@@ -444,6 +448,7 @@ fn restored(c: backup::BackupContents) -> Result<RestoredBackup, FfiError> {
                 contact_id: hex::encode(b.peer_id),
                 display_name: b.name.clone(),
                 verified: b.verified,
+                dh_hex: b.dh.as_ref().map(hex::encode),
             })
             .collect(),
         display_name: c.display_name.clone(),
@@ -506,6 +511,15 @@ struct Contact {
     name: String,
     verified: bool,
     device: ContactDevice,
+    /// Current X25519 Noise key of their device. Equal to the contact id for a
+    /// legacy contact (pre-v0.1.4a id = X25519 key), re-keyed on first handshake.
+    dh: [u8; 32],
+}
+
+impl Contact {
+    fn legacy(&self, id: &[u8; 32]) -> bool {
+        &self.dh == id
+    }
 }
 
 struct NodeState {
@@ -559,7 +573,10 @@ pub(crate) fn parse_msg_id(h: &str) -> Result<[u8; 16], FfiError> {
 
 struct NodeInner {
     seed: Zeroizing<[u8; 32]>,
+    /// PeerID = BLAKE2b-256(identity public key) (v0.1.4a).
     peer_id: [u8; 32],
+    /// Our pre-v0.1.4a id (X25519 from the seed): what legacy contacts know us by.
+    legacy_id: [u8; 32],
     name: String,
     state: Mutex<NodeState>,
     /// This installation's device key (RS1). Never locked while holding `state`
@@ -571,8 +588,12 @@ impl NodeInner {
     fn lock(&self) -> MutexGuard<'_, NodeState> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
+    /// This device's Noise static identity (per-device X25519, certified).
     fn identity(&self) -> Result<StaticIdentity, FfiError> {
-        Ok(StaticIdentity::from_seed(&self.seed)?)
+        Ok(self.device().static_identity()?)
+    }
+    fn dh_public(&self) -> [u8; 32] {
+        self.device().cert().map(|c| c.dh).unwrap_or([0; 32])
     }
     fn device(&self) -> MutexGuard<'_, OwnDevice> {
         self.device.lock().unwrap_or_else(|p| p.into_inner())
@@ -580,9 +601,9 @@ impl NodeInner {
     fn device_public(&self) -> [u8; 32] {
         self.device().public().unwrap_or([0; 32])
     }
-    /// Noise handshake payload with our device certificate.
-    fn handshake_payload(&self) -> Result<Vec<u8>, FfiError> {
-        Ok(core_device::handshake_payload(&self.device().cert()?))
+    /// Noise handshake payload: device certificate + signature over `h`.
+    fn handshake_payload(&self, h: &[u8]) -> omcp_core::error::Result<Vec<u8>> {
+        self.device().handshake_payload(h)
     }
 }
 
@@ -595,9 +616,16 @@ pub(crate) fn parse_id(hex_id: &str) -> Result<[u8; 32], FfiError> {
 /// are known; v1 (identity keys only) with a peer on an older app.
 pub(crate) fn contact_info(node: &NodeInner, id: &[u8; 32], c: &Contact) -> ContactInfo {
     let mine = node.device_public();
+    // A legacy contact still knows us by our legacy id (both sides switch to
+    // PeerIDs in the same handshake), so both compute the same number.
+    let me = if c.legacy(id) {
+        node.legacy_id
+    } else {
+        node.peer_id
+    };
     let safety_number = match c.device.current_key() {
-        Some(theirs) => safety::safety_number_v2(&node.peer_id, Some(&mine), id, Some(&theirs)),
-        None => safety::safety_number(&node.peer_id, id),
+        Some(theirs) => safety::safety_number_v2(&me, Some(&mine), id, Some(&theirs)),
+        None => safety::safety_number(&me, id),
     };
     ContactInfo {
         contact_id: hex::encode(id),
@@ -633,6 +661,7 @@ impl OmcpNode {
                 peer_id: *id,
                 name: c.name.clone(),
                 verified: c.verified,
+                dh: (!c.legacy(id)).then(|| c.dh.to_vec()),
             })
             .collect();
         // Message history moved to the chat backup (v0.1.4, see `chatbackup`);
@@ -693,13 +722,17 @@ impl OmcpNode {
 impl OmcpNode {
     fn build(phrase: String, display_name: String, db: Store) -> Result<Arc<Self>, FfiError> {
         let seed = recovery::phrase_to_seed(&phrase)?;
-        let id = StaticIdentity::from_seed(&seed)?;
-        db.bind_owner(&id.dh_public())?;
-        let device = chatbackup::load_or_create_device(&db, &seed, id.dh_public(), now_ms())?;
+        let peer_id = core_device::peer_id_from_seed(&seed)?;
+        let legacy_id = core_device::legacy_dh_public(&seed)?;
+        // v0.1.4a: stores bound to the legacy X25519 id move to the PeerID.
+        let legacy_install = db.rebind_owner(&legacy_id, &peer_id)?;
+        let device =
+            chatbackup::load_or_create_device(&db, &seed, peer_id, legacy_install, now_ms())?;
         let node = Arc::new(Self {
             inner: Arc::new(NodeInner {
                 seed,
-                peer_id: id.dh_public(),
+                peer_id,
+                legacy_id,
                 name: display_name,
                 device: Mutex::new(device),
                 state: Mutex::new(NodeState {
@@ -767,27 +800,40 @@ impl OmcpNode {
         )
     }
 
-    /// Contact QR payload: `omcp:2:<peer id hex>:<device key hex>:<display name>`.
-    /// The device key makes the code change after a restore (RS2).
+    /// Contact QR payload (v0.1.4a):
+    /// `omcp:3:<PeerID>:<identity key>:<device key>:<X25519 key>:<display name>`.
+    /// The device and X25519 keys make the code change after a restore (RS2).
     pub fn qr_payload(&self) -> String {
+        let cert = self.inner.device().cert().ok();
         format!(
-            "{QR_PREFIX_V2}{}:{}:{}",
+            "{QR_PREFIX_V3}{}:{}:{}:{}:{}",
             hex::encode(self.inner.peer_id),
+            hex::encode(cert.as_ref().map(|c| c.identity_sign).unwrap_or([0; 32])),
             hex::encode(self.inner.device_public()),
+            hex::encode(self.inner.dh_public()),
             self.inner.name
         )
     }
 
-    /// 13-byte BLE discovery advertisement (PROTOCOL §8.2).
+    /// 13-byte BLE discovery advertisement (PROTOCOL §8.2). Carries the PeerID
+    /// prefix; an install migrated from before v0.1.4a keeps its legacy X25519
+    /// key and advertises that, so legacy contacts still find it.
     pub fn advertisement(&self) -> Vec<u8> {
-        DiscoveryAdvertisement::new(1, &self.inner.peer_id, capabilities::PQ)
+        let dh = self.inner.dh_public();
+        let id = if dh == self.inner.legacy_id {
+            dh
+        } else {
+            self.inner.peer_id
+        };
+        DiscoveryAdvertisement::new(1, &id, capabilities::PQ)
             .encode()
             .to_vec()
     }
 
     /// Parse a QR and compute its safety number without saving anything.
     pub fn preview_contact_from_qr(&self, payload: String) -> Result<ContactPreview, FfiError> {
-        let (id, name, qr_dev) = self.parse_qr(&payload)?;
+        let q = self.parse_qr(&payload)?;
+        let (id, name, qr_dev) = (q.id, q.name.clone(), q.device);
         let st = self.inner.lock();
         let known = st.contacts.get(&id);
         let mismatch_with = st
@@ -806,6 +852,7 @@ impl OmcpNode {
                         current: qr_dev.map(|d| d.to_vec()),
                         ..ContactDevice::default()
                     },
+                    dh: q.dh,
                 },
             ),
         };
@@ -818,16 +865,22 @@ impl OmcpNode {
 
     /// Add a contact from a scanned QR payload.
     pub fn add_contact_from_qr(&self, payload: String) -> Result<ContactInfo, FfiError> {
-        let (id, name, qr_dev) = self.parse_qr(&payload)?;
+        let q = self.parse_qr(&payload)?;
+        let id = q.id;
         let mut st = self.inner.lock();
         let c = st.contacts.entry(id).or_insert(Contact {
-            name,
+            name: q.name.clone(),
             verified: false,
             device: ContactDevice::default(),
+            dh: q.dh,
         });
         if c.device.current.is_none() && c.device.superseded.is_empty() {
             // Pin the device key from the QR; the handshake certificate must match it.
-            c.device.current = qr_dev.map(|d| d.to_vec());
+            c.device.current = q.device.map(|d| d.to_vec());
+            c.dh = q.dh;
+        }
+        if c.device.identity_sign.is_none() {
+            c.device.identity_sign = q.identity_sign.map(|k| k.to_vec());
         }
         let info = self.info(&id, c);
         st.persist_contact(&id)?;
@@ -835,53 +888,114 @@ impl OmcpNode {
     }
 }
 
+/// A parsed contact QR code.
+pub(crate) struct QrInfo {
+    /// PeerID (v3) or the legacy X25519 id (v1/v2).
+    pub id: [u8; 32],
+    pub name: String,
+    pub device: Option<[u8; 32]>,
+    pub identity_sign: Option<[u8; 32]>,
+    /// X25519 Noise key to dial.
+    pub dh: [u8; 32],
+}
+
+fn key32(h: &str, what: &str) -> Result<[u8; 32], FfiError> {
+    hex::decode(h)
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .ok_or_else(|| invalid(what))
+}
+
 impl OmcpNode {
-    /// `(peer id, name, device key)`; v1 codes carry no device key.
-    #[allow(clippy::type_complexity)]
-    pub(crate) fn parse_qr(
-        &self,
-        payload: &str,
-    ) -> Result<([u8; 32], String, Option<[u8; 32]>), FfiError> {
+    /// v3 codes carry PeerID + identity, device and X25519 keys; v2 (legacy id +
+    /// device key) and v1 (legacy id) are still accepted as legacy contacts.
+    pub(crate) fn parse_qr(&self, payload: &str) -> Result<QrInfo, FfiError> {
         let p = payload.trim();
-        let (rest, v2) = match (p.strip_prefix(QR_PREFIX_V2), p.strip_prefix(QR_PREFIX)) {
-            (Some(r), _) => (r, true),
-            (None, Some(r)) => (r, false),
-            _ => return Err(invalid("not an OMCP contact QR")),
-        };
-        let (hex_id, rest) = rest.split_once(':').unwrap_or((rest, ""));
-        let (dev, name) = if v2 {
-            let (d, n) = rest.split_once(':').unwrap_or((rest, ""));
-            let d: [u8; 32] = hex::decode(d)
-                .ok()
-                .and_then(|v| v.try_into().ok())
-                .ok_or_else(|| invalid("QR device key"))?;
-            (Some(d), n)
+        let (q, hex_id) = if let Some(r) = p.strip_prefix(QR_PREFIX_V3) {
+            let mut it = r.splitn(5, ':');
+            let (Some(pid), Some(ik), Some(dev), Some(dh)) =
+                (it.next(), it.next(), it.next(), it.next())
+            else {
+                return Err(invalid("QR fields"));
+            };
+            let id = parse_id(pid)?;
+            let ik = key32(ik, "QR identity key")?;
+            if core_device::peer_id_from_identity(&ik) != id {
+                return Err(invalid("QR identity key doesn't match PeerID"));
+            }
+            (
+                QrInfo {
+                    id,
+                    name: it.next().unwrap_or("").to_string(),
+                    device: Some(key32(dev, "QR device key")?),
+                    identity_sign: Some(ik),
+                    dh: key32(dh, "QR X25519 key")?,
+                },
+                pid.to_string(),
+            )
         } else {
-            (None, rest)
+            let (rest, v2) = match (p.strip_prefix(QR_PREFIX_V2), p.strip_prefix(QR_PREFIX)) {
+                (Some(r), _) => (r, true),
+                (None, Some(r)) => (r, false),
+                _ => return Err(invalid("not an OMCP contact QR")),
+            };
+            let (hex_id, rest) = rest.split_once(':').unwrap_or((rest, ""));
+            let (dev, name) = if v2 {
+                let (d, n) = rest.split_once(':').unwrap_or((rest, ""));
+                (Some(key32(d, "QR device key")?), n)
+            } else {
+                (None, rest)
+            };
+            let id = parse_id(hex_id)?;
+            (
+                QrInfo {
+                    id,
+                    name: name.to_string(),
+                    device: dev,
+                    identity_sign: None,
+                    dh: id,
+                },
+                hex_id.to_string(),
+            )
         };
-        let id = parse_id(hex_id)?;
-        if id == self.inner.peer_id {
+        if q.id == self.inner.peer_id || q.id == self.inner.legacy_id {
             return Err(invalid("cannot add yourself"));
         }
-        let name = if name.is_empty() {
-            format!("Peer {}", &hex_id[..8])
+        let name = if q.name.is_empty() {
+            format!("Peer {}", &hex_id[..8.min(hex_id.len())])
         } else {
-            name.chars().take(64).collect()
+            q.name.chars().take(64).collect()
         };
-        Ok((id, name, dev))
+        Ok(QrInfo { name, ..q })
     }
 }
 
 #[uniffi::export]
 impl OmcpNode {
-    /// Restore a contact from app storage (no QR parse).
+    /// Restore a contact from app storage (no QR parse). Without a key the id
+    /// is taken as a legacy X25519 id.
     pub fn restore_contact(
         &self,
         contact_id: String,
         display_name: String,
         verified: bool,
     ) -> Result<(), FfiError> {
+        self.restore_contact_with_key(contact_id, display_name, verified, None)
+    }
+
+    /// Restore a contact from a backup with its X25519 key (`BackupContact::dh_hex`).
+    pub fn restore_contact_with_key(
+        &self,
+        contact_id: String,
+        display_name: String,
+        verified: bool,
+        dh_hex: Option<String>,
+    ) -> Result<(), FfiError> {
         let id = parse_id(&contact_id)?;
+        let dh = match dh_hex {
+            Some(h) => key32(&h, "contact X25519 key")?,
+            None => id,
+        };
         let mut st = self.inner.lock();
         st.contacts.insert(
             id,
@@ -889,6 +1003,7 @@ impl OmcpNode {
                 name: display_name,
                 verified,
                 device: ContactDevice::default(),
+                dh,
             },
         );
         st.persist_contact(&id)
@@ -913,9 +1028,11 @@ impl OmcpNode {
     pub fn contact_for_prefix(&self, prefix_hex: String) -> Option<String> {
         let st = self.inner.lock();
         st.contacts
-            .keys()
-            .find(|id| hex::encode(&id[..6]) == prefix_hex)
-            .map(hex::encode)
+            .iter()
+            .find(|(id, c)| {
+                hex::encode(&id[..6]) == prefix_hex || hex::encode(&c.dh[..6]) == prefix_hex
+            })
+            .map(|(id, _)| hex::encode(id))
     }
 
     /// Queue a text for a contact; it is sent when a link to them is up.
@@ -1227,10 +1344,11 @@ impl OmcpNode {
     /// New link as Noise initiator (we are the GATT central dialling a contact).
     pub fn open_initiator_link(&self, contact_id: String) -> Result<Arc<MeshLink>, FfiError> {
         let id = parse_id(&contact_id)?;
-        if !self.inner.lock().contacts.contains_key(&id) {
-            return Err(FfiError::UnknownContact);
-        }
-        let init = HybridInitiator::new(self.inner.identity()?, &id)?;
+        let dh = match self.inner.lock().contacts.get(&id) {
+            Some(c) => c.dh,
+            None => return Err(FfiError::UnknownContact),
+        };
+        let init = HybridInitiator::new(self.inner.identity()?, &dh)?;
         Ok(self.new_link(Role::Initiator(Box::new(init)), Some(id)))
     }
 
@@ -1397,7 +1515,8 @@ impl MeshLink {
         let mut st = self.lock();
         let mut out = LinkOutput::default();
         if let Role::Initiator(init) = &mut st.role {
-            let m1 = init.write_message_1(&self.node.handshake_payload()?)?;
+            let node = &self.node;
+            let m1 = init.write_message_1_with(|h| node.handshake_payload(h))?;
             chunk_handshake(&m1, &mut out.outgoing)?;
         }
         Ok(out)
@@ -1779,11 +1898,24 @@ impl MeshLink {
         out: &mut LinkOutput,
     ) -> Result<(), FfiError> {
         let role = std::mem::replace(&mut st.role, Role::Closed);
-        let peer_payload: Vec<u8>;
+        let peer_cert: core_device::DeviceCert;
+        let mut applied = false;
         let up = match role {
             Role::Initiator(mut init) => {
-                let (payload, keys) = init.read_message_2(msg)?;
-                peer_payload = payload;
+                let (payload, h, keys) = init.read_message_2_bound(msg)?;
+                let expected = st.peer.ok_or(FfiError::UnknownContact)?;
+                let dh = self
+                    .node
+                    .lock()
+                    .contacts
+                    .get(&expected)
+                    .map(|c| c.dh)
+                    .ok_or(FfiError::UnknownContact)?;
+                // (c) device binding: certificate for this session's key + signature over h.
+                let cert = core_device::verify_handshake_payload(&payload, &h, &dh)?;
+                let peer = self.node.lock().resolve_peer(expected, &cert)?;
+                st.peer = Some(peer);
+                peer_cert = cert;
                 Established {
                     link: LinkSession::initiator(&keys),
                     keys,
@@ -1794,15 +1926,32 @@ impl MeshLink {
                 }
             }
             Role::Responder(mut resp) => {
-                peer_payload = resp.read_message_1(msg)?;
+                let (payload, h) = resp.read_message_1_bound(msg)?;
                 let rs = resp.remote_static().ok_or(FfiError::UnknownContact)?;
-                if !self.node.lock().contacts.contains_key(&rs) {
-                    // Unknown initiator: refuse (beta requires mutual QR add).
-                    return Err(FfiError::UnknownContact);
-                }
-                let (m2, keys) = resp.write_message_2(&self.node.handshake_payload()?)?;
+                // (c) device binding; then find the contact by PeerID (or a legacy
+                // contact by its X25519 id). Unknown initiators are refused
+                // (beta requires mutual QR add).
+                let cert = core_device::verify_handshake_payload(&payload, &h, &rs)?;
+                let peer = {
+                    let mut node = self.node.lock();
+                    let expected = if node.contacts.contains_key(&cert.peer_id) {
+                        cert.peer_id
+                    } else if node.contacts.get(&rs).is_some_and(|c| c.legacy(&rs)) {
+                        rs
+                    } else {
+                        return Err(FfiError::UnknownContact);
+                    };
+                    let peer = node.resolve_peer(expected, &cert)?;
+                    // RS1/RS2 before answering: a superseded device key fails here.
+                    node.apply_peer_cert(peer, &cert, now_ms(), out)?;
+                    peer
+                };
+                applied = true;
+                let node = &self.node;
+                let (m2, keys) = resp.write_message_2_with(|h| node.handshake_payload(h))?;
                 chunk_handshake(&m2, &mut out.outgoing)?;
-                st.peer = Some(rs);
+                peer_cert = cert;
+                st.peer = Some(peer);
                 Established {
                     link: LinkSession::responder(&keys),
                     keys,
@@ -1819,11 +1968,11 @@ impl MeshLink {
                 });
             }
         };
-        if let Some(p) = st.peer {
+        if let (Some(p), false) = (st.peer, applied) {
             // RS1: the contact's device decides about the restore notice.
             self.node
                 .lock()
-                .apply_peer_cert(p, &peer_payload, now_ms(), out)?;
+                .apply_peer_cert(p, &peer_cert, now_ms(), out)?;
         }
         st.role = Role::Up(Box::new(up));
         if let Some(p) = st.peer {
