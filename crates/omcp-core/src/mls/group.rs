@@ -22,6 +22,9 @@ pub const OMCP_MLS_CIPHERSUITE: Ciphersuite =
 pub const MAX_SMALL_GROUP_MEMBERS: usize = 32;
 
 /// One peer’s MLS + OMCP-MLS-PQ state.
+/// `(extension_bytes, kem_shared_secrets, hybrid_exporter)` for one epoch.
+pub type PqEpochSecrets = (Vec<u8>, Vec<[u8; 32]>, [u8; 32]);
+
 pub struct OmcpMlsMember {
     pub identity: Vec<u8>,
     provider: OpenMlsRustCrypto,
@@ -269,21 +272,18 @@ impl OmcpMlsMember {
         let epoch = group.epoch().as_u64();
         let context = epoch.to_be_bytes();
         let mls_exporter = group
-            .export_secret(
-                self.provider.crypto(),
-                MLS_PQ_EXPORTER_LABEL,
-                &context,
-                32,
-            )
+            .export_secret(self.provider.crypto(), MLS_PQ_EXPORTER_LABEL, &context, 32)
             .map_err(|_| OmcpError::Mls("export_secret"))?;
         mix_exporter(&mls_exporter, kem_shared_secrets)
     }
 
     /// Build PQ encapsulations to `others` for the current epoch.
+    ///
+    /// Returns `(extension_bytes, kem_shared_secrets, hybrid_exporter)`.
     pub fn build_pq_epoch_secrets(
         &self,
         others: &[(u32, [u8; crate::handshake::MLKEM768_EK_LEN])],
-    ) -> Result<(Vec<u8>, Vec<[u8; 32]>, [u8; 32])> {
+    ) -> Result<PqEpochSecrets> {
         let epoch = self.epoch()?;
         let (ext, secrets) = encapsulate_to_members(epoch, others)?;
         let hybrid = self.hybrid_exporter(&secrets)?;

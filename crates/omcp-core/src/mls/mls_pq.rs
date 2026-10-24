@@ -114,7 +114,9 @@ impl MlsPqKemKeyPair {
         &self.ek
     }
 
-    pub fn encapsulate_to(ek_bytes: &[u8; MLKEM768_EK_LEN]) -> Result<([u8; MLKEM768_CT_LEN], [u8; MLKEM768_SS_LEN])> {
+    pub fn encapsulate_to(
+        ek_bytes: &[u8; MLKEM768_EK_LEN],
+    ) -> Result<([u8; MLKEM768_CT_LEN], [u8; MLKEM768_SS_LEN])> {
         let ek = EncapsulationKey::<MlKem768>::new_from_slice(ek_bytes.as_slice())
             .map_err(|_| OmcpError::MlsPqMalformed("ek"))?;
         let (ct, ss) = ek.encapsulate();

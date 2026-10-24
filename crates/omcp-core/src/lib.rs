@@ -297,14 +297,8 @@ mod m3_integration {
 
         // Alice (non-recipient) must not open Bob's wrap
         let meta_again = {
-            let (m, _, _) = encrypt_file(
-                b"x",
-                "x",
-                "text/plain",
-                &[bob_file.public_keys()],
-                64,
-            )
-            .unwrap();
+            let (m, _, _) =
+                encrypt_file(b"x", "x", "text/plain", &[bob_file.public_keys()], 64).unwrap();
             m
         };
         let w_bob = wrapped_key_for(&meta_again, &bob_file.recipient_id).unwrap();
@@ -320,6 +314,5 @@ mod m3_integration {
         ];
         let (_ext, _ss, hybrid) = alice.build_pq_epoch_secrets(&others).unwrap();
         assert_ne!(hybrid, alice.hybrid_exporter(&[]).unwrap());
-
     }
 }

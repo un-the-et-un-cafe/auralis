@@ -112,7 +112,9 @@ pub fn encrypt_file(
             ciphertext,
         });
         offset = end;
-        index = index.checked_add(1).ok_or(OmcpError::File("too many chunks"))?;
+        index = index
+            .checked_add(1)
+            .ok_or(OmcpError::File("too many chunks"))?;
         if plaintext.is_empty() {
             break;
         }

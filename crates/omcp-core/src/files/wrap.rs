@@ -192,8 +192,8 @@ pub fn seal_content_key(
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).map_err(|_| OmcpError::Crypto("getrandom"))?;
     let nonce = Nonce::from(nonce_bytes);
-    let cipher = ChaCha20Poly1305::new_from_slice(&aead_key)
-        .map_err(|_| OmcpError::Crypto("chacha key"))?;
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&aead_key).map_err(|_| OmcpError::Crypto("chacha key"))?;
     let ciphertext = cipher
         .encrypt(
             &nonce,
@@ -236,8 +236,8 @@ fn open_content_key(
     dh_ss.zeroize();
     kem_ss.zeroize();
 
-    let cipher = ChaCha20Poly1305::new_from_slice(&aead_key)
-        .map_err(|_| OmcpError::Crypto("chacha key"))?;
+    let cipher =
+        ChaCha20Poly1305::new_from_slice(&aead_key).map_err(|_| OmcpError::Crypto("chacha key"))?;
     let nonce = Nonce::from(wrapped.nonce);
     let plain = cipher
         .decrypt(
@@ -255,9 +255,6 @@ fn open_content_key(
     key.copy_from_slice(&plain);
     Ok(ContentKey(key))
 }
-
-/// Public alias used by `FileRecipientSecrets::open_content_key` callers that
-/// already hold secrets — prefer the method on [`FileRecipientSecrets`].
 
 #[cfg(test)]
 mod tests {
