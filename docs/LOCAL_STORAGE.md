@@ -69,6 +69,17 @@ inside sealed rows, old rows decode with defaults):
 - Sealed `meta` rows `app:own_device` (this install's device key), `app:own_restored_at`,
   `app:chat_backup_state` and `app:media_backup_settings`.
 
+Store additions in v0.1.4a (PeerID = BLAKE2b-256 of the identity key):
+
+- `ContactRec.dh`: the contact's certified per-device X25519 key (absent = legacy
+  contact keyed by its X25519).
+- `app:own_device` also holds this install's X25519 seed (`dh_seed`); installs from
+  earlier builds keep the seed-derived X25519 so contacts can still reach them.
+- `Store::rebind_owner` moves the owner from the legacy X25519 id to the PeerID on first
+  open; `Store::rekey_peer` re-keys a legacy contact's contact, chat, message, outbox,
+  file and burn rows to its PeerID in one transaction, on the first verified handshake.
+- Identity backups carry `dh` per contact; older backups restore legacy contacts.
+
 ## Known gaps
 
 - Filesystem and flash remnants (deleted journal blocks, wear-levelling) are outside what

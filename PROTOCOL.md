@@ -72,7 +72,7 @@ Each peer generates a long-term **Identity Key Pair**:
 | Identity PQ hybrid (optional, recommended) | Ed25519 + ML-DSA-65 (Dilithium3) | Dual signatures during transition |
 | Identity encryption / KEM long-term | X25519 + ML-KEM-768 hybrid | Used for sealed addressing and initial contact |
 
-**PeerID** = `multihash(identity_signing_public_key)` truncated to 32 bytes, encoded as `omcp1:<base32>` for display.
+**PeerID** = `BLAKE2b-256(identity_signing_public_key)` (32 bytes; v0.1.4a, replaces the earlier "multihash" wording), encoded as `omcp1:<base32>` for display. Contacts are keyed by PeerID. The X25519 Noise static key is **per device** and certified by the identity key (§3.4); it is not the PeerID.
 
 Peers MAY rotate Identity Keys. Rotation requires signing a **Successor Statement** with the old key and publishing it to contacts over authenticated channels.
 
@@ -98,14 +98,16 @@ Normative for clients that implement apps/REQUIREMENTS.md "Restore indicator (se
 
 - **Identity signing key.** Ed25519, derived from the 24-word master seed: `HKDF-SHA-384(salt = "OMCP-Identity-Seed-v1", ikm = seed, info = "ed25519")`. It survives a restore.
 - **Device key.** Each installation generates a random Ed25519 device key. A restore from the 24 words (or from a cloud backup) MUST generate a new one; it is never restored.
-- **Certificate** (177 bytes, big-endian): `ver u8 = 1 | peer_id [32] | identity_sign_pub [32] | device_pub [32] | created_ms u64 | restored_at_ms u64 (0 = not a restore) | sig [64]`, where `sig = Ed25519(identity_sign, "OMCP-DeviceCert-v1" || all preceding fields)`.
-- **Transport.** The certificate rides in the Noise handshake payload of every link: `"omcp-ffi-v1" || 0x01 || cert`. A payload of just `"omcp-ffi-v1"` (older peers) carries none; unknown extension tags MUST be ignored.
+- **Certificate v2** (209 bytes, big-endian, v0.1.4a): `ver u8 = 2 | peer_id [32] | identity_sign_pub [32] | device_pub [32] | dh_pub [32] | created_ms u64 | restored_at_ms u64 (0 = not a restore) | sig [64]`, where `sig = Ed25519(identity_sign, "OMCP-DeviceCert-v2" || all preceding fields)`. `peer_id` MUST equal `BLAKE2b-256(identity_sign_pub)`; `dh_pub` is the device's X25519 Noise static key. (v1, 177 bytes without `dh_pub`, is no longer sent.)
+- **Transport and device binding.** Every link's Noise handshake payload (initiator msg 1, responder msg 2) is `"omcp-ffi-v1" || 0x01 || cert || 0x02 || bind`, with `bind = Ed25519(device_key, "OMCP-DeviceBind-v1" || h)` where `h` is the Noise handshake hash at the moment the payload is encrypted. The receiver MUST check the certificate, `cert.dh_pub == remote static key`, and `bind` over its own `h`, and MUST fail the handshake if the certificate or binding is missing or invalid, or the device key is superseded. A replayed old certificate therefore can't be used to suppress the restore notice. Unknown extension tags MUST be ignored.
+- **Dialing.** The initiator dials the contact's certified `dh_pub`. Advertisements carry the PeerID prefix (legacy installs: their X25519 prefix). A restored device has a new `dh_pub`, so its contacts can reach it only after it dials them or they scan its new QR.
+- **Migration from v0.1.4.** Earlier builds keyed contacts by the seed-derived X25519 key. Such installs keep that X25519 as their device `dh_pub`; legacy contacts (key = X25519) are re-keyed to the PeerID, in the store and in memory, on the first verified handshake. Identity backups now carry each contact's `dh`; older backups without it restore legacy-keyed contacts that migrate the same way.
 - **Receiver rules** (the restored device can't suppress them):
   1. The first `identity_sign_pub` seen for a contact over the authenticated channel is pinned; a different one MUST be rejected.
   2. A certificate whose `device_pub` differs from the pinned one, one with `restored_at_ms ≠ 0` for a new device, or a missing certificate after one was pinned, MUST raise the in-chat system notice ("<name> restored Hopla on a new device · <date>"), show a "Restored" badge for 7 days from `restored_at`, clear the contact's "Verified" state ("Restored, not verified"), and mark the previous device key **superseded**.
   3. A superseded device key MUST NOT be accepted again (the link is refused).
 - **Safety number v2.** `BLAKE2b-512("OMCP-Safety-v2" || lo(peer || device) || hi(peer || device))`, iterated and grouped like v1, ordered by the 64-byte concatenation. When either device key is unknown (older peer) clients fall back to v1.
-- **QR v2.** `omcp:2:<peer_id hex>:<device_pub hex>:<display name>`. Verifying by QR MUST fail when the code's device key isn't the contact's current one (e.g. a QR shown before a restore). `omcp:1:` codes are still accepted for adding contacts.
+- **QR v3** (v0.1.4a). `omcp:3:<peer_id hex>:<identity_sign_pub hex>:<device_pub hex>:<dh_pub hex>:<display name>`; `peer_id` MUST equal `BLAKE2b-256(identity_sign_pub)`. Verifying by QR MUST fail when the code's device key isn't the contact's current one (e.g. a QR shown before a restore). `omcp:2:`/`omcp:1:` codes are still accepted as legacy contacts.
 
 ---
 
@@ -324,6 +326,8 @@ EnvelopeV1 {
 
 Reference: `omcp-core::chat_backup`. Key: `HKDF-SHA-256(salt = none, ikm = 24-word master seed, info = "hopla/chat-backup/v1")`. Blob: `"HCB1" | kind u8 (0 snapshot, 1 log, 2 media) | seq u64 BE | nonce [24] | XChaCha20-Poly1305(ct)` with AAD `"hopla/chat-backup/v1" | kind | seq` (media: `| content_hash`). The plaintext is `len u32 BE | CBOR | zero padding` so the blob length is a multiple of 64 KiB. Logs carry changed and deleted messages since the previous upload; a snapshot (at most weekly) carries everything, after which lower `seq` blobs MAY be deleted. Burn-after-read and view-once content MUST NOT be included. Media blobs are only written when the user enables media backup; their names are a keyed hash of the content hash.
 
+**iCloud records (v0.1.4a).** CloudKit private database, custom zone `HoplaBackupV1`. Record types: `ChatLogSegment` (name `seg-<seq, lowercase hex>`), `ChatSnapshot` (`snap-<YYYYWW>`, ISO-8601 week of upload, UTC; a newer snapshot in the same week replaces it), `MediaBlob` (`media-<hex BLAKE2b-256 of the blob>`) and one `BackupManifest` (`manifest`). Every record has exactly `blob` (CKAsset), `seq` (Int64) and `created` (ms, Int64); no plaintext fields. The manifest's blob is the index from the core blob names (sequence numbers and keyed hashes, already opaque) to record names. Google Drive keeps the core names in appDataFolder.
+
 ---
 
 ## 12. Privacy
@@ -470,6 +474,7 @@ omcp/
 | 0.1 | 2026-10-23 | Initial specification for Proggy / Pipely handoff |
 | 0.1.3 | 2026-10-24 | §19.1 burn after read (`burn` inner header, `OPENED` receipt) |
 | 0.1.4 | 2026-10-24 | §3.4 device certificates, restore indicator, safety number v2, QR v2; §7.1 media re-fetch controls `0x31`–`0x33`; §11.1 chat backup format |
+| 0.1.4a | 2026-10-24 | §3.1 PeerID = BLAKE2b-256(identity key), per-device X25519; §3.4 certificate v2, handshake device binding, QR v3, migration; §11.1 iCloud records |
 
 **Next editors:** Implementers SHOULD open PRs against this file for any wire-format change. Semantic versioning: breaking wire changes → 1.0 major after first production interop; until then 0.x may break with explicit changelog entries.
 
