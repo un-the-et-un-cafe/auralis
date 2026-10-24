@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.8
+# OMCP Smartphone Apps — Design Spec v0.1.9
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -1055,6 +1055,29 @@ Visible nearby toggle (“Stays on until you turn it off”), Auto-pause list (3
 ### 5.80 Accessibility
 Indicator is `role=status`; state changes (paused/resumed) announced politely once, never on a timer. Pause reason is in text, icons are decorative. Check-in prompt traps focus, Yes first; actions ≥ 48 px. Reduced motion: radar/ripple static in paused state; no pulsing indicator dot.
 
+## 5K. v0.1.9 — Area-mode indicator; check-in counts visible time (REQUIREMENTS Decision 4, Q12/Q13) — v0.3
+
+Generator `/workspace/omcp-v019/gen.py`.
+
+### 5.81 Persistent indicator in area mode — `nearby-area-indicator`
+Area mode (gateway visibility outside Go Nearby) also shows the persistent indicator (D6). Label **Area mode** / **Mode secteur**; glyph = hexagonal cell with centre dot (the coarse geohash cell), tinted `--path-mixed` violet instead of the teal ripple — distinct, calm, no pulse.
+| State | iOS Live Activity | Dynamic Island compact | Android ongoing |
+|---|---|---|---|
+| Active | hex + “Area mode · Visible in your area (~5 km) until you turn it off”, tiles (profiles in your area, new likes), Turn off | hex · “3 ♥1” | “Area mode” / “3 profiles in your area · 1 new like” |
+| Active + Private | “Area mode is on”, no tiles | hex only | “Hopla · Area mode is on” |
+| Paused | reason icon + “Area mode · Paused: …” + resume line | reason icon · “Area · Paused” | “Area mode · Paused: …” (Private prefixed “Hopla ·”) |
+Frames: `nearby-area-indicator` (+`--ios-live-activity[-paused-night][-private]`, `--android-ongoing[-paused-night][-private]`, `--ios-island`, `--ios-island-private`, `--ios-island-expanded`, `--ios-island-paused`, `--android-ongoing-dark`, `--android-ongoing-paused-motion-dark`, `--fr-live-activity`, `--fr-android-ongoing-private`, `--fr-live-activity-paused-night`). Same auto-pause rules and check-in apply. Switching from area mode to Go Nearby morphs glyph hex→ripple (240 ms cross-fade; instant under reduced motion).
+
+### 5.82 Check-in counts visible time only
+- The 4 h counter runs only while Nearby (Go Nearby or area mode) is actually visible; any pause stops it. No check-in fires while paused (e.g. overnight).
+- Copy: Settings › Nearby “Check-in every 4 h of visibility — Counts visible time only, not pauses. Next one after 2 h 40 min more visible time.”; Go Nearby sheet “After every 4 h of visible time, we check you’re still up for it”; in-app prompt “You’ve been visible for 4 h (pauses not counted).”
+- The remaining visible time is shown **only** in Settings › Nearby (static, rounded to 10 min), never on the lock screen or as a ticking countdown.
+| Key | EN | FR |
+|---|---|---|
+| checkin.rule | Check-in every 4 h of visibility | Point de contrôle toutes les 4 h visibles |
+| checkin.desc | Counts visible time only, not pauses. Next one after {t} more visible time. | Compte seulement le temps visible (pas les pauses). Prochain dans {t} de visibilité. |
+| area.title / sub | Area mode · Visible in your area (~5 km) until you turn it off | Mode secteur · Visible dans votre secteur (~5 km) jusqu’à désactivation |
+
 ## 6. Path indicator component (normative UX)
 
 **`PathChip`:** pill, 7 px dot + label, colours from §2.1. Used in list rows (micro), status strip, settings legend.
@@ -1191,10 +1214,12 @@ Resolved 2026-10-24 (maintainer approved; REQUIREMENTS Decision 5 / SS1 updated 
 - ~~Q9 Under review visibility~~ → admins only.
 - ~~Q10 Reputation display~~ → four word levels.
 
-Open:
-12. **Area mode and D6:** area mode (gateway, outside Go Nearby) also broadcasts your card. Does D6’s “never visible without the persistent indicator” apply to area mode too? Mockups show no indicator in area mode.
-13. **Check-in while paused:** mockups assume the 4 h counts visible time only and no check-in fires while paused (e.g. overnight). Confirm.
-11. **SS2 wording vs toggle Off:** REQUIREMENTS SS2 still says “the app switcher never shows chat content”, but the approved Off state shows a normal preview. SS2 should read “with the toggle on”. Also Burn § Device-side protection line 130 still says “blocked app-wide”.
+Resolved 2026-10-24:
+- ~~Q11 SS2 wording vs toggle Off~~ → fixed in REQUIREMENTS (Writey, commit 6a0ee67).
+- ~~Q12 Area mode and D6~~ → indicator shows in area mode too (§5.81).
+- ~~Q13 Check-in while paused~~ → counts visible time only; paused time doesn’t count (§5.82).
+
+No open questions. (Note: REQUIREMENTS Decision 4 “Honest status” still quotes an old chip example with minutes left; the pack uses “Live nearby” / “Paused” / “Area mode”.)
 
 ---
 
@@ -1206,6 +1231,7 @@ Open:
 | 0.1.1 | 2026-10-24 | Hopla naming; §5.14–5.24 onboarding, contact add, file transfer; 11 new mockups (17 PNG frames); resolved v0.1.0 questions |
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
+| 0.1.9 | 2026-10-24 | Area-mode persistent indicator §5.81; check-in counts visible time §5.82; Q11–Q13 resolved |
 | 0.1.8 | 2026-10-24 | Nearby stays on until turned off: auto-pause, 4 h check-in, persistent indicator §5.75–5.80; `nearby-checkin`, `settings-nearby` new |
 | 0.1.7 | 2026-10-24 | Approved decisions §5.71–5.74: toggle copy aligned to REQUIREMENTS, private Live Activity/Island, recents by toggle, session length; §12 Q4–Q10 resolved |
 | 0.1.6 | 2026-10-24 | Moderation & reputation (§23, v0.2) §5.61–5.69; Block screenshots toggle §5.70; 7 new + 1 updated mockups; §12 Q7–Q10 |

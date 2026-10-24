@@ -1,5 +1,19 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.9 — 2026-10-24
+
+maintainer resolved Q12/Q13; Q11 fixed in REQUIREMENTS (commit 6a0ee67). `DESIGN_SPEC.md` §5K (§5.81–5.82).
+
+### Added
+- `nearby-area-indicator`: persistent indicator in area mode (hex-cell glyph, violet, “Area mode” label) for iOS Live Activity, Dynamic Island and Android ongoing notification — normal, Private, paused, dark, FR.
+
+### Changed
+- Check-in counts visible time only: Settings › Nearby shows “Next one after 2 h 40 min more visible time”; Go Nearby sheet and in-app prompt copy updated (`settings-nearby`, `nearby-session`, `nearby-checkin` re-rendered).
+- §12: Q11–Q13 resolved; no open questions.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
 ## v0.1.8 — 2026-10-24
 
 Nearby stays on until the user turns it off (REQUIREMENTS Decision 4 + D6). `DESIGN_SPEC.md` §5J (§5.75–5.80).
