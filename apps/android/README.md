@@ -96,7 +96,7 @@ App icon is a **placeholder** (redesign pending).
 - **Per-message**: long-press Send to toggle 🔥 for the next message. **Per-chat**: Security centre › Burn after read, with Off / On open / 10 s / 1 min / 1 h, plus an unread TTL of 1 h / 24 h / 7 d.
 - **Text**: shows blurred as "Tap to read" and opens in a full-screen viewer with a countdown ring. When the timer ends it's deleted. The sender deletes its copy once the `OPENED` receipt arrives and its timer ends.
 - **View-once image**: opens once. A second tap shows "🔥 Photo opened". Save, forward, quote and share are disabled (`ChatMessage.canShare`).
-- **FLAG_SECURE**: the viewer is a `Dialog` with `SecureFlagPolicy.SecureOn` (B3).
+- **FLAG_SECURE**: the viewer is a `Dialog` with `SecureFlagPolicy.SecureOn`, on top of the app-wide block (B3, updated: burn content can never be captured, per SS1).
 - **Storage**: burnable content lives only in the in-memory `BurnVault`, with a separate AES-GCM key per item. Shredding zeroes the key and ciphertext. `ChatMessage.text` stays empty.
 - **Exclusions (B5)**: notifications always use the generic text. Backups exclude burn content: `allowBackup=false`, and the cloud backup holds only the phrase and contacts. There's no search index yet, so nothing is indexed. The honest-copy line is shown in the viewer and in chat info.
 - **Tests**: `BurnAfterReadTest` (B1, B2, B4, B5 at the logic level) plus Rust `omcp-core::burn` tests (header, single-use media key, OPENED, crypto-shredding, relay expiry).
@@ -105,4 +105,14 @@ App icon is a **placeholder** (redesign pending).
   - Media transfer itself is still queued-only, as before.
   - View-once video playback is a placeholder (no Media3).
   - The 256-member group cap isn't enforced in the UI, because there are no groups in the Android beta.
-- **Deferred to iOS (M6)**: screenshot and screen-recording detection, hiding content while recording, the "📸 Took a screenshot" notice to the sender (iOS B3), and iOS B1–B5.
+- **Deferred to iOS (M6)**: iOS B1–B5. The 📸 screenshot notice has been dropped: screenshots are now blocked app-wide (see below).
+
+## Product decisions (2026-10-24)
+- **Private calls**: `NotificationPolicy.callContent` shows "Hopla · Incoming call" with no caller name. This is policy and tests only, since there are no calls yet.
+- **Per-chat override**: the Security centre switch sets a per-chat override in both directions. Off shows the sender and preview even when global Private notifications is on.
+- **Hide on lock screen**: uses `VISIBILITY_PRIVATE` with a public version "Hopla · New message" (not blank). Otherwise `VISIBILITY_PUBLIC`.
+- **No screenshots anywhere**: `ScreenSecurity.Callbacks`, registered in `OmcpApplication`, sets FLAG_SECURE on every activity at pre-create, including the third-party QR scanner. On Android 13+ it also calls `setRecentsScreenshotEnabled(false)`. Compose dialogs and sheets inherit FLAG_SECURE, and nothing clears it. `ScreenSecurityTest` covers SS1, SS2 and B3 at the source and hook level. Black screenshots, recordings and casting on Android 10–15 still need a device check.
+- **Deferred to iOS (M6)**: secure-capture layer, app-switcher blur cover, `UIScreen.isCaptured` cover, and iOS SS1 and SS2.
+
+## Roadmap
+- **v0.3 Hopla Nearby** (not started): dating, plus a Nearby session (Android foreground service with an ongoing notification, 30/60/120 min) and area mode over the gateway geohash. Acceptance NX1–NX3: first card < 1 s from cache, an iOS session lasting 60 min while locked, and an area-mode match notified within 5 min.

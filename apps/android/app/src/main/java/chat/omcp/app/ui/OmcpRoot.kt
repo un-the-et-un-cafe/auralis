@@ -175,7 +175,7 @@ fun OmcpRoot(
                     contact = contacts.firstOrNull { it.id == id },
                     suiteLabel = repo.core.suiteLabel,
                     onSetVerified = { v -> id?.let { repo.setVerified(it, v) } },
-                    privateNotifications = id != null && id in repo.appStore.privateChats,
+                    privateNotifications = id != null && NotificationPolicy.isPrivate(repo.appStore, id),
                     onSetPrivateNotifications = { v -> id?.let { NotificationPolicy.setChatPrivate(repo.appStore, it, v) } },
                     burnOption = id?.let { repo.appStore.burnChats[it] } ?: -1,
                     burnUnreadTtl = id?.let { repo.appStore.burnUnreadTtl[it] } ?: chat.omcp.app.burn.BurnSpec.UNREAD_7D,

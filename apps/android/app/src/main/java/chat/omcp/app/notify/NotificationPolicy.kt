@@ -3,7 +3,11 @@ package chat.omcp.app.notify
 import chat.omcp.app.data.AppStore
 
 /** Lock-screen visibility, mapped to NotificationCompat.VISIBILITY_* by the Android layer. */
-enum class LockVisibility { PRIVATE, SECRET }
+/**
+ * PUBLIC: lock screen shows the notification as is (already generic when private).
+ * PRIVATE: lock screen shows the public version "Hopla · New message" (never blank).
+ */
+enum class LockVisibility { PUBLIC, PRIVATE }
 
 /**
  * What a message notification shows. When [private] is true there is no sender,
@@ -25,8 +29,9 @@ data class NotificationContent(
  * Default: sender + preview. Private (global or per chat): generic only.
  */
 object NotificationPolicy {
+    /** Per-chat override wins in both directions; otherwise the global setting. */
     fun isPrivate(store: AppStore, chatId: String): Boolean =
-        store.privateNotifications || chatId in store.privateChats
+        store.chatPrivateOverride[chatId] ?: store.privateNotifications
 
     fun content(
         store: AppStore,
@@ -39,7 +44,7 @@ object NotificationPolicy {
     ): NotificationContent {
         // Burnable content never appears in notification previews (REQUIREMENTS v0.1.3, B5).
         val private = burn || isPrivate(store, chatId)
-        val vis = if (store.hideOnLockScreen) LockVisibility.SECRET else LockVisibility.PRIVATE
+        val vis = if (store.hideOnLockScreen) LockVisibility.PRIVATE else LockVisibility.PUBLIC
         return if (private) {
             NotificationContent(appName, genericBody, false, true, vis, appName, genericBody)
         } else {
@@ -47,7 +52,22 @@ object NotificationPolicy {
         }
     }
 
-    fun setChatPrivate(store: AppStore, chatId: String, on: Boolean) {
-        store.privateChats = if (on) store.privateChats + chatId else store.privateChats - chatId
+    /** Set this chat's override (on or off, regardless of global). null = follow global. */
+    fun setChatPrivate(store: AppStore, chatId: String, on: Boolean?) {
+        store.chatPrivateOverride = if (on == null) store.chatPrivateOverride - chatId else store.chatPrivateOverride + (chatId to on)
+    }
+
+    /**
+     * Incoming call (decision item 1). Private: "Hopla · Incoming call", no caller name.
+     * No calls exist yet; this is the policy the call stack will use.
+     */
+    fun callContent(store: AppStore, chatId: String, caller: String, appName: String, genericCall: String): NotificationContent {
+        val private = isPrivate(store, chatId)
+        val vis = if (store.hideOnLockScreen) LockVisibility.PRIVATE else LockVisibility.PUBLIC
+        return if (private) {
+            NotificationContent(appName, genericCall, false, true, vis, appName, genericCall)
+        } else {
+            NotificationContent(caller, genericCall, true, false, vis, appName, genericCall)
+        }
     }
 }

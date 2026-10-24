@@ -10,9 +10,9 @@ interface AppStore {
     var contacts: List<Contact>
     /** Global "Private notifications" (REQUIREMENTS Notifications v0.1.2). Off by default: sender + preview shown. */
     var privateNotifications: Boolean
-    /** Chat ids with per-chat "Private notifications" on. */
-    var privateChats: Set<String>
-    /** Hide notification on the lock screen (VISIBILITY_SECRET). Off by default. */
+    /** Per-chat Private notifications override: true = private, false = off even if global is on. */
+    var chatPrivateOverride: Map<String, Boolean>
+    /** Lock screen shows only "Hopla · New message" (VISIBILITY_PRIVATE + public version). Off by default. */
     var hideOnLockScreen: Boolean
     /** Per-chat burn option: chatId -> -1 off, 0 on open, else timer seconds. */
     var burnChats: Map<String, Int>
@@ -33,7 +33,7 @@ class InMemoryAppStore : AppStore {
     override var displayName: String? = null
     override var contacts: List<Contact> = emptyList()
     override var privateNotifications = false
-    override var privateChats: Set<String> = emptySet()
+    override var chatPrivateOverride: Map<String, Boolean> = emptyMap()
     override var hideOnLockScreen = false
     override var burnChats: Map<String, Int> = emptyMap()
     override var burnUnreadTtl: Map<String, Int> = emptyMap()

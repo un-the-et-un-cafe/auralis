@@ -23,6 +23,7 @@ class OmcpApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(chat.omcp.app.security.ScreenSecurity.Callbacks())
         repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this))
         runCatching { repository.restore() }
     }

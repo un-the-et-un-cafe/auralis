@@ -49,9 +49,16 @@ class PrefsAppStore(context: Context) : AppStore {
         get() = prefs.getBoolean("notif_private", false)
         set(v) = prefs.edit().putBoolean("notif_private", v).apply()
 
-    override var privateChats: Set<String>
-        get() = prefs.getStringSet("notif_private_chats", emptySet())!!.toSet()
-        set(v) = prefs.edit().putStringSet("notif_private_chats", v).apply()
+    override var chatPrivateOverride: Map<String, Boolean>
+        get() {
+            val o = JSONObject(prefs.getString("notif_private_override", "{}")!!)
+            return o.keys().asSequence().associateWith { o.getBoolean(it) }
+        }
+        set(v) {
+            val o = JSONObject()
+            v.forEach { (a, b) -> o.put(a, b) }
+            prefs.edit().putString("notif_private_override", o.toString()).apply()
+        }
 
     override var hideOnLockScreen: Boolean
         get() = prefs.getBoolean("notif_hide_lock", false)

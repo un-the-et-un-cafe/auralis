@@ -46,7 +46,7 @@ object MeshNotifications {
             .setContentTitle(c.title)
             .setContentText(c.body)
             .setVisibility(
-                if (c.visibility == LockVisibility.SECRET) NotificationCompat.VISIBILITY_SECRET else NotificationCompat.VISIBILITY_PRIVATE,
+                if (c.visibility == LockVisibility.PRIVATE) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_PUBLIC,
             )
             .setPublicVersion(public)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)

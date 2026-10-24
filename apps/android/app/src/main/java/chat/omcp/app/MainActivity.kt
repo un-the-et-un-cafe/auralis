@@ -1,7 +1,7 @@
 package chat.omcp.app
 
 import android.os.Bundle
-import android.view.WindowManager
+import chat.omcp.app.security.ScreenSecurity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG
@@ -14,6 +14,7 @@ import chat.omcp.app.ui.theme.OmcpTheme
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        ScreenSecurity.secure(this)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as OmcpApplication
@@ -29,11 +30,9 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** FLAG_SECURE while the recovery phrase is visible. */
-    private fun setSecure(on: Boolean) {
-        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    }
+    /** FLAG_SECURE is always on app-wide (SS1); screens may only re-assert it, never clear it. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun setSecure(on: Boolean) = ScreenSecurity.secure(window)
 
     /** Biometric or device PIN before showing the phrase again. */
     private fun deviceAuth(onSuccess: () -> Unit) {

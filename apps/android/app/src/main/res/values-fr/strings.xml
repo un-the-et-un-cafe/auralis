@@ -129,9 +129,9 @@
     <string name="verify_and_chat">Les numéros correspondent — Vérifier et discuter</string>
     <string name="notif_private">Notifications privées</string>
     <string name="notif_private_desc">Masquer l’expéditeur et le contenu : les notifications affichent seulement « Hopla : Nouveau message ». Désactivé par défaut.</string>
-    <string name="notif_private_chat_desc">Masquer l’expéditeur et le contenu pour cette discussion uniquement.</string>
+    <string name="notif_private_chat_desc">Réglage propre à cette discussion : activé masque l’expéditeur et le contenu ; désactivé les affiche même si les notifications privées sont activées globalement.</string>
     <string name="notif_hide_lock">Masquer sur l’écran verrouillé</string>
-    <string name="notif_hide_lock_desc">Ne pas afficher les notifications de messages sur l’écran verrouillé.</string>
+    <string name="notif_hide_lock_desc">L’écran verrouillé affiche seulement « Hopla · Nouveau message ».</string>
     <string name="burn_tap_to_read">Touchez pour lire</string>
     <string name="burn_reading">Ouvert · en cours de suppression</string>
     <string name="burn_sent">Effacer après lecture</string>
@@ -152,4 +152,5 @@
     <string name="burn_ttl_1h">1 h</string>
     <string name="burn_ttl_24h">24 h</string>
     <string name="burn_ttl_7d">7 jours</string>
+    <string name="notif_incoming_call">Appel entrant</string>
 </resources>

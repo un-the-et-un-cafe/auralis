@@ -28,8 +28,7 @@ class NotificationsTest {
         assertEquals(text, n.body)
         assertTrue(n.showAvatar)
         assertFalse(n.private)
-        // Lock screen uses the generic public version by default (VISIBILITY_PRIVATE).
-        assertEquals(LockVisibility.PRIVATE, n.visibility)
+        assertEquals(LockVisibility.PUBLIC, n.visibility)
         assertFalse(n.publicTitle.contains(sender) || n.publicBody.contains(text))
     }
 
@@ -53,9 +52,31 @@ class NotificationsTest {
         assertEquals(sender, render(s, "c1").title)
     }
 
-    @Test fun `hide on lock screen uses secret visibility`() {
+    @Test fun `hide on lock screen shows Hopla New message not blank`() {
         val s = InMemoryAppStore().apply { hideOnLockScreen = true }
-        assertEquals(LockVisibility.SECRET, render(s).visibility)
+        val n = render(s)
+        assertEquals(LockVisibility.PRIVATE, n.visibility)
+        assertEquals("Hopla" to "New message", n.publicTitle to n.publicBody)
+    }
+
+    @Test fun `per-chat override turns private off even when global is on`() {
+        val s = InMemoryAppStore().apply { privateNotifications = true }
+        NotificationPolicy.setChatPrivate(s, "c1", false)
+        assertEquals(sender, render(s, "c1").title)
+        assertEquals("Hopla", render(s, "c2").title)
+        NotificationPolicy.setChatPrivate(s, "c1", null)
+        assertEquals("Hopla", render(s, "c1").title)
+    }
+
+    @Test fun `private calls show Hopla Incoming call with no caller`() {
+        val s = InMemoryAppStore().apply { privateNotifications = true }
+        val n = NotificationPolicy.callContent(s, "c1", sender, "Hopla", "Incoming call")
+        assertEquals("Hopla" to "Incoming call", n.title to n.body)
+        assertFalse(n.showAvatar)
+        assertFalse(listOf(n.title, n.body, n.publicTitle, n.publicBody).any { sender in it })
+        val open = NotificationPolicy.callContent(InMemoryAppStore(), "c1", sender, "Hopla", "Incoming call")
+        assertEquals(sender, open.title)
+        assertEquals("Hopla", open.publicTitle)
     }
 
     @Test fun `N3 push payload carries only the opaque mailbox id`() {
