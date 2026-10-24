@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Add contact</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="contact-add-chooser" data-state="default">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button><h1>Add contact</h1></div>
+    <div class="content"><div class="scroll" style="padding:var(--s4);">
+      <p style="font-size:0.875rem;color:var(--ink-2);margin-bottom:var(--s4);">Meet in person for the strongest check. Each option shows a safety number before you chat.</p>
+      <div class="option" role="button"><div class="opt-ico"><svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></div><div style="flex:1;min-width:0;"><div class="setting-title">Scan QR code</div><div class="setting-desc">Point your camera at their Hopla code</div></div><span class="chev" aria-hidden="true">›</span></div>
+      <div class="option" role="button"><div class="opt-ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg></div><div style="flex:1;min-width:0;"><div class="setting-title">Show my QR code</div><div class="setting-desc">Let them scan you</div></div><span class="chev" aria-hidden="true">›</span></div>
+      <div class="option" role="button"><div class="opt-ico"><svg viewBox="0 0 24 24"><path d="M6 8.3a6 6 0 0 1 0 7.4M9.5 6a10 10 0 0 1 0 12M13 4a14 14 0 0 1 0 16"/></svg></div><div style="flex:1;min-width:0;"><div class="setting-title">Tap phones (NFC)</div><div class="setting-desc">Hold the backs of both phones together</div></div><span class="chev" aria-hidden="true">›</span></div>
+      <div class="section-label">Advanced</div>
+      <div class="option" role="button"><div class="opt-ico"><svg viewBox="0 0 24 24"><path d="M4 7V4h16v3M9 20h6M12 4v16"/></svg></div><div style="flex:1;min-width:0;"><div class="setting-title">Enter PeerID</div><div class="setting-desc">Paste an omcp1:… ID. You’ll need to compare safety numbers separately.</div></div><span class="chev" aria-hidden="true">›</span></div>
+    </div></div>
+  </div>
+  <p class="caption">Contact add chooser</p>
+</body>
+</html>

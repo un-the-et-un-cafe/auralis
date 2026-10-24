@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — File transfer</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="file-transfer" data-state="all-states">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><div style="flex:1;min-width:0;"><h1 style="font-size:1rem;">Alex Rivera</h1><span class="sub">Nearby · last seen just now</span></div><button class="icon-btn" aria-label="Security"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></button></div>
+    <div class="path-banner mixed"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;"></span>Mesh + neighbour’s Internet · encrypted end-to-end</div>
+    <div class="content"><div class="messages" style="gap:2px;padding-top:6px;">
+        <div class="bubble them" style="padding:4px 0;background:transparent;border:none;">
+          <div class="file-card " style="max-width:280px;padding:8px 10px;"><div class="file-icon ">PDF</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">outage-checklist.pdf</div>
+              <div style="font-size:0.75rem;color:var(--ink-2);">1.4 MB · Received</div>
+              <div class="progress " style="margin-top:5px;" role="progressbar" aria-valuenow="100" aria-valuemin="0" aria-valuemax="100"><i style="width:100%"></i></div></div></div>
+          <div class="meta" style="margin-top:2px;">9:25 · Via mesh · Integrity checked</div></div>
+        <div class="bubble me" style="padding:4px 0;background:transparent;">
+          <div class="file-card " style="max-width:280px;padding:8px 10px;"><div class="file-icon img">JPG</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">market-flyer.jpg</div>
+              <div style="font-size:0.75rem;color:var(--ink-2);">Sending · 7.6 of 18.4 MB · ~3 min</div>
+              <div class="progress " style="margin-top:5px;" role="progressbar" aria-valuenow="41" aria-valuemin="0" aria-valuemax="100"><i style="width:41%"></i></div></div><button class="icon-btn" aria-label="Pause sending market-flyer.jpg" style="width:32px;height:32px;align-self:flex-start;"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg></button><button class="icon-btn" aria-label="Cancel sending market-flyer.jpg" style="width:32px;height:32px;align-self:flex-start;"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+          <div class="meta" style="margin-top:2px;">10:04 · Sending via mesh</div></div>
+        <div class="bubble them" style="padding:4px 0;background:transparent;border:none;">
+          <div class="file-card " style="max-width:280px;padding:8px 10px;"><div class="file-icon zip">ZIP</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">route-maps.zip</div>
+              <div style="font-size:0.75rem;color:var(--ink-2);">Receiving · 3.1 of 9.8 MB</div>
+              <div class="progress " style="margin-top:5px;" role="progressbar" aria-valuenow="32" aria-valuemin="0" aria-valuemax="100"><i style="width:32%"></i></div></div><button class="icon-btn" aria-label="Cancel receiving route-maps.zip" style="width:32px;height:32px;align-self:flex-start;"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+          <div class="meta" style="margin-top:2px;">10:05 · Via neighbour’s Internet</div></div>
+        <div class="bubble me" style="padding:4px 0;background:transparent;">
+          <div class="file-card " style="max-width:280px;padding:8px 10px;"><div class="file-icon vid">MP4</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">square-update.mp4</div>
+              <div style="font-size:0.75rem;color:var(--path-queue);">Paused · out of range · 22 of 46 MB</div>
+              <div class="progress paused" style="margin-top:5px;" role="progressbar" aria-valuenow="48" aria-valuemin="0" aria-valuemax="100"><i style="width:48%"></i></div></div><button class="icon-btn" aria-label="Resume now" style="width:32px;height:32px;align-self:flex-start;"><svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg></button></div>
+          <div class="meta" style="margin-top:2px;">10:07 · Waiting for mesh · resumes automatically</div></div>
+        <div class="bubble me" style="padding:4px 0;background:transparent;">
+          <div class="file-card " style="max-width:280px;padding:8px 10px;"><div class="file-icon ">DOC</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">meeting-notes.docx</div>
+              <div style="font-size:0.75rem;color:var(--ink-2);">Queued · 0.3 MB · next in line</div>
+              <div class="progress paused" style="margin-top:5px;" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"><i style="width:0%"></i></div></div></div>
+          <div class="meta" style="margin-top:2px;">10:08 · Queued</div></div>
+        <div class="bubble me" style="padding:4px 0;background:transparent;">
+          <div class="file-card failed" style="max-width:280px;padding:8px 10px;"><div class="file-icon bad">PNG</div><div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">water-points.png</div>
+              <div style="font-size:0.75rem;color:var(--danger);">Couldn’t finish — will retry on mesh</div>
+              <div class="progress failed" style="margin-top:5px;" role="progressbar" aria-valuenow="63" aria-valuemin="0" aria-valuemax="100"><i style="width:63%"></i></div><div class="ft-actions"><button class="btn btn-secondary btn-sm" style="min-height:28px;">Retry</button><button class="btn btn-ghost btn-sm" style="min-height:28px;padding:0 8px;">Cancel</button></div></div></div>
+          <div class="meta" style="margin-top:2px;">10:09 · Failed</div></div>
+      </div>
+      <div class="composer">
+        <button class="icon-btn" aria-label="Attach file" style="width:36px;height:36px;"><svg viewBox="0 0 24 24"><path d="M21.4 11.6l-8.5 8.5a5 5 0 0 1-7.1-7.1l8.5-8.5a3.2 3.2 0 0 1 4.5 4.5L10 17.4a1.4 1.4 0 1 1-2-2l7.1-7.1"/></svg></button>
+        <div class="field">Message</div>
+        <button class="send-btn" aria-label="Send"><svg viewBox="0 0 24 24"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg></button>
+      </div></div>
+  </div>
+  <p class="caption">File transfer — received, sending, receiving, paused, queued, failed</p>
+</body>
+</html>

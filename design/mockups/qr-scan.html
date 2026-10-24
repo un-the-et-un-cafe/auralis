@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Scan QR</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="qr-scan" data-state="scanning">
+    <div class="status-bar" style="background:#0b0f14;color:#fff;">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav" style="background:#0b0f14;border-color:#222b36;color:#fff;"><button class="icon-btn" style="color:#fff;" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button><h1>Scan QR code</h1></div>
+    <div class="camera" role="img" aria-label="Camera viewfinder">
+      
+      <div class="viewfinder"><i></i></div>
+      <p class="cam-hint">Point at their Hopla QR code. It scans automatically.</p>
+      <p class="cam-hint" style="font-size:0.8125rem;color:#c3ccd6;margin-top:var(--s2);">Too dark? Turn on the torch.</p>
+      <div class="cam-bar">
+        <div><div class="cam-btn" role="button" aria-label="Torch" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M7 2h10l-2 6v12a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V8z"/><path d="M12 12v3"/></svg></div><div class="cam-label">Torch</div></div>
+        <div><div class="cam-btn" role="button" aria-label="Choose image from gallery"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div><div class="cam-label">From photo</div></div>
+        <div><div class="cam-btn" role="button" aria-label="Show my QR code"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg></div><div class="cam-label">My code</div></div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Scanning — viewfinder, torch, hints</p>
+  <div class="phone" data-screen="qr-scan" data-state="not-omcp">
+    <div class="status-bar" style="background:#0b0f14;color:#fff;">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav" style="background:#0b0f14;border-color:#222b36;color:#fff;"><button class="icon-btn" style="color:#fff;" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button><h1>Scan QR code</h1></div>
+    <div class="camera" role="img" aria-label="Camera viewfinder">
+      <div class="toast" role="alert" style="top:12px;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;margin-top:1px;" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><div><strong style="display:block;">Not a Hopla contact code</strong>This QR isn’t an OMCP identity code. Ask them to open Add contact › Show my QR code.</div></div>
+      <div class="viewfinder bad"><i></i></div>
+      <p class="cam-hint">Keep scanning…</p>
+      <p class="cam-hint" style="font-size:0.8125rem;color:#c3ccd6;margin-top:var(--s2);">Too dark? Turn on the torch.</p>
+      <div class="cam-bar">
+        <div><div class="cam-btn on" role="button" aria-label="Torch" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M7 2h10l-2 6v12a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V8z"/><path d="M12 12v3"/></svg></div><div class="cam-label">Torch</div></div>
+        <div><div class="cam-btn" role="button" aria-label="Choose image from gallery"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></div><div class="cam-label">From photo</div></div>
+        <div><div class="cam-btn" role="button" aria-label="Show my QR code"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg></div><div class="cam-label">My code</div></div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Error — not an OMCP code (torch on)</p>
+</body>
+</html>

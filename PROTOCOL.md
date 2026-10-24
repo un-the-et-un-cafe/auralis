@@ -187,7 +187,7 @@ All algorithms are named in the handshake and MAY be upgraded via negotiation.
 
 1. Sender computes `content_hash = BLAKE3(plaintext)`.
 2. Encrypts file with a random **Content Key** (256-bit); wraps Content Key to each recipient via HPKE hybrid.
-3. Splits ciphertext into chunks (default 16 KiB) with per-chunk AEAD; advertises `file-meta` then serves chunks on request.
+3. Splits ciphertext into chunks (default 64 KiB; see §22.7(7)) with per-chunk AEAD; advertises `file-meta` then serves chunks on request.
 4. Mesh peers MAY cache encrypted chunks (LRU). Gateways MAY cache for Internet recipients. Caches never hold Content Keys unless they are intended recipients.
 5. Integrity: recipient verifies `BLAKE3(plaintext)` after decrypt.
 
@@ -289,8 +289,8 @@ EnvelopeV1 {
 5. **Auth:** No unsigned identity claims. Capability statements are signed.
 6. **Replay:** `envelope_id` + timestamp window (±10 minutes skewed tolerance with logical clocks) + AEAD.
 7. **Padding:** Optional traffic padding profiles (`off`, `low`, `medium`) to mitigate size side channels on gateways.
-8. **Screenshots / notifications:** OS notification content MUST show generic “New OMCP message” unless user opts into revealing previews (off by default).
-9. **Backups:** Encrypted backups only; recovery key is 24-word BIP-39-like phrase or platform secure recovery; cloud backup is optional and E2EE.
+8. **Screenshots / notifications:** Clients SHOULD show sender and preview by default and MUST offer a "Private notifications" mode that shows only a generic "New message" (no sender, no content). Payloads are decrypted on-device only; gateways and push relays never see plaintext.
+9. **Backups:** Encrypted backups only; recovery key is 24-word BIP-39-like phrase or platform secure recovery; cloud backup is optional and E2EE (client-side encrypted before upload; see apps/REQUIREMENTS.md "Onboarding & recovery backup").
 
 ---
 
@@ -586,3 +586,147 @@ Within each Noise handshake message that carries ML-KEM material:
 Rationale: MixHash MUST bind `ek`/`ct` before AEAD seal so an adversary cannot strip or reorder PQ material without failing authentication. Implementations MUST NOT place `ek`/`ct` after the sealed payload.
 
 This matches commit `9e90d33` on PR #1.
+
+## 22. Scalable sync and data efficiency (v0.2, normative unless marked)
+
+**Goal:** a device's sync traffic grows with **its own conversations**, not with the size of the network. Targets: ≤ 5 MB/day of background mesh traffic for a typical user (50 contacts, 5 groups) in a 10 000-node mesh; ≤ 2 % of bandwidth spent on sync metadata; and no device stores or forwards more than its configured budget.
+
+### 22.1 Stop flooding: interest-based routing
+- **Mailbox tags.** Every 1:1 chat and MLS group derives a rotating 8-byte tag per epoch (6 h): `tag = BLAKE2b-64(exporter_secret, "OMCP-tag" || epoch)`. Envelopes carry the tag (this replaces the sealed address for routing purposes), and only members can compute it, so outsiders can't link tags across epochs.
+- **Interest digests.** Each node advertises a compact **cuckoo filter** of the tags it wants (its own plus, optionally, *carry* tags for nearby friends) to its 1-hop neighbours. The filter is padded with decoy entries to hide the real count.
+- **Forwarding rule.** A node forwards an envelope only to neighbours whose digest matches the tag, or, if nothing matches, to at most **k = 2** neighbours chosen by spray-and-wait (binary spray with L = 8 copies total). This replaces epidemic flooding from §8.3 once the node sees more than 32 peers. Small meshes (≤ 32) may keep flooding.
+- **Adaptive TTL**: `ttl_hops = clamp(ceil(log2(estimated_mesh_size)) + 2, 3, 12)`, where the mesh size is estimated with HyperLogLog over the peer IDs seen.
+
+### 22.2 Sync without resending: set reconciliation
+- When two peers meet, they reconcile **only the tags both care about** using **range-based set reconciliation** (Negentropy-style) over `(timestamp, envelope_id)`. The cost is O(d · log n), where d is the number of envelopes that differ. If they already agree, the exchange is about 100 bytes.
+- **Fingerprints**: 16-byte XOR+SHA-256 hashes of each range. This uses up to 3 round trips on BLE and 1 over the Internet.
+- **Watermarks**: each chat keeps a per-member, signed `high-water mark` (Lamport clock). A returning device asks "everything after X" instead of re-listing history.
+
+### 22.3 Carry less
+- **Media is lazy and content-addressed.** Messages carry only a 32-byte hash, a key and a blurhash (≤ 40 B). Blobs are chunked (64 KiB, BLAKE3 tree) and fetched on demand from the nearest holder, with chunks resumed and de-duplicated. Relays never fetch media they weren't asked for.
+- **Compression** (MAY): the inner payload is compressed with zstd using the static, public OMCP dictionary *before* encryption. To limit length leaks (CRIME/BREACH-style), the following are **MUST** requirements:
+  - **Padding is mandatory** for every compressed or uncompressed ciphertext, using buckets of 256 B / 1 KiB / 4 KiB / 16 KiB, and above that the next multiple of 16 KiB.
+  - **Never compress secrets together with attacker-influenced content** in one compression context. Key material, tokens, recovery data and control messages are never compressed. Quoted or forwarded third-party text is compressed in a separate frame from the user's own text, or not at all.
+  - Dictionaries are static and public; adaptive or shared dictionaries trained on user data MUST NOT be used.
+  - Senders MUST disable compression for burn-after-read and Nearby messages.
+- **Delta updates**: edits, reactions and read receipts are small ops (≤ 64 B) referencing the message ID. Receipts and typing indicators are **batched** (one per 5 s per chat) and never relayed more than 2 hops.
+- **Group fan-out**: one MLS ciphertext per message for the whole group, never one per member. In communities > 256 members, posts propagate along a **tree** (Plumtree: eager push to 3 peers, lazy hashes to the rest).
+
+### 22.4 Budgets and fairness (client, SHOULD)
+- A per-device **relay budget**: default 50 MB of storage and 20 MB a day of forwarding on battery and cellular, and 500 MB and unlimited on Wi-Fi with charging. When it's full, envelopes are evicted by `(priority flag, expires_at, hop count)`.
+- **Store-and-forward expiry**: default 72 h, with a maximum of 7 days. Burn envelopes use their own `expires_at`.
+- **Metered awareness**: gateways sync over the Internet only on unmetered links unless the user allows mobile data. On cellular, only pending outbound messages and the envelopes this device is a member of are synced.
+- **Rate limiting**: each neighbour gets a token bucket (default 64 envelopes/s) so a single noisy peer can't flood the mesh.
+
+### 22.5 Internet offload
+- When any gateway is reachable, peers prefer the **gateway rendezvous mailbox** (indexed by tag) over multi-hop BLE relaying: one upload and one download, instead of N hops. BLE gossip stays the fallback when the Internet is down.
+
+### 22.6 Acceptance tests
+- SY1: a simulation (ns-3 or similar) with 10 000 nodes and 1 % of nodes active: the median per-node sync traffic is ≤ 5 MB a day, and it grows by less than 1.5× from 1 000 to 10 000 nodes.
+- SY2: two peers that are already in sync exchange ≤ 256 bytes on reconnect.
+- SY3: a peer offline for 7 days catches up on only its own chats; traffic is ≤ 1.2× the size of the missed payloads.
+- SY4: delivery rate ≥ 98 % within 10 min for a 6-hop path at 30 % churn (no worse than flooding).
+- SY5: no relay ever exceeds its configured budget; eviction order follows §22.4.
+- SY6: tags from different epochs can't be linked by a non-member (a statistical test over 10⁶ tags).
+
+## 23. Moderation and reputation (v0.2)
+
+**Goal:** bad communities and streams can be marked by the people who see them, but **good communities with strong support from their own participants are hard to take down**, because coordinated report brigades from outsiders don't work. Everything is computed by clients from signed, gossiped data; there's no central authority.
+
+### 23.1 Layers (all apply together)
+1. **Community admins**: remove posts, mute or ban members, approve joins, slow mode (§20).
+2. **Community reports**: reports are weighted. When the weighted score passes a threshold, the community or stream is marked **Reported** (§23.4).
+3. **Reputation**: the threshold grows with a community's reputation among its own participants (§23.3).
+4. **Moderation lists you choose** (labelers): signed lists of flagged IDs that any party can publish. Hopla ships a default list, and users can add or remove lists.
+5. **Hash matching on the device** for known illegal material (CSAM hash lists), **limited to public community, channel and livestream media** as set out in §23.8. A match skips reputation. Private 1:1 and group chats are never scanned.
+
+### 23.2 Reporter weight `w` (0–1)
+Every report is a signed `REPORT{target, reason, epoch}` sent under the reporter's **per-community pseudonym key** (so it can't be linked to their main identity). Its weight is
+`w = age_factor × activity_factor × accuracy × independence`
+- **age_factor**: 0 if the account is less than 7 days old, rising linearly to 1 at 90 days.
+- **activity_factor**: whether the reporter has real activity (sent messages, contacts with verified keys). Accounts with no activity count for 0.1.
+- **accuracy**: starts at 0.5. It goes up when the reporter's past reports were later upheld and down when they were dismissed on appeal.
+- **independence**: reports from accounts that are tightly linked to each other (the same join wave, mutual contacts, the same gateway or BLE cluster) are grouped and counted with √n weight, so 100 coordinated accounts count about as much as 10.
+- **Insiders vs outsiders**: reports from people who have actually participated (joined, viewed for ≥ 2 min, posted) count 1×. Reports from people who never participated count 0.25×.
+- Each reporter can file at most 10 reports a day, and each new report in a day weighs less than the last (1/n).
+
+### 23.3 Community and stream reputation `R` (0–1)
+Computed per community, and per stream host, from **participant attestations**:
+- **Endorsements**: members can endorse a community (♥ "Vouch") once per 30 days. Endorsements are weighted by the endorser's own trust score (EigenTrust over the contact graph, seeded by verified-key contacts), so fake accounts add almost nothing.
+- **Retention**: the share of members still active after 30 days.
+- **Engagement quality**: reactions and replies per active member, with reports from members subtracted.
+- **Age and track record**: how long the community has existed, how many reports were dismissed (this raises R) and how many were upheld (this lowers R strongly).
+- `R = 0.35·endorse + 0.25·retention + 0.15·engagement + 0.15·age + 0.10·track_record`, smoothed over 14 days so a sudden attack can't move it quickly.
+- Attestations are signed by participant pseudonyms and aggregated as counts plus a Merkle root, so there's no public member list.
+
+### 23.4 Thresholds and effects
+- **Report threshold**: `T = max(25, 0.05·active_members) × (1 + 9·R²)`. A new community (R ≈ 0) needs 25 weighted reports, while a well-loved one (R = 0.9) needs about 8× as many.
+- **Counter-signal**: participants can say "this community is fine" in response to reports. Their votes are weighted the same way and **subtracted** from the report score (capped at 50% of it).
+- **Stages**:
+  - `score ≥ 0.5·T`: **Under review**. Admins are alerted, and nothing changes for users.
+  - `score ≥ T`: **Reported**. It's hidden from search, recommendations and Nearby. Images, videos and livestream media are **blocked**. Text stays readable behind a warning. Existing members keep access, but new members see a warning before joining.
+  - `score ≥ 3·T` **and** upheld by at least one labeler you follow: **Restricted**. Only text is shown, and new joins are blocked.
+- **Livestreams** react faster: weighted reports from viewers during the stream are compared against `0.3·T` **for the host's R**. If that's exceeded, the stream is blurred for new viewers right away, and current viewers get a "Continue watching?" prompt.
+- **Decay**: reports lose half their weight every 14 days, so a community recovers if nothing new is reported.
+
+### 23.5 Appeals
+- The owner can appeal once per 30 days. A **jury of 15** members is chosen at random from verified, independent users who have neither reported nor endorsed the community, and they vote within 72 h. A ⅔ "fine" result clears the Reported state, lowers the reporters' accuracy and raises R's track record. A ⅔ "bad" result does the opposite.
+- Jury votes are signed and published as aggregates, so the outcome can be verified.
+
+### 23.6 Abuse resistance (summary)
+| Attack | Defence |
+|---|---|
+| Report brigade from fake accounts | age/activity weights, √n clustering, outsider 0.25× |
+| Fake endorsements to protect a bad community | endorsement weighted by EigenTrust; upheld reports cut R strongly; CSAM hash matches ignore R |
+| Gaming the jury | random independent jurors with verified keys; ⅔ majority needed |
+| Slow attack over time | 14-day smoothing of R; reports lose weight over time |
+
+### 23.7 Acceptance tests
+- MR1: In simulation, 500 fresh Sybil accounts reporting a community with R = 0.8 don't reach `T`.
+- MR2: 40 real, independent participants reporting a new community (R = 0.1) reach Reported within 1 h.
+- MR3: when a community is Reported, its media is blocked on every compliant client within 10 min (gossip propagation).
+- MR4: a CSAM hash match on public community media blocks it no matter what R is; private chats are never scanned.
+- MR5: a successful appeal clears Reported and raises the community's track record.
+- MR6: no attestation or report reveals a reporter's main identity.
+
+### 22.7 Decisions from implementation review (v0.2.1)
+1. **Carry tags (normative).** A node that has delivered or forwarded an envelope for tag *t* within the last hour MAY advertise *t* as a **carry tag** with a hop-distance `d` (distance-vector: it advertises `d+1` of the best neighbour). Carry tags are kept for at most 1 h and limited to 64 entries per node, and they share the decoy-padded digest. Forwarding: (a) to any neighbour that wants *t*; else (b) to the neighbour with the lowest carry distance `d` for *t*; else (c) spray-and-wait (k = 2, L = 8). This fixes delivery on static multi-hop paths (SY4).
+2. **Metadata budget (rephrased).** When the node is active, sync metadata is ≤ 2 % of the payload bytes delivered. When it's idle, total overhead is ≤ 1 MB/day per node. Hello interval: 1 s on neighbourhood change, doubling up to 60 s when stable. Digests are sent only as **deltas on change**, plus a full refresh every 5 min.
+3. **Tags vs blinded rendezvous labels.** Keep both. The mesh uses the 8-byte tag; gateway rendezvous uses a 32-byte label `HKDF-SHA-384(tag_secret, "OMCP-rdv" || epoch, L=32)`.
+4. **Tag on the wire.** The tag is carried in `header_aad` as TLV type `0x54` (len 8). TLV registry: see §21.8.
+5. **1:1 chats are 2-member MLS groups.** Every chat uses MLS (with the PQ extension). The tag `exporter_secret` is the MLS exporter, `MLS-Exporter("OMCP-tag", epoch, 32)`. Noise stays per hop (link layer).
+6. **Opaque media locators.** Media is indexed by `locator = BLAKE3-keyed(media_key, "OMCP-loc" || content_hash)`, never by the plaintext content hash, to prevent confirmation-of-file attacks. Relays only ever see locators.
+7. **Chunk size: 64 KiB** for all blobs (this replaces the 16 KiB default in §7). BLE framing (§10.2) fragments as needed.
+8. **"Unlinkable" (SY6).** Tags from different epochs are unlinkable if, for any non-member distinguisher working on ≥ 10⁶ tag pairs, the advantage is < 0.005 and the test statistic |z| < 5. These are the pass thresholds for SY6.
+
+9. **Per-recipient sub-tags (replaces the forwarding order in item 1).** Each member *m* of a chat or group has a sub-tag per epoch, `subtag_m = BLAKE2b-64(exporter_secret, "OMCP-sub" || leaf_index_m || epoch)`. Nodes advertise only their own sub-tags in their want-digest, and carry state is kept per sub-tag. An envelope for a 1:1 chat or a small group (≤ 8 members) carries the recipients' sub-tags (TLV `0x56`, 8 B each). Groups over 8 members use the chat tag and Plumtree (§22.3). Forwarding: (a) to neighbours that want a sub-tag; else (b) to the lowest carry distance; else (c) **scoped flood** within `ttl_hops` (it replaces spray-and-wait for cold starts and missing carry state). SY4 requires 100 % delivery, cold and warm, with fewer transmissions than pure flooding.
+10. **Metadata metric (replaces 2).** *Per-message metadata* is the bytes needed to deliver one envelope beyond its ciphertext (header, routing TLVs, reconciliation exchanges caused by it). The averaged requirement is **≤ 256 B per delivered envelope, or ≤ 10 % of the ciphertext, whichever is larger**. Periodic hellos and digests count only towards the idle budget.
+11. **Idle budget and refresh (replaces the 5-min refresh in 2).** Digests are sent as deltas on change. A full digest is sent **only to a new neighbour, on request** (`DIGEST_REQ`), and as a safety refresh every 30 min. Idle overhead is ≤ 1 MB/day per node with up to 32 neighbours, and above that the hello interval backs off further (up to 120 s).
+
+12. **Compact beacon frames (normative).** Hello beacons and digest requests are 6-byte link-control frames: `type (u8) | flags (u8) | digest_id (u32, big-endian)`. `HELLO` = `0x48`; `DIGEST_REQ` = `0x52`, where `digest_id` is the digest being requested (0 = full). `flags` bit0 = `HAS_DELTA` (a delta digest follows), and bits 1–7 are reserved (0). `digest_id` = BLAKE2b with a 4-byte output (digest length parameter `nn = 4`, unkeyed, no salt or personalization) over the canonical encoding of the current want-digest, read as a big-endian u32. This is *not* a truncation of BLAKE2b-512. If the result is 0 (reserved for "full" in `DIGEST_REQ`), use 1. With these frames the idle budget is met with 32 neighbours (≈ 0.83 MB/day in simulation).
+
+### 21.8 `header_aad` TLV registry
+| Type | Name | Length | Section |
+|---|---|---|---|
+| `0x01`–`0x3F` | reserved for core | — | §21 |
+| `0x54` | `mailbox_tag` | 8 | §22.1 |
+| `0x56` | `recipient_subtags` | 8·n | §22.7(9) |
+| `0x55`, `0x57`–`0x7F` | unassigned (extension process §16) | — | — |
+| `0x80`–`0xFF` | experimental / private use | — | — |
+
+
+### 21.9 Link-control frame types
+| Type | Name | Size | Section |
+|---|---|---|---|
+| `0x48` | `HELLO` | 6 B | §22.7(12) |
+| `0x52` | `DIGEST_REQ` | 6 B | §22.7(12) |
+| other | unassigned (extension process §16) | — | — |
+
+### 23.8 Clarifications (v0.2.1)
+1. **Hash matching scope and governance.**
+   - Scope: only media posted to **public** communities, channels and livestreams (content anyone can join and see), and only when it's displayed or re-shared. Private 1:1 chats, private groups and private communities are **never scanned**, and no content leaves the device for scanning.
+   - List: perceptual and cryptographic hashes from a recognised hash-sharing programme for known CSAM, which needs an agreement with the provider. The list is distributed as a signed, versioned set (Ed25519, signature checked by the client, a transparency log of list versions), and updates are fetched weekly over the gateway or gossip.
+   - False positives: a match blurs the media locally and stops it from being re-shared. Nothing is reported automatically. The match goes to the community admins and the default moderator service, which is run by a human, for review. Only a confirmed match leads to the Reported or Restricted state, and only on that basis.
+   - Legal basis: **open item, needs legal review before launch** (EU rules on voluntary CSAM detection, the DSA, GDPR, and app store requirements). The feature ships behind a flag until that's done.
+2. **Where reputation lives.** Each client computes R and report scores **locally** from signed attestations (endorsements, reports, counter-votes, retention counts). Attestations are gossiped like envelopes, using the community's mailbox tag, and stored with the community's state. For public discovery, any node may publish a signed `REPUTATION_SUMMARY` (counts plus a Merkle root over the attestations), and clients can check it against a sample of attestations. No single server is trusted.
+3. **Sybil-resistant jury.** Candidates are drawn from a pool of accounts with an EigenTrust score above the 50th percentile, an age of ≥ 90 days and verified keys, excluding anyone who has reported, endorsed or counter-voted on the community. Selection uses a VRF seeded with `H(appeal_id || epoch_beacon)`, where the beacon is the hash of the latest gossip-checkpointed epoch. At most 1 juror is taken per trust cluster (§23.2 independence). Anyone can verify the selection and the signed votes.
