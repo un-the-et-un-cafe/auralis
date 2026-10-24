@@ -45,9 +45,17 @@ class PrefsAppStore(context: Context) : AppStore {
             prefs.edit().putString("contacts", arr.toString()).apply()
         }
 
-    override var notificationPreviews: Boolean
-        get() = prefs.getBoolean("notif_previews", false)
-        set(v) = prefs.edit().putBoolean("notif_previews", v).apply()
+    override var privateNotifications: Boolean
+        get() = prefs.getBoolean("notif_private", false)
+        set(v) = prefs.edit().putBoolean("notif_private", v).apply()
+
+    override var privateChats: Set<String>
+        get() = prefs.getStringSet("notif_private_chats", emptySet())!!.toSet()
+        set(v) = prefs.edit().putStringSet("notif_private_chats", v).apply()
+
+    override var hideOnLockScreen: Boolean
+        get() = prefs.getBoolean("notif_hide_lock", false)
+        set(v) = prefs.edit().putBoolean("notif_hide_lock", v).apply()
 
     override var gatewayEnabled: Boolean
         get() = prefs.getBoolean("gw_on", false)

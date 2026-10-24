@@ -16,6 +16,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.ui.Alignment
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.material3.Switch
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -43,6 +49,8 @@ fun SecurityCentreScreen(
     suiteLabel: String,
     onSetVerified: (Boolean) -> Unit,
     onBack: () -> Unit,
+    privateNotifications: Boolean = false,
+    onSetPrivateNotifications: (Boolean) -> Unit = {},
 ) {
     val c = LocalOmcpColors.current
     Scaffold(
@@ -125,6 +133,23 @@ fun SecurityCentreScreen(
                 // TODO(M5.1): session reset + block list.
                 OutlinedButton(onClick = {}, enabled = false, modifier = Modifier.padding(top = 12.dp)) {
                     Text("Reset session")
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(16.dp),
+            ) {
+                var priv by remember { mutableStateOf(privateNotifications) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.notif_private), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.notif_private_chat_desc), color = c.ink2, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Switch(checked = priv, enabled = contact != null, onCheckedChange = { priv = it; onSetPrivateNotifications(it) })
                 }
             }
 

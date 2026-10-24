@@ -34,15 +34,18 @@ import chat.omcp.app.ui.theme.LocalOmcpColors
 fun YouScreen(
     identity: Identity?,
     suiteLabel: String,
-    previews: Boolean,
-    onSetPreviews: (Boolean) -> Unit,
+    privateNotifications: Boolean,
+    onSetPrivateNotifications: (Boolean) -> Unit,
+    hideOnLockScreen: Boolean,
+    onSetHideOnLockScreen: (Boolean) -> Unit,
     onGateway: () -> Unit,
     onSecurity: () -> Unit,
     onBackup: () -> Unit,
     onMyQr: () -> Unit,
 ) {
     val c = LocalOmcpColors.current
-    var prev by remember { mutableStateOf(previews) }
+    var priv by remember { mutableStateOf(privateNotifications) }
+    var hideLock by remember { mutableStateOf(hideOnLockScreen) }
     Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.tab_you)) }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.padding(16.dp)) {
@@ -62,9 +65,14 @@ fun YouScreen(
             Item(stringResource(R.string.security_centre), "Safety numbers, session, block list", onSecurity)
             Item(stringResource(R.string.backup_settings_title), stringResource(R.string.backup_settings_desc), onBackup)
             ListItem(
-                headlineContent = { Text(stringResource(R.string.notif_previews)) },
-                supportingContent = { Text(stringResource(R.string.notif_previews_desc)) },
-                trailingContent = { Switch(checked = prev, onCheckedChange = { prev = it; onSetPreviews(it) }) },
+                headlineContent = { Text(stringResource(R.string.notif_private)) },
+                supportingContent = { Text(stringResource(R.string.notif_private_desc)) },
+                trailingContent = { Switch(checked = priv, onCheckedChange = { priv = it; onSetPrivateNotifications(it) }) },
+            )
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.notif_hide_lock)) },
+                supportingContent = { Text(stringResource(R.string.notif_hide_lock_desc)) },
+                trailingContent = { Switch(checked = hideLock, onCheckedChange = { hideLock = it; onSetHideOnLockScreen(it) }) },
             )
             ListItem(
                 headlineContent = { Text("About") },

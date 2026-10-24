@@ -8,8 +8,12 @@ interface AppStore {
     var recoveryPhrase: String?
     var displayName: String?
     var contacts: List<Contact>
-    /** Product decision: notification previews off by default. */
-    var notificationPreviews: Boolean
+    /** Global "Private notifications" (REQUIREMENTS Notifications v0.1.2). Off by default: sender + preview shown. */
+    var privateNotifications: Boolean
+    /** Chat ids with per-chat "Private notifications" on. */
+    var privateChats: Set<String>
+    /** Hide notification on the lock screen (VISIBILITY_SECRET). Off by default. */
+    var hideOnLockScreen: Boolean
     var gatewayEnabled: Boolean
     /** Off = Wi-Fi only (default). Metered cellular warns, never blocks. */
     var gatewayAllowMobile: Boolean
@@ -24,7 +28,9 @@ class InMemoryAppStore : AppStore {
     override var recoveryPhrase: String? = null
     override var displayName: String? = null
     override var contacts: List<Contact> = emptyList()
-    override var notificationPreviews = false
+    override var privateNotifications = false
+    override var privateChats: Set<String> = emptySet()
+    override var hideOnLockScreen = false
     override var gatewayEnabled = false
     override var gatewayAllowMobile = false
     override var backupMethods: Set<String> = emptySet()

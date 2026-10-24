@@ -32,6 +32,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import chat.omcp.app.R
+import chat.omcp.app.notify.NotificationPolicy
 import chat.omcp.app.backup.CloudBackupStore
 import chat.omcp.app.data.BackupGate
 import chat.omcp.app.data.MeshRepository
@@ -150,8 +151,10 @@ fun OmcpRoot(
                 YouScreen(
                     identity = repo.core.identity(),
                     suiteLabel = repo.core.suiteLabel,
-                    previews = repo.appStore.notificationPreviews,
-                    onSetPreviews = { repo.appStore.notificationPreviews = it },
+                    privateNotifications = repo.appStore.privateNotifications,
+                    onSetPrivateNotifications = { repo.appStore.privateNotifications = it },
+                    hideOnLockScreen = repo.appStore.hideOnLockScreen,
+                    onSetHideOnLockScreen = { repo.appStore.hideOnLockScreen = it },
                     onGateway = { nav.navigate(Routes.Gateway) },
                     onSecurity = { contacts.firstOrNull()?.let { nav.navigate(Routes.security(it.id)) } },
                     onBackup = { nav.navigate(Routes.Backup) },
@@ -172,6 +175,8 @@ fun OmcpRoot(
                     contact = contacts.firstOrNull { it.id == id },
                     suiteLabel = repo.core.suiteLabel,
                     onSetVerified = { v -> id?.let { repo.setVerified(it, v) } },
+                    privateNotifications = id != null && id in repo.appStore.privateChats,
+                    onSetPrivateNotifications = { v -> id?.let { NotificationPolicy.setChatPrivate(repo.appStore, it, v) } },
                     onBack = { nav.popBackStack() },
                 )
             }

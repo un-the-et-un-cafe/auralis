@@ -86,9 +86,7 @@
     <string name="my_qr_privacy">Your code contains only your public PeerID — no phone number or location.</string>
     <string name="notif_channel_mesh">Mesh status</string>
     <string name="notif_channel_messages">Messages</string>
-    <string name="notif_new_message">New Hopla message</string>
-    <string name="notif_previews">Notification previews</string>
-    <string name="notif_previews_desc">Off by default: notifications say “New Hopla message”.</string>
+    <string name="notif_new_message">New message</string>
     <string name="onb_24_words">24 words, separated by spaces</string>
     <string name="onb_backup_found">We found a backup from %1$s (%2$s). Enter its backup password to restore.</string>
     <string name="onb_backup_password">Backup password</string>
@@ -129,4 +127,9 @@
     <string name="scan_again">Scan again</string>
     <string name="scan_theirs">Scan theirs</string>
     <string name="verify_and_chat">Numbers match — Verify &amp; chat</string>
+    <string name="notif_private">Private notifications</string>
+    <string name="notif_private_desc">Hide sender and content: notifications only say “Hopla: New message”. Off by default.</string>
+    <string name="notif_private_chat_desc">Hide sender and content for this chat only.</string>
+    <string name="notif_hide_lock">Hide on lock screen</string>
+    <string name="notif_hide_lock_desc">Don’t show message notifications on the lock screen.</string>
 </resources>

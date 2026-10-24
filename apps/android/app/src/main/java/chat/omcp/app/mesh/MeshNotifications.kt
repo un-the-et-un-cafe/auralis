@@ -10,8 +10,10 @@ import androidx.core.app.NotificationManagerCompat
 import chat.omcp.app.R
 import chat.omcp.app.core.IncomingText
 import chat.omcp.app.data.MeshRepository
+import chat.omcp.app.notify.LockVisibility
+import chat.omcp.app.notify.NotificationPolicy
 
-/** Message notifications. Previews are **off by default**: generic "New Hopla message". */
+/** Message notifications: sender + preview by default; "Private notifications" shows only a generic line. */
 object MeshNotifications {
     const val CHANNEL_MESH = "mesh"
     const val CHANNEL_MESSAGES = "messages"
@@ -26,21 +28,29 @@ object MeshNotifications {
         )
     }
 
-    /** Pure: what the notification shows given the previews setting. */
-    fun content(ctx: Context, previews: Boolean, sender: String, text: String): Pair<String, String> =
-        if (previews) sender to text else ctx.getString(R.string.app_name) to ctx.getString(R.string.notif_new_message)
-
     fun onMessage(ctx: Context, repo: MeshRepository, msg: IncomingText) {
         if (ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val sender = repo.contact(msg.contactId)?.displayName ?: "Contact"
-        val (title, body) = content(ctx, repo.appStore.notificationPreviews, sender, msg.text)
-        val n = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+        val c = NotificationPolicy.content(
+            repo.appStore, msg.contactId, sender, msg.text,
+            ctx.getString(R.string.app_name), ctx.getString(R.string.notif_new_message),
+        )
+        val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_mesh)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setAutoCancel(true)
+            .setContentTitle(c.publicTitle)
+            .setContentText(c.publicBody)
             .build()
-        NotificationManagerCompat.from(ctx).notify(msg.contactId.hashCode(), n)
+        val b = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_stat_mesh)
+            .setContentTitle(c.title)
+            .setContentText(c.body)
+            .setVisibility(
+                if (c.visibility == LockVisibility.SECRET) NotificationCompat.VISIBILITY_SECRET else NotificationCompat.VISIBILITY_PRIVATE,
+            )
+            .setPublicVersion(public)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+        // TODO(avatar): setLargeIcon(contact avatar) only when c.showAvatar; no avatars stored yet.
+        NotificationManagerCompat.from(ctx).notify(msg.contactId.hashCode(), b.build())
     }
 }

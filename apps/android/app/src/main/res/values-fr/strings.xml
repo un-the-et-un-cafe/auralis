@@ -86,9 +86,7 @@
     <string name="my_qr_privacy">Votre code ne contient que votre PeerID public — ni numéro ni position.</string>
     <string name="notif_channel_mesh">État du mesh</string>
     <string name="notif_channel_messages">Messages</string>
-    <string name="notif_new_message">Nouveau message Hopla</string>
-    <string name="notif_previews">Aperçus des notifications</string>
-    <string name="notif_previews_desc">Désactivés par défaut : « Nouveau message Hopla ».</string>
+    <string name="notif_new_message">Nouveau message</string>
     <string name="onb_24_words">24 mots séparés par des espaces</string>
     <string name="onb_backup_found">Nous avons trouvé une sauvegarde de %1$s (%2$s). Saisissez son mot de passe pour restaurer.</string>
     <string name="onb_backup_password">Mot de passe de sauvegarde</string>
@@ -129,4 +127,9 @@
     <string name="scan_again">Scanner à nouveau</string>
     <string name="scan_theirs">Scanner le sien</string>
     <string name="verify_and_chat">Les numéros correspondent — Vérifier et discuter</string>
+    <string name="notif_private">Notifications privées</string>
+    <string name="notif_private_desc">Masquer l’expéditeur et le contenu : les notifications affichent seulement « Hopla : Nouveau message ». Désactivé par défaut.</string>
+    <string name="notif_private_chat_desc">Masquer l’expéditeur et le contenu pour cette discussion uniquement.</string>
+    <string name="notif_hide_lock">Masquer sur l’écran verrouillé</string>
+    <string name="notif_hide_lock_desc">Ne pas afficher les notifications de messages sur l’écran verrouillé.</string>
 </resources>

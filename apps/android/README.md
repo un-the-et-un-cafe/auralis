@@ -84,3 +84,10 @@ export ANDROID_HOME=~/android-sdk ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.124790
 
 `RustBridgeTest` loads the host `target/debug/libomcp_ffi.so` through JNA (skipped if absent).
 App icon is a **placeholder** (redesign pending).
+
+## Notifications (v0.1.2)
+- Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Hopla: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.
+- Push: `notify/PushReceiver.kt` defines a content-free `PushPayload` (only the opaque mailbox id; extra keys are rejected) (N3). `StubPushReceiver` stands in for FCM since there's no Firebase project yet, so no `FirebaseMessagingService` is registered.
+- Tests: `NotificationsTest` (N1–N3, policy level). N2 history/lock screen is covered by the policy plus the public version; it hasn't been checked on a device.
+- Not done yet: real FCM integration and gateway token registration; avatars in notifications; quiet hours, per-chat mute and per-community levels; call, mention and livestream notifications.
+- Deferred to iOS (M6): APNs content-free push, the Notification Service Extension that decrypts on-device, `hiddenPreviewsBodyPlaceholder`, and iOS N1–N3.
