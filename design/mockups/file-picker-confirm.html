@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Send file</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="file-picker-confirm" data-state="confirm">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><div style="flex:1;min-width:0;"><h1 style="font-size:1rem;">Alex Rivera</h1><span class="sub">Nearby · last seen just now</span></div></div>
+    <div class="path-banner mesh"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;"></span>Via mesh · 2 hops · encrypted end-to-end</div>
+    <div class="content"><div class="messages"><div class="day">Today</div><div class="bubble them">Can you send the flyer?<div class="meta">10:02</div></div></div></div>
+    <div class="sheet-scrim" aria-hidden="true"></div>
+    <div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div class="setting-title" style="font-size:1.0625rem;">Send file to Alex?</div>
+        <div class="file-card" style="max-width:none;margin-top:var(--s4);background:var(--surface-2);"><div class="file-icon img">JPG</div><div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:0.875rem;">market-flyer.jpg</div><div style="font-size:0.75rem;color:var(--ink-2);">Image · 18.4 MB</div></div></div>
+        <div style="margin-top:var(--s3);"><div class="kv"><span>Size</span><span>18.4 MB of 50 MB max</span></div><div class="kv"><span>Type</span><span>JPEG image</span></div><div class="kv"><span>Route</span><span><span class="path-chip mesh"><span class="dot"></span>Mesh</span></span></div><div class="kv"><span>Estimated time</span><span>~6 min nearby</span></div></div>
+        <div class="callout" style="margin-top:var(--s3);font-size:0.8125rem;">Via mesh is slower for large files. It keeps sending in the background and resumes if Alex moves out of range.</div>
+        <div style="display:flex;gap:var(--s2);"><button class="btn btn-secondary" style="flex:1;">Cancel</button><button class="btn btn-primary" style="flex:1;">Send</button></div></div>
+  </div>
+  <p class="caption">Confirm — size, type, path hint</p>
+  <div class="phone" data-screen="file-picker-confirm" data-state="too-large">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><div style="flex:1;min-width:0;"><h1 style="font-size:1rem;">Alex Rivera</h1><span class="sub">Nearby · last seen just now</span></div></div>
+    <div class="path-banner mesh"><span style="width:7px;height:7px;border-radius:50%;background:currentColor;"></span>Via mesh · 2 hops · encrypted end-to-end</div>
+    <div class="content"><div class="messages"><div class="day">Today</div><div class="bubble them">Can you send the flyer?<div class="meta">10:02</div></div></div></div>
+    <div class="sheet-scrim" aria-hidden="true"></div>
+    <div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div class="setting-title" style="font-size:1.0625rem;">File is too large</div>
+        <div class="file-card failed" style="max-width:none;margin-top:var(--s4);"><div class="file-icon bad">MP4</div><div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:0.875rem;">festival-night.mp4</div><div style="font-size:0.75rem;color:var(--danger);">Video · 212 MB</div></div></div>
+        <div class="callout danger" role="alert" style="margin-top:var(--s3);font-size:0.8125rem;"><strong>212 MB is over the 50 MB limit</strong>Hopla can send files up to 50 MB. Try a shorter clip or compress it first.</div>
+        <div style="display:flex;gap:var(--s2);"><button class="btn btn-secondary" style="flex:1;">Cancel</button><button class="btn btn-primary" style="flex:1;">Choose another</button></div></div>
+  </div>
+  <p class="caption">Error — over 50 MB limit</p>
+</body>
+</html>

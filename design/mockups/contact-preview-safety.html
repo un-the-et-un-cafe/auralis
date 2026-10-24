@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Contact preview</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="contact-preview-safety" data-state="unverified">
+    <div class="status-bar" style="background:#0b0f14;color:#fff;">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="camera"><div class="viewfinder"><i></i></div></div>
+    <div class="sheet-scrim" aria-hidden="true"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Contact preview"><div class="grab"></div><div style="display:flex;gap:var(--s3);align-items:center;">
+          <div class="avatar">AR</div><div style="flex:1;"><div class="setting-title" style="font-size:1.0625rem;">Alex Rivera</div>
+          <div class="mono" style="font-size:0.8125rem;color:var(--ink-2);">omcp1:a8rv…k2pd</div></div><span class="badge warn">Unverified</span></div>
+        <div class="section-label" style="padding-top:var(--s4);">Safety number</div>
+        <div class="safety-grid" role="group" aria-label="Safety number, 12 groups of 5 digits"><span>33766</span><span>77996</span><span>26606</span><span>32391</span><span>78643</span><span>05752</span><span>45493</span><span>36159</span><span>01206</span><span>29784</span><span>55240</span><span>26076</span></div>
+        <p style="font-size:0.8125rem;color:var(--ink-2);margin-top:var(--s3);">Compare these 60 digits with the number on Alex’s screen. If they match, nobody is in the middle.</p>
+        <div style="display:flex;flex-direction:column;gap:var(--s2);margin-top:var(--s4);">
+          <button class="btn btn-primary btn-block"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Numbers match — Verify &amp; chat</button>
+          <button class="btn btn-secondary btn-block">Chat without verifying</button>
+          <button class="btn btn-ghost btn-block">Cancel</button></div></div>
+  </div>
+  <p class="caption">Scanned result — safety number 12×5, Verify & chat</p>
+  <div class="phone" data-screen="contact-preview-safety" data-state="mismatch">
+    <div class="status-bar" style="background:#0b0f14;color:#fff;">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div><div class="camera"><div class="viewfinder"><i></i></div></div>
+    <div class="sheet-scrim" aria-hidden="true"></div>
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Safety number mismatch"><div class="grab"></div><div style="display:flex;gap:var(--s3);align-items:center;">
+          <div class="avatar" style="background:var(--danger-soft);color:var(--danger);">AR</div><div style="flex:1;"><div class="setting-title" style="font-size:1.0625rem;">Alex Rivera</div>
+          <div class="mono" style="font-size:0.8125rem;color:var(--ink-2);">omcp1:a8rv…k2pd</div></div><span class="badge danger">Doesn’t match</span></div>
+        <div class="callout danger" role="alert" style="margin-top:var(--s4);display:flex;gap:10px;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;color:var(--danger);margin-top:2px;" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><div><strong>Safety numbers don’t match</strong>This code is different from the one saved for Alex. Their identity may have changed, or someone may be impersonating them. Check in person before chatting.</div></div>
+        <div class="safety-grid bad" role="group" aria-label="Safety number, 12 groups of 5 digits"><span>33766</span><span>77996</span><span>26606</span><span>32391</span><span>78643</span><span><span class="diff">05752</span></span><span>45493</span><span>36159</span><span>01206</span><span><span class="diff">29784</span></span><span>55240</span><span>26076</span></div>
+        <div style="display:flex;flex-direction:column;gap:var(--s2);margin-top:var(--s4);">
+          <button class="btn btn-secondary btn-block">Scan again</button>
+          <button class="btn btn-danger btn-block">Don’t trust this code</button>
+          <button class="btn btn-ghost btn-block">Cancel</button></div></div>
+  </div>
+  <p class="caption">Mismatch warning — differing groups underlined</p>
+</body>
+</html>

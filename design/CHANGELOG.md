@@ -1,5 +1,281 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.16 — 2026-10-24
+
+One-tap Ask to resend, and Keep media you sent (decisions approved by the maintainer). `DESIGN_SPEC.md` §5.100, §5.101.
+
+### Changed
+- `media-missing`: **Ask to resend** is now one tap with an optional **Add a note**; sent state shows status in the bubble and a toast with Undo. Re-rendered `--gone`, `--sent`, `--gone-fr`, `--sent-fr`; added `--ios-gone`. §5.94 confirm sheet marked superseded.
+
+### Added
+- `media-resend-note`: note field expanded (typed / empty) and sent-with-note state. 9 frames, EN/FR, light/dark, iOS.
+- `settings-storage`: Settings › Storage with **Keep media you sent** (default 90 days or 2 GB, whichever first), edit sheet with presets (30 days–Forever, 500 MB–No limit), off state with warning. 13 frames.
+
+### Removed
+- `media-missing--confirm.png`, `--confirm-fr.png`, `--ios-confirm.png` (confirm-before-send dialog replaced).
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. Fictional contacts only. Generator `/workspace/omcp-v0116/`. Mirror updated.
+
+## v0.1.15 — 2026-10-24
+
+Restored members in groups and communities (REQUIREMENTS, Q25). `DESIGN_SPEC.md` §5.99.
+
+### Added
+- `group-restored`: a compact “Restored, not verified” tag on sender names in group threads and in the member list; tapping it opens the same verify sheet; no system notice in groups. 11 frames, EN/FR, light/dark, iOS.
+
+### Changed
+- §12 Q24 (O3 reworded in REQUIREMENTS) and Q25 resolved. §5.96 notes that REQUIREMENTS accepts the optional “Back up media on mobile data” toggle.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.14 — 2026-10-24
+
+Re-verification after restore (REQUIREMENTS, RS2). `DESIGN_SPEC.md` §5.98.
+
+### Changed
+- `restore-notice`: after a restore, contacts lose the verified badge. A “Restored, not verified” pill shows in the header and row until re-verified. The sheet says the safety number changed, with primary **Verify in person (QR)**. The restored phone's banner says contacts need to re-verify you, with Show my QR.
+- `restore-success`, `restore-media`: “Your safety number changed. Contacts need to verify you again in person (QR).” Verified badges now read “Still verified on your side”.
+- Earlier spec text saying verification carries over is annotated (§5.x backup note, Restoring row, §5.87, §5.95, Q15).
+
+### Added
+- QR re-verify frames (`--qr`, `--qr-fr`) and badge earned back (`--reverified`, `--list-reverified`, dark/iOS/FR).
+- `restore-media--partial` (+`-fr`, `-dark`): a partial media restore falls back to placeholders that refill from nearby contacts.
+- `settings-media-backup` copy: “Backed up daily on Wi-Fi”; the size card notes chats hourly, media daily.
+- §12: Q20–Q23 resolved; Q24–Q25 added.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.13 — 2026-10-24
+
+Media backup setting (REQUIREMENTS “Include media”, CB5). `DESIGN_SPEC.md` §5N (§5.96–5.97).
+
+### Added
+- `settings-media-backup`: “Also back up photos, videos and files” (off by default), per-type toggles, estimated size, Wi-Fi only with a mobile-data option, first-upload progress, nearly-full / full quota warnings, danger confirm to turn off and delete the media backup, and a deleting progress state. 14 frames, EN/FR, light/dark, Android/iOS.
+- `restore-media`: detect and Welcome back when the backup includes media. Media is restored directly (hash checked); only types that were off come back via placeholders.
+
+### Changed
+- §5.92 placeholders now apply only to media not in the backup. §12 Q21–Q23 added.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.12 — 2026-10-24
+
+Approved Q17–Q19 (REQUIREMENTS “Encrypted chat backup”). `DESIGN_SPEC.md` §5.94.
+
+### Added
+- `media-missing`: “Ask to resend” on the partner-no-longer-has-it state, a confirm sheet that previews the message before sending, a Sent state, and a “Waiting for Wi-Fi” state with a link to the setting (EN/FR, light/dark, iOS).
+- `settings-missing-media`: Settings › Backup › Missing media, “Use mobile data for missing media” (off by default); Bluetooth mesh is always allowed.
+
+- `restore-notice`: restore indicator (security). Contacts get an in-chat notice “<name> restored Hopla on a new device · <date>”, a sheet with Verify safety number / Block, and a 7-day “Restored” badge beside the verified badge in the row and header. The restored phone gets a banner: “You restored this account. Your contacts were notified.”
+
+### Changed
+- The restore is announced to contacts. Media re-requests carry no extra metadata (toast “Requested”). `restore-success` notes that contacts will see the restore. The Settings footnote saying contacts aren't told was removed.
+- §12 Q17–Q19 resolved (2026-10-24). New Q20 (safety number after a restore).
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.11 — 2026-10-24
+
+Text chat backup (REQUIREMENTS “Encrypted chat backup”, v0.1.4 text only). `DESIGN_SPEC.md` §5M (§5.91–5.93).
+
+### Added
+- `media-missing`: calm missing-media placeholders for photo, video, voice note and file. Keeps type, size, sender, time and caption. States: waiting, requested (with toast), syncing via mesh/gateway with progress, restored (swap animation 240 ms, reduced-motion instant), partner no longer has it, group. Thread banner “N media waiting”.
+- `chats-restored`: chats list “Chats restored” card with “12 photos and 4 files waiting for partners”, plus per-row waiting pills.
+- 14 + 5 frames in light/dark, Android/iOS, EN/FR.
+
+### Changed
+- `restore-detect`, `restore-progress`, `restore-success`: chats now come back. Size reads “2.4 MB · text only”. Success shows Restored / Coming back later / Not restored.
+- §12 Q14 resolved. New Q17–Q19.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real names/photos. Mirror updated.
+
+## v0.1.10 — 2026-10-24
+
+Restore from backup for Google Drive and iCloud, reinstall-first. Extends §5.17/§5.26/§5.30/§5.31; `DESIGN_SPEC.md` §5L (§5.83–5.90).
+
+### Added
+- Hero screens: `restore-detect` (auto-detected backup card: date, size, device, protection; Start fresh confirm), `restore-password` (wrong, lockout, iCloud Keychain no-password, Keychain not synced), `restore-progress` (download → decrypt → contacts and chats, backgrounding on Android and iOS), `restore-success` (“Welcome back”, restored vs not restored).
+- `restore-source` (Welcome › Restore fallback, system account picker / Google sign-in, No backup found), `restore-error` (offline, permission revoked, storage full, corrupted, version too new).
+- 52 PNG frames, light/dark, Android/iOS, EN/FR. §12 Q14–Q16.
+
+### Changed
+- §5.31 `restore-reinstall` visuals superseded (rules unchanged). Settings › Backup has no Restore entry.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real names/photos. Mirror updated.
+
+## v0.1.9 — 2026-10-24
+
+maintainer resolved Q12/Q13; Q11 fixed in REQUIREMENTS (commit 6a0ee67). `DESIGN_SPEC.md` §5K (§5.81–5.82).
+
+### Added
+- `nearby-area-indicator`: persistent indicator in area mode (hex-cell glyph, violet, “Area mode” label) for iOS Live Activity, Dynamic Island and Android ongoing notification — normal, Private, paused, dark, FR.
+
+### Changed
+- Check-in counts visible time only: Settings › Nearby shows “Next one after 2 h 40 min more visible time”; Go Nearby sheet and in-app prompt copy updated (`settings-nearby`, `nearby-session`, `nearby-checkin` re-rendered).
+- §12: Q11–Q13 resolved; no open questions.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.8 — 2026-10-24
+
+Nearby stays on until the user turns it off (REQUIREMENTS Decision 4 + D6). `DESIGN_SPEC.md` §5J (§5.75–5.80).
+
+### Added
+- `nearby-checkin`: 4 h check-in notification (iOS, Android) and in-app prompt with Yes / Turn off; turned-off-after-no-answer note and notification.
+- `settings-nearby`: Visible nearby toggle, auto-pause rules, check-in, indicator explanation.
+- `nearby-session` indicator states: active and paused (no motion 2 h, night 01:00–07:00, battery < 20 %) for iOS Live Activity, Dynamic Island and Android ongoing notification, normal and Private, light/dark, EN/FR.
+
+### Changed
+- Go Nearby sheet: no duration choice; explains auto-pause and check-in. Status chip: “Live nearby” / “Paused” / “Area mode”; no countdown copy anywhere. Radar CTA “Go Nearby”.
+- `nearby-discover`, `nearby-radar`, `nearby-area`, `nearby-skeleton`, `nearby-tab` regenerated.
+- Older session-length notes reworded in this changelog.
+
+### Removed
+- Duration picker, extension action and countdown copy; their PNGs deleted from the pack and mirror.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.7 — 2026-10-24
+
+maintainer approved the pending proposals; REQUIREMENTS Decision 5 / SS1 updated. `DESIGN_SPEC.md` §5I (§5.71–5.74).
+
+### Changed
+- `settings-privacy`: copy aligned to REQUIREMENTS (“On by default”; “Burn-after-read and view-once content is always protected”; second-camera line in On and Off). All 12 frames re-rendered.
+- `nearby-session`: Private notifications hide counts on Live Activity, Dynamic Island and Android ongoing notification.
+- `app-switcher-cover`: toggle-off states (normal preview) for iOS and Android.
+- §12: Q4–Q10 resolved (2026-10-24); new Q11 (SS2 wording).
+
+### Added
+- PNGs: `nearby-session--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-private`, `--fr-live-activity-private`; `app-switcher-cover--ios-off`, `--android-off`.
+- Generator `/workspace/omcp-v017/gen.py`.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.6 — 2026-10-24
+
+Moderation & reputation (PROTOCOL §23, **v0.2**) and the maintainer’s Block-screenshots toggle. `DESIGN_SPEC.md` §5H (§5.61–5.70).
+
+### Added
+- `mod-report`, `mod-community` (Vouch, reputation indicator + explainer), `mod-states` (Under review — admins only, Reported, Restricted, Why? sheet, counter-signal), `mod-join-warning`, `mod-stream` (blur for new viewers, Continue watching?, reduced motion), `mod-appeal` (owner), `mod-jury`. 46 PNG frames.
+- `settings-privacy` Block screenshots toggle: `--off`, `--confirm-off` (+ dark, iOS, FR). Burn-after-read and view-once stay protected when Off.
+- §12 Q7–Q10.
+
+### Changed
+- `settings-privacy` regenerated (toggle replaces “Always on” badge); §5.57 footnote superseded.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real names/photos. Mirror updated.
+
+## v0.1.5 — 2026-10-24
+
+the maintainer’s decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24). `DESIGN_SPEC.md` §5G (§5.56–5.60).
+
+### Added
+- `settings-privacy` (Screenshot protection · Always on, honest second-camera line), `app-switcher-cover` (iOS blurred brand cover, Android black FLAG_SECURE card, iOS recording/mirroring cover).
+- Nearby v0.3: `nearby-session` (Go Nearby, iOS Live Activity, Dynamic Island compact + expanded, Android ongoing notification), `nearby-area`, `nearby-radar` (live radar empty, reduced motion), `nearby-skeleton` (0 / 300 / 900 ms timing). Status chip (“Live nearby · 42 min left” / “Area mode”). Motion table with durations + easing.
+- `chat-info-notifications--opt-out` (+`-dark`, `-ios`, `-fr`).
+
+### Changed
+- Private calls: “Hopla · Incoming call”. Android Hide on lock screen: “Hopla · New message”, never SECRET. Per-chat Private can now be turned off.
+- Nearby cards refined (photo scrim, frosted chips, page bars); likes counter moved under buttons; match screen refined (glow, icebreakers).
+- Burn viewer copy mentions screenshot blocking + second camera.
+
+### Removed
+- All screenshot notices: `burn-bubbles--screenshot-ios.png`, `burn-bubbles--screenshot-android.png`, related copy keys.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged (cover references `brand/hopla-v2/icon.svg` read-only). No GitHub push. No real names/photos. Mirror updated.
+
+## v0.1.4 — 2026-10-24
+
+Notifications (REQUIREMENTS § Notifications v0.1.2), Burn after read (§ Burn after read v0.1.3), and Hopla Nearby dating (§ Hopla Nearby, **v0.3**, opt-in).
+
+### Added
+
+- Notifications: `notif-lockscreen` (Full / Private / Hide on lock screen, Android + iOS, EN + FR, shade + history), `settings-notifications`, `chat-info-notifications` (incl. mute sheet). `DESIGN_SPEC.md` §5D (§5.36–5.40).
+- Burn after read: `burn-composer` (long-press Send menu, armed), `burn-bubbles` (sealed / open with countdown ring / placeholders / iOS screenshot notice / Android FLAG_SECURE row), `burn-viewer` (view once, iOS recording), `burn-chat-info` (timer picker). §5F (§5.50–5.55).
+- Nearby v0.3: `nearby-tab`, `nearby-onboarding` (18+ gate), `nearby-profile`, `nearby-discover` (buttons + optional swipe, reduced motion, empty, 100-likes limit), `nearby-match`, `nearby-chat` (Reveal identity: confirm / pending / incoming / revealed, blurred first photo), `nearby-safety` (match list, block, report 2-step, safety tips, share my date). §5E (§5.41–5.49). Illustrated abstract placeholders only.
+- 14 HTML mockups, 96 PNG frames; generator `/workspace/omcp-v014/gen.py` (reuses v0.1.1 helpers; local `<style>` per page, tokens only).
+- §12 open questions Q4–Q8.
+
+### Changed
+
+- v0.3 tab bar: 5 tabs (Nearby between Communities and Live). Chat info gains Notifications group and 🔥 Burn after read row.
+
+### Constraints observed
+
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real people’s names or photos. Mirror updated.
+
+## v0.1.3 — 2026-10-24
+
+Verified badge as a reward; friendly invitation to verify. “Chat without verifying” stays on QR/NFC adds.
+
+### Added
+
+- `VerifiedBadge` (filled mint seal, `--brand`), `VerifyGhostSeal` (dashed, `--ink-3`, header only), `VerifyHintRow` (dismissible), “earn the badge” animation with reduced-motion fallback — `DESIGN_SPEC.md` §5C (§5.32–5.35), EN + FR copy.
+- PNGs: `chats-list--dark`, `chats-list--ios`, `chat-thread--dark`, `--ios`, `--ios-dark`, `--unverified`, `--unverified-dark`, `--unverified-ios`, `--verified`, `--safety-details`.
+- Generator `/workspace/omcp-v013/gen.py` (reuses v0.1.1 helpers); `chats-list.html` and `chat-thread.html` are now generated.
+
+### Changed
+
+- Chats list: amber “Unverified” badge on Morgan Reed removed; unverified rows show nothing. Verified mark redrawn as `VerifiedBadge` in brand mint (was `--ok` green).
+- §2.1 `--warn` no longer used for unverified; §5.2, §5.3, §7, §9 updated.
+
+### Constraints observed
+
+- `brand/` and `tokens.css` unchanged (badge uses existing tokens; dark frames set `color:var(--ink)` inline). No GitHub push. Mirror updated.
+
+## v0.1.2 — 2026-10-24
+
+Simplified onboarding (4 screens: Welcome › Profile › Secure your account › Done) and recovery backup, per `apps/REQUIREMENTS.md` § Onboarding & recovery backup.
+
+### Added
+
+- Mockups + PNGs (390×844, `tokens.css`, Playwright/Chromium @2x): `onboarding-profile` (+`--filled`), `onboarding-secure` (+`--ios`, `--password-android`, `--password-ios`, `--success`, `--failure`), `onboarding-secure-phrase` (+`--checked`), `onboarding-secure-quiz` (+`--mismatch`), `onboarding-secure-reminder` (+`--expired`), `onboarding-done`, `settings-backup` (+`--queued`, `--view-phrase-auth`, `--delete-confirm`), `restore-reinstall` (+`--password`, `--wrong-password`, `--error`).
+- `DESIGN_SPEC.md` §5B (§5.25–5.31): states, EN + FR copy, a11y, Android (Credential Manager, `drive.appdata`, `appDataFolder`) and iOS (CloudKit private DB, iCloud Keychain) notes; allowed security claims list; components `BackupMethodOption`, `BackupPasswordSheet`, `BackupStatusCard`, `BackupReminderBanner`.
+
+### Changed
+
+- `onboarding-welcome`: approved Hopla logo (`brand/hopla-v2/icon.svg`, inlined), “Get started” / “Restore”, 4-step stepper.
+- §5.1 flow rewritten; §5.14 updated; §12 questions replaced.
+- README screen index: new screens; `onboarding-recovery`, `onboarding-recovery-confirm`, `onboarding-permissions` marked **deprecated** (files kept, HTML titles/captions labelled).
+
+### Constraints observed
+
+- `brand/` and `tokens.css` unchanged; PROTOCOL.md not modified; no GitHub push. Mirror updated (excluding `brand/`).
+
+## v0.1.1 — 2026-10-24
+
+Screens the Android implementer needs next: onboarding with 24-word recovery, QR contact add with safety numbers, file transfer. Consumer app name is now **Hopla** (protocol stays OMCP).
+
+### Added
+
+- Mockups (390×844, `tokens.css`) + PNG renders (390 px @2x, Playwright/Chromium): `onboarding-welcome`, `onboarding-recovery` (+`--checked`), `onboarding-recovery-confirm` (+`--mismatch`), `onboarding-restore`, `onboarding-permissions` (+`--bluetooth-denied`), `contact-add-chooser`, `qr-scan` (+`--not-omcp`), `qr-my-code`, `contact-preview-safety` (+`--mismatch`), `file-picker-confirm` (+`--too-large`), `file-transfer`.
+- `DESIGN_SPEC.md` §5A (§5.14–5.24): per-screen states, EN + FR copy, accessibility labels, Android/iOS notes; new components (`AppLogo`, `OnboardingStepper`, `PhraseWordField`, `PermissionCard`, `BlockingExplainer`, `ContactAddOption`, `MyQrCard`, `ContactPreviewSheet`, `FileSendConfirmSheet`).
+- `tokens.css`: v0.1.1 component classes appended (no existing token values changed).
+- `README.md`: screen index.
+
+### Changed
+
+- User-facing copy uses “Hopla” (notification default “New Hopla message”, Android foreground notification). Logo shown as a neutral placeholder tile; `brand/` untouched.
+- §12 open questions: v0.1.0 tab visibility, gateway cap (500 MB/day, Wi‑Fi-only, warn on metered) and preview defaults recorded as decided; three new questions.
+- README audience line de-duplicated (aligned with mirror).
+
+### Constraints observed
+
+- PROTOCOL.md not modified; no GitHub push; no “military grade” / “unhackable” copy.
+- Mirror `/home/box/shared/omcp-design/` updated to match (excluding `brand/`).
+
 ## v0.1.0 — 2026-10-23
 
 First strong design pass for OMCP smartphone apps (Android 12+, iOS 17+).

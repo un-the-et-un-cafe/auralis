@@ -93,6 +93,7 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
   - Key types: PeerID = BLAKE2b-256 of the Ed25519 identity public key. X25519 keys are per-device and certified by the identity key. Contacts are keyed by PeerID, not by X25519.
 - **Ask to resend**: a one-tap request with an optional short note, which the user can add before confirming. It's sent as a single message, not two.
 - **Keep sent media**: Hopla keeps local copies of media you sent, by default for 90 days or up to 2 GB, with the oldest deleted first. Both limits can be changed in Settings > Storage. Burn-after-read and view-once media is never kept. These copies are served when a restored contact re-requests a file.
+- Details: there's a 5 s Undo window after an Ask to resend is sent (10 s with a screen reader on), and the note is limited to 140 characters. Storage presets are 30 days / 90 days / 1 year / Forever and 500 MB / 2 GB / 5 GB / No limit. If the sender no longer has the file, they see "You no longer have this file" and can reply in the chat.
 - RS3: A restored contact re-requests a file you sent 30 days ago and receives it, hash verified. Burn-after-read media is never served.
 - RS2: After a restore, the safety number differs from the one before, the verified badge is cleared for all contacts, and verifying with the old QR code fails.
 - RS1: Every contact who comes online after the restore shows the notice within 5 s of syncing. The notice can't be suppressed by the restored device, and the old device key is marked superseded.

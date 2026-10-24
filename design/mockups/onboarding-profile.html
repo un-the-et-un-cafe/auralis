@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hopla (OMCP) — Profile</title>
+<link rel="stylesheet" href="tokens.css">
+</head>
+<body>
+  <div class="phone" data-screen="onboarding-profile" data-state="empty">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1>Your profile</h1></div>
+    <div class="onb" style="padding-top:var(--s4);">
+      <div class="steps" aria-label="Step 2 of 4"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <h2 style="font-size:1.25rem;">How should contacts see you?</h2>
+      <p class="lede" style="font-size:0.875rem;">Both are optional. You can change them later.</p>
+      <div style="display:flex;flex-direction:column;align-items:center;margin:var(--s5) 0 var(--s4);">
+        <div style="width:96px;height:96px;border-radius:50%;background:var(--surface-2);border:1.5px dashed var(--line-strong);display:grid;place-items:center;color:var(--ink-3);"><svg viewBox="0 0 24 24" style="width:30px;height:30px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:6px;">Add photo</button>
+      </div>
+      <div class="field-label">Display name</div>
+      <div class="field-box" style="color:var(--ink-3);">Your name (optional)</div>
+      <div class="callout" style="margin-top:var(--s4);display:flex;gap:10px;font-size:0.8125rem;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;color:var(--brand);margin-top:1px;" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Your name and photo are shared only with your contacts — never with a server or people nearby you haven’t added.</span></div>
+      <div class="grow"></div>
+      <p class="mono" style="font-size:0.75rem;color:var(--ink-3);text-align:center;margin-bottom:var(--s2);">Creating your ID…</p>
+      <button class="btn btn-primary btn-block">Skip</button>
+    </div>
+  </div>
+  <p class="caption">Profile (2/4) — empty, keys generating in background</p>
+  <div class="phone" data-screen="onboarding-profile" data-state="filled">
+    <div class="status-bar">
+      <span>9:41</span>
+      <span class="icons">▮▮▮  BLE  ████</span>
+    </div>
+    <div class="nav"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button><h1>Your profile</h1></div>
+    <div class="onb" style="padding-top:var(--s4);">
+      <div class="steps" aria-label="Step 2 of 4"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      <h2 style="font-size:1.25rem;">How should contacts see you?</h2>
+      <p class="lede" style="font-size:0.875rem;">Both are optional. You can change them later.</p>
+      <div style="display:flex;flex-direction:column;align-items:center;margin:var(--s5) 0 var(--s4);">
+        <div class="avatar" style="width:96px;height:96px;font-size:1.75rem;">SO</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:6px;">Change photo</button>
+      </div>
+      <div class="field-label">Display name</div>
+      <div class="field-box focus">Sam Okafor<span style="border-left:2px solid var(--brand);margin-left:1px;"></span></div>
+      <div class="callout" style="margin-top:var(--s4);display:flex;gap:10px;font-size:0.8125rem;"><svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;color:var(--brand);margin-top:1px;" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span>Your name and photo are shared only with your contacts — never with a server or people nearby you haven’t added.</span></div>
+      <div class="grow"></div>
+      <p class="mono" style="font-size:0.75rem;color:var(--ink-3);text-align:center;margin-bottom:var(--s2);">Your ID: omcp1:q7xk…m4ta</p>
+      <button class="btn btn-primary btn-block">Continue</button>
+    </div>
+  </div>
+  <p class="caption">Filled — name + photo, PeerID ready</p>
+</body>
+</html>
