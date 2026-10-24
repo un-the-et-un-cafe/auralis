@@ -68,10 +68,32 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
 ### Acceptance tests
 - O1: A fresh install reaches the chat list in ≤ 4 screens and ≤ 60 s for a user who picks a cloud backup.
 - O2: The Drive and iCloud blobs never contain the phrase or the key in plaintext (verified by inspecting the uploaded bytes in a test).
-- O3: Reinstall, then restore from Google Drive (Android) and from iCloud (iOS). The identity, contacts and verification state are restored.
+- O3: Reinstall, then restore from Google Drive (Android) and from iCloud (iOS). The identity and contacts are restored, along with your verifications of contacts. Contacts' verification of you resets (see RS2).
 - O4: A wrong backup password fails cleanly, with rate-limited retries. The phrase fallback still works.
 - O5: Deleting the cloud backup in Settings removes the remote record (verified via API).
 - O6: Skipping the backup shows a banner, and after 24 h the user can't continue without completing a backup method.
+
+### Encrypted chat backup (v0.1.4, text by default, media optional)
+- When Google Drive or iCloud backup is enabled, Hopla also backs up **all message text**: 1:1 chats, groups, community chats you joined, plus reactions, edits, timestamps and contact names. It does **not** back up images, videos, voice notes or files.
+- The backup is encrypted end to end on the device with a key derived from the 24-word phrase (HKDF, label `hopla/chat-backup/v1`, XChaCha20-Poly1305). Google and Apple only ever see opaque blobs, stored in Drive `appDataFolder` or the iCloud private database.
+- The backup is incremental: an encrypted append-only log plus a weekly compacted snapshot, padded to buckets of 64 KiB. It uploads on Wi-Fi only by default and runs at most hourly.
+- Burn-after-read and view-once messages are never backed up.
+- **Include media (setting, off by default)**: Settings > Backup > "Also back up photos, videos and files". When it's on, media is added to the same encrypted backup, with per-type toggles (photos, videos, voice notes, files), Wi-Fi only by default, and an estimated size plus a warning about provider storage quota. Restored media then appears directly with no placeholder. Media that hasn't been backed up still uses the placeholder flow. Turning it off deletes the backed-up media blobs after confirmation.
+- Media backup defaults: when it's switched on, photos, voice notes and files are pre-selected and videos are not. Media backs up in a separate daily pass, on Wi-Fi only by default (an optional "Back up media on mobile data" toggle is off by default), apart from the hourly text backup. If the media download fails partway through a restore, the remaining items fall back to placeholders that refill from nearby contacts.
+- CB5: With media backup on, a restore returns every media item, its hash verified. With it off, no media bytes are uploaded.
+- **Restore**: after the 24-word recovery, the text history is restored. Every media item comes back as a **missing-media placeholder**, keeping its type, size, sender, time and caption (designed by Designy). When a chat partner who still has the file is reachable over the mesh or a gateway, the app automatically requests it again using the stored media locator and hash (§7, 64 KiB chunks), verifies the hash, and swaps the placeholder for the file. A user can also tap the placeholder to request it.
+- **Partner no longer has it**: the placeholder says so and offers a one-tap "Ask to resend" request, which the user confirms before it is sent.
+- **Restore indicator (security)**: after a restore from the 24 words, the restored device creates a new device key, signed by the identity key, with a `restored_at` timestamp. Contacts see an in-chat system notice, "<name> restored Hopla on a new device · <date>", and a "Restored" badge on the contact for 7 days, like a safety-number change. On the restored phone, a banner in each chat says "You restored this account. Your contacts were notified." If the restore was not made by the account owner, the contact can tap the notice to verify the safety number or block. Media re-requests themselves carry no extra metadata.
+- **Re-verification after restore**: a restore resets the contact's "Verified" status on every contact's device. The safety number now covers the identity key plus the current device key, so it changes after a restore and contacts must verify again (QR code in person). Until then the contact shows as "Restored, not verified".
+- **Groups and communities**: a restored member shows a small "Restored, not verified" tag next to their name in group and community chats, with no full notice there. The full system notice appears only in one-to-one chats.
+- RS2: After a restore, the safety number differs from the one before, the verified badge is cleared for all contacts, and verifying with the old QR code fails.
+- RS1: Every contact who comes online after the restore shows the notice within 5 s of syncing. The notice can't be suppressed by the restored device, and the old device key is marked superseded.
+- **Data use**: missing media re-downloads over a gateway on Wi-Fi only by default, with a setting to allow mobile data. Over direct BLE mesh it is always allowed.
+- Tests:
+  - CB1: Restoring on a new device brings back 100% of message text and no media bytes.
+  - CB2: The backup blob can't be decrypted without the 24 words, and the provider sees only padded sizes.
+  - CB3: Placeholders show for every media item, and each one resolves within 10 s once a partner holding the file is in range.
+  - CB4: Burn-after-read content is never present in the backup.
 
 ## Notifications (v0.1.2)
 - **Default ON**: when a message arrives, the notification shows the sender name, avatar and a text preview. Calls, mentions and livestream starts notify too.
@@ -108,6 +130,7 @@ Find people nearby to meet, without a central server and without sharing exact l
 - D2: No exact location or GPS data leaves the device (verified in a packet-capture test); distance is shown in buckets only.
 - D3: A one-way like reveals nothing to either side; a mutual like creates a match on both devices within 5 s in BLE range.
 - D4: A Nearby profile can't be linked to the chat identity before an explicit mutual reveal (keys differ, and Nearby keys rotate every 24 h).
+- D6: Nearby is never visible without the persistent indicator; auto-pause triggers within 60 s of its condition; an unanswered check-in turns Nearby off within 15 min.
 - D5: Blocking hides the user across key rotations; reporting sends a bundle only with the reporter's confirmation.
 
 ## Burn after read (v0.1.3)
@@ -127,29 +150,29 @@ Messages and images that delete themselves once they've been read.
 
 ### Device-side protection
 - Burnable content is kept only in an encrypted, in-memory store or a separate encrypted DB table. Deletion zeroizes the keys, so it's crypto-shredded and can't be recovered from disk.
-- **Screenshots**: blocked app-wide (see "Product decisions (2026-10-24)" item 5).
+- **Screenshots**: burn-after-read content is always protected from capture, even when the Block screenshots toggle is off (see "Maintainer decisions" item 5).
 - Burnable content never appears in notification previews, backups, the search index or share sheets.
 - **Honest copy**: the app tells users plainly that burn after read can't stop someone photographing the screen with another device.
 
 ### Acceptance tests
 - B1: A burn-after-read text is gone from both devices ≤ 1 s after the timer runs out, and there's no trace in the DB file afterwards (forensic test).
 - B2: A view-once image can be opened exactly once. A second tap shows the placeholder, and save, forward and quote are disabled.
-- B3: Burn content can never be captured, per SS1 (app-wide screenshot block).
+- B3: Burn content can never be captured, per SS1 (always protected, regardless of the toggle).
 - B4: An unopened burn message expires at unread_ttl on the receiver and is dropped by relays (envelope `expires_at`).
 - B5: Burn content is excluded from cloud backup, notifications and search.
 
-## Product decisions (2026-10-24)
+## Maintainer decisions (2026-10-24)
 1. **Private-mode calls** show "Hopla · Incoming call" (no caller name). Every other notification shows "New message".
 2. **Per-chat override**: a single chat may turn Private notifications **off**, even when it's on globally.
 3. **Android "Hide on lock screen"** shows "Hopla · New message" (not blank).
 4. **Nearby must be a pleasure to use**, including on iOS:
-   - **Nearby session**: one tap on "Go Nearby" starts a session (30 / 60 / 120 min). On iOS this runs as a **Live Activity** and Dynamic Island item (people nearby, new likes) and keeps BLE scanning active for the whole session. On Android it's a foreground service with an ongoing notification.
+   - **Nearby session**: one tap on "Go Nearby" makes you visible until you turn it off, with no time cap. Auto-pause: discovery pauses quietly after 2 h without motion, from 01:00 to 07:00 local time, or when battery is below 20%, and resumes automatically. Check-in: every 4 h of actual visibility (paused time does not count) a notification asks "Still up for meeting people?"; with no answer within 15 min, Nearby turns off. While you are visible, a persistent indicator is always shown, including in area mode (gateway visibility outside Go Nearby). On iOS this runs as a **Live Activity** and Dynamic Island item (people nearby, new likes) and keeps BLE scanning active for the whole session. On Android it's a foreground service with an ongoing notification.
    - **Background fallback**: outside a session, discovery keeps working over the gateway using the coarse geohash cell. iOS uses BLE state restoration and background app refresh to pick up cards opportunistically, so matches and likes still arrive as notifications.
    - **Instant start**: cached nearby cards appear in under 1 s when the tab is opened. Photos load progressively (blurhash first), swipes are 60/120 fps with haptics, and the "Nobody nearby yet" state shows a live radar and suggests starting a session or widening the radius.
-   - **Honest status**: a small status chip ("Live nearby · 42 min left", or "Area mode") instead of warnings. There are no confusing OS limitation messages.
+   - **Honest status**: a small status chip ("Live nearby", "Paused" or "Area mode", with no countdown) instead of warnings. There are no confusing OS limitation messages.
    - Acceptance: NX1 the first card shows in under 1 s from a cold tab open (with a cache); NX2 an iOS session keeps discovering for 60 min with the phone locked; NX3 a match in background (area mode) is notified within 5 min.
-5. **No screenshots anywhere in Hopla** (replaces the "notify sender" behaviour):
+5. **Block screenshots toggle, on by default** (Settings > Privacy; replaces the "notify sender" behaviour). While it is on, the following applies app-wide. Burn-after-read and view-once content is always protected, even with the toggle off:
    - **Android**: `FLAG_SECURE` on every app window, so screenshots, screen recordings, casting and the recent-apps thumbnail all show black.
    - **iOS**: all sensitive views (chats, media, Nearby, profiles) render inside a secure-capture layer (the `UITextField.isSecureTextEntry` container technique), so they come out blank in screenshots and recordings. The app switcher shows a blurred privacy cover. If screen recording or mirroring is detected (`UIScreen.isCaptured`), the content is hidden behind a cover until it stops.
    - The app tells users plainly (in Settings > Privacy) that a second camera can still photograph the screen.
-   - Acceptance: SS1 screenshots and recordings of every Hopla screen are black or blank on Android 10–15 and iOS 17–26; SS2 the app switcher never shows chat content.
+   - Acceptance: SS1 with the toggle on (default), screenshots and recordings of every Hopla screen are black or blank; with it off, burn-after-read and view-once content still comes out black or blank, on Android 10–15 and iOS 17–26; SS2 the app switcher never shows chat content while Block screenshots is on; with it off, the preview is normal, but open burn-after-read and view-once screens stay hidden.

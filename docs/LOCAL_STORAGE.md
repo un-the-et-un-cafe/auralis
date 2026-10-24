@@ -49,24 +49,28 @@ written by a newer app is refused (`store schema is newer than this app`).
 
 ## Backup
 
-The existing Argon2id / platform-key CBOR backup (`backup.rs`) gets an optional inner
-field, `history`: chats, non-burn messages, file metadata and the non-burn pending queue
-(`Store::export_history`, versioned with `HISTORY_VERSION`). Burn content, burn messages,
-keys and file payloads are never included. The outer blob stays `v: 1`: older apps
-ignore the field, and older blobs (without `history`) still open. On restore,
-received-file paths from the old device are dropped, and unfinished transfers are
-marked failed.
+Message history is backed up by the **chat backup** (v0.1.4, `chat_backup.rs`, see
+[CHAT_BACKUP.md](CHAT_BACKUP.md)): a separate, incremental, padded backup keyed from
+the 24 words. The Argon2id / platform-key identity backup (`backup.rs`) carries only
+the identity, contacts with verification state and the profile name. Its optional
+inner `history` field (written by pre-release builds of this store) is still **read**:
+apps import it with `restore_history`, so those blobs keep restoring chats. New blobs
+leave it out.
+
+Store additions in v0.1.4 (no schema migration: new fields are optional CBOR keys
+inside sealed rows, old rows decode with defaults):
+
+- `FileRec.hash` (BLAKE3 content hash) and `FileRec.locator` (16-byte transfer id) so
+  a restored placeholder can be re-requested; file states `Missing`, `Requested`,
+  `Unavailable`.
+- `ContactRec.device`: the contact's pinned identity signing key, current and
+  superseded device keys, `restored_at` and the "Restored" badge expiry (RS1).
+- `MessageRec.status = System` for the in-chat restore notice.
+- Sealed `meta` rows `app:own_device` (this install's device key), `app:own_restored_at`,
+  `app:chat_backup_state` and `app:media_backup_settings`.
 
 ## Known gaps
 
-- **Chat backup v0.1.4** (workspace `apps/REQUIREMENTS.md`, "Encrypted chat backup"):
-  that spec asks for a separate chat backup keyed from the 24 words (HKDF
-  `hopla/chat-backup/v1`). It should be an incremental append-only log plus weekly
-  snapshots padded to 64 KiB, Wi-Fi only and at most hourly, with missing-media
-  placeholders that auto re-request files by locator and hash (CB1–CB4). This change
-  carries history inside the existing recovery backup instead. It is not incremental,
-  not padded and not phrase-derived, and media are not re-requested. CB1/CB4 hold;
-  CB2's padding and CB3 don't.
 - Filesystem and flash remnants (deleted journal blocks, wear-levelling) are outside what
   SQLite can scrub. The per-message key is shredded, but an old copy of the wrapped key in
   a freed FS block could still be opened with the storage key. A key held only in memory
