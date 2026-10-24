@@ -1,5 +1,22 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.7 — 2026-10-24
+
+maintainer approved the pending proposals; REQUIREMENTS Decision 5 / SS1 updated. `DESIGN_SPEC.md` §5I (§5.71–5.74).
+
+### Changed
+- `settings-privacy`: copy aligned to REQUIREMENTS (“On by default”; “Burn-after-read and view-once content is always protected”; second-camera line in On and Off). All 12 frames re-rendered.
+- `nearby-session`: Private notifications hide counts on Live Activity, Dynamic Island and Android ongoing notification; +30 min hidden at 120 min total.
+- `app-switcher-cover`: toggle-off states (normal preview) for iOS and Android.
+- §12: Q4–Q10 resolved (2026-10-24); new Q11 (SS2 wording).
+
+### Added
+- PNGs: `nearby-session--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-cap`, `--android-ongoing-cap-fr`, `--android-ongoing-private`, `--fr-live-activity-private`; `app-switcher-cover--ios-off`, `--android-off`.
+- Generator `/workspace/omcp-v017/gen.py`.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
 ## v0.1.6 — 2026-10-24
 
 Moderation & reputation (PROTOCOL §23, **v0.2**) and the maintainer’s Block-screenshots toggle. `DESIGN_SPEC.md` §5H (§5.61–5.70).
@@ -17,7 +34,7 @@ Moderation & reputation (PROTOCOL §23, **v0.2**) and the maintainer’s Block-s
 
 ## v0.1.5 — 2026-10-24
 
-Maintainer decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24). `DESIGN_SPEC.md` §5G (§5.56–5.60).
+the maintainer’s decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24). `DESIGN_SPEC.md` §5G (§5.56–5.60).
 
 ### Added
 - `settings-privacy` (Screenshot protection · Always on, honest second-camera line), `app-switcher-cover` (iOS blurred brand cover, Android black FLAG_SECURE card, iOS recording/mirroring cover).

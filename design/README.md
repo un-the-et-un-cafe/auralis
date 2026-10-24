@@ -1,8 +1,8 @@
-# OMCP App Design Pack v0.1.6 — Hopla
+# OMCP App Design Pack v0.1.7 — Hopla
 
-**Date:** 2026-10-24 (Europe/Paris) · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
+**Date:** 2026-10-24 (Europe/Paris) · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
 **App name:** Hopla (consumer app) · **Protocol:** OMCP. Logo: approved `brand/hopla-v2/icon.svg` (inlined in welcome, done, restore mockups).  
-**Audience:** Proggy (Android/iOS implementers), Pipely (release), maintainer / Writey (product)  
+**Audience:** Proggy (Android/iOS implementers), Pipely (release), the maintainer / Writey (product)  
 **Source of truth for product rules:** `../PROTOCOL.md` §13, §20 and `../apps/REQUIREMENTS.md`  
 **This pack:** visual language, IA, screen specs, and static HTML mockups — not wire protocol.
 
@@ -41,7 +41,7 @@ Mockups marked **Communities** and **Live** are forward-looking so capacity can 
 4. **Path indicator** is a first-class UI element (chat list row, thread banner, settings legend) — not a debug overlay.
 5. **Do not** treat HTML mockups as production UI; they are layout + state references. Native widgets and platform HIG win on spacing micro-adjustments.
 6. **Platform constraints** (§ Platform notes): Android persistent BLE foreground notification; iOS background BLE limits with clear user messaging.
-7. Open product questions at the end of DESIGN_SPEC — resolve with maintainer/Writey before locking v0.1 UI freeze.
+7. Open product questions at the end of DESIGN_SPEC — resolve with the maintainer/Writey before locking v0.1 UI freeze.
 
 ## Screen index
 
@@ -88,7 +88,7 @@ design/
     notif-lockscreen.html (+ .png, --ios, --private, --private-ios, --hidden, --hidden-ios, --fr, --private-fr-ios, --burn, --shade-private, --shade-private-dark)  v0.1.4
     settings-notifications.html (+ .png, --dark, --private, --ios, --ios-dark, --fr)  v0.1.4
     chat-info-notifications.html (+ .png, --private, --opt-out, --opt-out-dark, --opt-out-ios, --opt-out-fr, --dark, --ios, --mute, --fr)  v0.1.4, opt-out v0.1.5
-    settings-privacy.html (+ .png, --dark, --ios, --confirm-off, --confirm-off-dark, --confirm-off-ios, --off, --off-dark, --off-ios, --fr, --confirm-off-fr, --off-fr)  v0.1.5, toggle v0.1.6
+    settings-privacy.html (+ .png, --dark, --ios, --confirm-off, --confirm-off-dark, --confirm-off-ios, --off, --off-dark, --off-ios, --fr, --confirm-off-fr, --off-fr)  v0.1.5, toggle v0.1.6, copy v0.1.7
     mod-report.html (+ .png, --sent, --limit, --dark, --ios, --fr)  v0.2 / pack v0.1.6
     mod-community.html (+ .png, --vouch, --vouched, --reputation, --dark, --ios, --fr)  v0.2 / pack v0.1.6
     mod-states.html (+ .png, --reported, --reported-why, --restricted, --reported-dark, --restricted-dark, --ios, --fr)  v0.2 / pack v0.1.6
@@ -96,7 +96,7 @@ design/
     mod-stream.html (+ .png, --continue, --reduced-motion, --ios, --fr)  v0.2 / pack v0.1.6
     mod-appeal.html (+ .png, --pending, --cleared, --dark, --ios, --fr)  v0.2 / pack v0.1.6
     mod-jury.html (+ .png, --voted, --dark, --ios, --fr)  v0.2 / pack v0.1.6
-    app-switcher-cover.html (+ .png, --android, --ios-recording, --ios-recording-fr)  v0.1.5
+    app-switcher-cover.html (+ .png, --android, --ios-off, --android-off, --ios-recording, --ios-recording-fr)  v0.1.5, off states v0.1.7
     burn-composer.html (+ .png, --armed, --dark, --ios, --ios-dark, --fr)  v0.1.4
     burn-bubbles.html (+ .png, --sender, --open, --placeholders, --dark, --ios, --ios-dark, --fr)  v0.1.4 (screenshot frames removed v0.1.5)
     burn-viewer.html (+ .png, --ios, --ios-recording, --fr)  v0.1.4
@@ -106,7 +106,7 @@ design/
     nearby-profile.html (+ .png, --dark, --ios, --fr)  v0.3
     nearby-discover.html (+ .png, --swiping, --reduced-motion, --dark, --ios, --empty, --limit, --fr)  v0.3
     nearby-match.html (+ .png, --dark, --ios, --reduced-motion, --fr)  v0.3 (refined v0.1.5)
-    nearby-session.html (+ .png, --live, --ios-live-activity, --ios-island, --ios-island-expanded, --android-ongoing, --android-ongoing-dark, --dark, --ios, --fr, --fr-live-activity)  v0.3 / pack v0.1.5
+    nearby-session.html (+ .png, --live, --ios-live-activity, --ios-live-activity-private, --ios-island, --ios-island-private, --ios-island-expanded, --ios-island-expanded-private, --android-ongoing, --android-ongoing-cap, --android-ongoing-private, --android-ongoing-dark, --dark, --ios, --fr, --fr-live-activity, --fr-live-activity-private, --android-ongoing-cap-fr)  v0.3 / pack v0.1.5, private + cap v0.1.7
     nearby-area.html (+ .png, --sheet, --dark, --ios, --fr)  v0.3 / pack v0.1.5
     nearby-radar.html (+ .png, --dark, --reduced-motion, --live, --ios, --fr)  v0.3 / pack v0.1.5
     nearby-skeleton.html (+ .png, --blurhash, --resolved, --dark, --blurhash-dark)  v0.3 / pack v0.1.5

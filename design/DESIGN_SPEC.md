@@ -1,4 +1,4 @@
-# OMCP Smartphone Apps — Design Spec v0.1.6
+# OMCP Smartphone Apps — Design Spec v0.1.7
 
 **Platforms:** Android 12+ (Kotlin UI + Rust core), iOS 17+ (SwiftUI + Rust core)  
 **Date:** 2026-10-24 (v0.1.1; v0.1.0 2026-10-23)  
@@ -663,7 +663,7 @@ On first launch the app checks Drive `appDataFolder` (after Credential Manager a
 
 ## 5C. v0.1.3 — Verified badge and verify invitation
 
-Decision (maintainer, 2026-10-24): “Chat without verifying” stays on QR/NFC adds. Verification is framed as a **reward**: verified contacts earn a mint badge; unverified contacts get a friendly invitation in the thread only. No red, no amber (amber is the queue path colour), no warning copy.
+Decision (the maintainer, 2026-10-24): “Chat without verifying” stays on QR/NFC adds. Verification is framed as a **reward**: verified contacts earn a mint badge; unverified contacts get a friendly invitation in the thread only. No red, no amber (amber is the queue path colour), no warning copy.
 
 ### 5.32 `VerifiedBadge` — `chats-list` (+`--dark`, `--ios`), `chat-thread` (+`--dark`, `--ios`, `--ios-dark`, `--verified`, `--safety-details`)
 
@@ -858,7 +858,7 @@ Timer after opening: Off · On open (deleted when closed) · 10 s · 1 min · 1 
 - Ring + number never colour-only; amber has text label 🔥.
 - Android: `FLAG_SECURE` app-wide (v0.1.5); content excluded from Auto Backup, search, share targets. iOS: secure-capture layer + `UIScreen.isCaptured` cover (no screenshot notification); content in in-memory store; excluded from iCloud backup and Spotlight.
 
-## 5G. v0.1.5 — Maintainer decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24)
+## 5G. v0.1.5 — the maintainer’s decisions (REQUIREMENTS § Maintainer decisions, 2026-10-24)
 
 Generator `/workspace/omcp-v015/gen.py` (supersedes v0.1.4 generator; same helpers).
 
@@ -974,18 +974,42 @@ Explains jury (15 random verified, independent, never reported/vouched), 72 h, �
 ### 5.69 Accessibility & platform
 Banners `role=status` (announced once on entry, not on every scroll). Reputation pill `role=img` “Reputation: Well supported, 3 of 4”. Blurred media has text alternative “Media paused”. “Continue watching?” is `alertdialog` with focus on Continue. Jury buttons equal size, no colour-only meaning. Android: banners as Material `Card`; iOS: inset grouped section header. Reduced motion: blur and banner slide-ins become instant/150 ms fades.
 
-### 5.70 Settings › Privacy › Block screenshots (maintainer, v0.1.6) — `settings-privacy` (+`--dark`, `--ios`, `--confirm-off`, `--confirm-off-dark`, `--confirm-off-ios`, `--off`, `--off-dark`, `--off-ios`, `--fr`, `--confirm-off-fr`, `--off-fr`)
+### 5.70 Settings › Privacy › Block screenshots (the maintainer, v0.1.6) — `settings-privacy` (+`--dark`, `--ios`, `--confirm-off`, `--confirm-off-dark`, `--confirm-off-ios`, `--off`, `--off-dark`, `--off-ios`, `--fr`, `--confirm-off-fr`, `--off-fr`)
 - Toggle **Block screenshots**, default **On** (= §5.57 behaviour). On copy unchanged (honest second-camera line).
 - Turning off → confirm sheet “Allow screenshots?”: app switcher will show chats; captures may land in photo backups; contacts aren’t notified; burn-after-read and view-once stay protected. Allow screenshots / Keep blocking (default focus).
-- Off: Android clears `FLAG_SECURE` on normal windows; iOS removes the secure-capture layer and app-switcher cover. **Burn viewer, opened burn text and view-once media keep `FLAG_SECURE` / secure layer / capture cover.** Off copy: “Screenshots are allowed. Burn-after-read messages and view-once media stay protected.”
+- Off: Android clears `FLAG_SECURE` on normal windows; iOS removes the secure-capture layer and app-switcher cover. **Burn viewer, opened burn text and view-once media keep `FLAG_SECURE` / secure layer / capture cover.** Off copy: superseded by §5.71 (v0.1.7).
 - Supersedes §5.57’s “cannot be turned off” footnote.
 
 | Key | EN | FR |
 |---|---|---|
 | toggle | Block screenshots | Bloquer les captures d’écran |
-| off.desc | Screenshots are allowed. Burn-after-read messages and view-once media stay protected. | Captures autorisées. Les messages éphémères et les médias à voir une fois restent protégés. |
+| off.desc | *(v0.1.7 → §5.71)* Screenshots are allowed. Burn-after-read and view-once content is always protected. Another device can still take a photo of your screen. | Captures autorisées. Les messages éphémères et les médias à voir une fois restent toujours protégés. Un autre appareil peut quand même photographier votre écran. |
 | confirm.title | Allow screenshots? | Autoriser les captures d’écran ? |
 | confirm.cta | Allow screenshots / Keep blocking | Autoriser les captures / Garder le blocage |
+
+## 5I. v0.1.7 — Approved decisions (maintainer, 2026-10-24)
+
+Generator `/workspace/omcp-v017/gen.py`.
+
+### 5.71 Block screenshots — aligned with REQUIREMENTS Decision 5 / SS1
+- Toggle **Block screenshots**, **on by default** (Settings › Privacy). On copy now starts “On by default.”; both On and Off copy keep the second-camera line (Decision 5: the app says plainly that a second camera can still photograph the screen).
+- Off copy: “Screenshots are allowed. Burn-after-read and view-once content is always protected. Another device can still take a photo of your screen.” / « Captures autorisées. Les messages éphémères et les médias à voir une fois restent toujours protégés. Un autre appareil peut quand même photographier votre écran. »
+- Confirm bullet: “Burn-after-read and view-once content is always protected.” / « Les messages éphémères et le contenu à voir une fois restent toujours protégés. » `settings-privacy` (all 12 frames re-rendered).
+- SS1: toggle on → every screen black/blank; toggle off → burn/view-once still black/blank (B3).
+
+### 5.72 App switcher by toggle state — `app-switcher-cover` (+`--android`, `--ios-off`, `--android-off`, `--ios-recording`, `-fr`)
+| Toggle | Android recents | iOS app switcher |
+|---|---|---|
+| **On** (default) | Black card (`FLAG_SECURE`), system app label | Blurred brand privacy cover |
+| **Off** | Normal preview (system snapshot) | Normal preview |
+Open burn/view-once screens keep `FLAG_SECURE` / secure layer, so their snapshot stays black/blank even when Off.
+
+### 5.73 Nearby session — Private notifications and +30 cap — `nearby-session`
+- With **Private notifications on**, the Live Activity, Dynamic Island and Android ongoing notification **hide the counts**: “Nearby is on · 42 min left” only; compact Island shows ripple + remaining time. Frames: `--ios-live-activity-private`, `--ios-island-private`, `--ios-island-expanded-private`, `--android-ongoing-private`, `--fr-live-activity-private`.
+- **+30 min** extends the session but is capped at **120 min total** (start + extensions). At the cap the action is **hidden** (not greyed, so no dead target) and a line reads “Maximum session length reached (120 min)” / « Durée maximale atteinte (120 min) ». Frames: `--android-ongoing-cap`, `--android-ongoing-cap-fr`. Same rule for any future iOS Live Activity “+30” button.
+
+### 5.74 Moderation confirmations
+Confirmed (unchanged since v0.1.6): Reported and Restricted follow PROTOCOL §23.4 exactly (§5.63); Under review is shown to **admins only**; reputation uses **four word levels**, no number (§5.62).
 
 ## 6. Path indicator component (normative UX)
 
@@ -1114,13 +1138,17 @@ Resolved in v0.1.2: v0.1.1 Q1 (skip phrase confirm) — superseded by REQUIREMEN
 3. **Wrong-password limits:** O4 asks for rate-limited retries; mockups assume 3 tries then 5-minute cooldown (escalating). Confirm numbers with the Rust core.
 Resolved in v0.1.5 by the maintainer (REQUIREMENTS § Decisions): Q4 calls → “Hopla · Incoming call”; Q5 per-chat opt-out allowed; Q6 Android lock → “Hopla · New message”; Q7 Nearby must be a pleasure on iOS → sessions + Live Activity + area mode (§5.58); Q8 no screenshots anywhere (§5.57).
 
-4. **Live Activity on Private notifications:** should the Live Activity / Dynamic Island hide the counts when Private notifications is on (show only “Nearby is on”)? Mockups show counts (no names).
-5. **Android recents:** REQUIREMENTS says black thumbnail (FLAG_SECURE). The brief asked for a branded cover on Android too; that needs Android 13+ `setRecentsScreenshotEnabled(false)` (blank, app icon). Black kept — confirm.
-6. **Session battery:** cap at 120 min and allow “+30 min” from the notification — is +30 allowed past 120 min total?
-7. **Block-screenshots toggle vs REQUIREMENTS:** Decision 5 says “No screenshots anywhere in Hopla” and SS1 says every screen is black/blank. the maintainer’s toggle (§5.70) contradicts this when Off. REQUIREMENTS needs updating (SS1 → “when Block screenshots is on; burn/view-once always”). B3 already ties burn to SS1 — keep burn protected regardless.
-8. **Restricted text:** brief asked for “text behind a warning” in Restricted; §23.4 puts that in Reported and says Restricted shows text only. Mockups follow §23. Confirm.
-9. **Under review visibility:** §23.4 says nothing changes for users; mockup shows the banner to admins only. Should members ever see it?
-10. **Reputation display granularity:** §23 doesn’t define UI. Mockups use 4 word bands, no number. OK, or hide reputation entirely below a minimum community size?
+Resolved 2026-10-24 (maintainer approved; REQUIREMENTS Decision 5 / SS1 updated by Writey):
+- ~~Q4 Live Activity on Private notifications~~ → counts hidden (§5.73).
+- ~~Q5 Android recents~~ → black when Block screenshots is on, normal preview when off (§5.72).
+- ~~Q6 Session battery / +30 min~~ → capped at 120 min total; action hidden at cap (§5.73).
+- ~~Q7 Block-screenshots toggle vs REQUIREMENTS~~ → REQUIREMENTS now has the toggle, on by default; burn/view-once always protected (§5.71).
+- ~~Q8 Restricted text~~ → follow §23 (§5.63).
+- ~~Q9 Under review visibility~~ → admins only.
+- ~~Q10 Reputation display~~ → four word levels.
+
+Open:
+11. **SS2 wording vs toggle Off:** REQUIREMENTS SS2 still says “the app switcher never shows chat content”, but the approved Off state shows a normal preview. SS2 should read “with the toggle on”. Also Burn § Device-side protection line 130 still says “blocked app-wide”.
 
 ---
 
@@ -1132,6 +1160,7 @@ Resolved in v0.1.5 by the maintainer (REQUIREMENTS § Decisions): Q4 calls → �
 | 0.1.1 | 2026-10-24 | Hopla naming; §5.14–5.24 onboarding, contact add, file transfer; 11 new mockups (17 PNG frames); resolved v0.1.0 questions |
 | 0.1.2 | 2026-10-24 | 4-screen onboarding + recovery backup (§5.1, §5.14 updated; §5.25–5.31 new); §5.15/5.16/5.18 deprecated; 8 new + 1 updated mockups (24 PNG frames); new §12 questions |
 | 0.1.3 | 2026-10-24 | Verified badge §5C |
+| 0.1.7 | 2026-10-24 | Approved decisions §5.71–5.74: toggle copy aligned to REQUIREMENTS, private Live Activity/Island, recents by toggle, +30 cap; §12 Q4–Q10 resolved |
 | 0.1.6 | 2026-10-24 | Moderation & reputation (§23, v0.2) §5.61–5.69; Block screenshots toggle §5.70; 7 new + 1 updated mockups; §12 Q7–Q10 |
-| 0.1.5 | 2026-10-24 | Maintainer decisions: §5.56–5.60 (calls, per-chat opt-out, Android lock, no screenshots, Nearby session/area/radar/skeleton/motion); 6 new mockups; screenshot notices removed |
+| 0.1.5 | 2026-10-24 | the maintainer decisions: §5.56–5.60 (calls, per-chat opt-out, Android lock, no screenshots, Nearby session/area/radar/skeleton/motion); 6 new mockups; screenshot notices removed |
 | 0.1.4 | 2026-10-24 | Notifications §5.36–5.40; Hopla Nearby dating (v0.3) §5.41–5.49; Burn after read §5.50–5.55; 14 new mockups (96 PNG frames); §12 Q4–Q8 |
