@@ -45,6 +45,9 @@ use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
+mod files;
+pub use files::{FileFailure, FileOffer, FileProgress, ReceivedFile, FILE_CHUNK_BYTES};
+
 /// Max handshake bytes per PDU chunk.
 pub const HANDSHAKE_CHUNK: usize = 480;
 /// Link fragment plaintext payload; frame = 2 + 12 + payload + 16 (+1 kind) < 512.
@@ -223,6 +226,15 @@ pub struct LinkOutput {
     pub flushed: u32,
     /// `OPENED` receipts received on this call (our copies already handled in Rust).
     pub opened: Vec<OpenedEvent>,
+    /// File transfer progress (sender: chunks sealed; receiver: chunks received).
+    pub file_progress: Vec<FileProgress>,
+    /// Files fully received and verified (BLAKE3) on this call.
+    pub files: Vec<ReceivedFile>,
+    /// Transfers that failed (e.g. integrity) on this call.
+    pub file_failures: Vec<FileFailure>,
+    /// More outbound file chunks are waiting: call `flush()` again once the
+    /// platform's write/notify queue has drained.
+    pub more_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -436,6 +448,7 @@ struct NodeState {
     links_up: HashMap<u64, [u8; 32]>,
     next_link: u64,
     seen: SeenCache,
+    files: files::FileState,
 }
 
 /// One queued outbound message: envelope id fixed at queue time so `OPENED` can match.
@@ -555,6 +568,7 @@ impl OmcpNode {
                     links_up: HashMap::new(),
                     next_link: 1,
                     seen: SeenCache::default(),
+                    files: files::FileState::default(),
                 }),
             }),
         }))
@@ -824,6 +838,69 @@ impl OmcpNode {
         st.burn_in.is_live(&id) || st.burn_out.is_live(&id)
     }
 
+    /// Queue a file (≤ 50 MB, checked before any encryption) for a contact. It is
+    /// encrypted into 64 KiB chunks now and sent when a link to them is up; one
+    /// transfer per contact is active at a time, others wait in line.
+    pub fn queue_file(
+        &self,
+        contact_id: String,
+        name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<FileOffer, FfiError> {
+        let id = parse_id(&contact_id)?;
+        check_file_size(bytes.len() as u64)?;
+        if !self.inner.lock().contacts.contains_key(&id) {
+            return Err(FfiError::UnknownContact);
+        }
+        let tid = random_id16()?;
+        let f = files::build_outgoing(tid, &name, &mime, &bytes)?;
+        let offer = FileOffer {
+            transfer_id_hex: hex::encode(tid),
+            contact_id,
+            name,
+            mime,
+            size: f.size,
+            num_chunks: f.total,
+        };
+        self.inner
+            .lock()
+            .files
+            .out
+            .entry(id)
+            .or_default()
+            .push_back(f);
+        Ok(offer)
+    }
+
+    /// Cancel an outbound transfer (queued or in progress). Returns whether it existed.
+    pub fn cancel_file(&self, transfer_id_hex: String) -> bool {
+        let Ok(tid) = parse_msg_id(&transfer_id_hex) else {
+            return false;
+        };
+        let mut st = self.inner.lock();
+        for q in st.files.out.values_mut() {
+            if let Some(i) = q.iter().position(|f| f.id == tid) {
+                q.remove(i);
+                return true;
+            }
+        }
+        st.files.incoming.remove(&tid).is_some()
+    }
+
+    /// Outbound file transfers (active + queued) for a contact.
+    pub fn files_pending_for(&self, contact_id: String) -> u32 {
+        let Ok(id) = parse_id(&contact_id) else {
+            return 0;
+        };
+        self.inner
+            .lock()
+            .files
+            .out
+            .get(&id)
+            .map_or(0, |q| q.len() as u32)
+    }
+
     pub fn queued_for(&self, contact_id: String) -> u32 {
         let Ok(id) = parse_id(&contact_id) else {
             return 0;
@@ -896,7 +973,7 @@ impl OmcpNode {
             let body: &[u8] = match &content {
                 AppContent::Text(t) => t.as_bytes(),
                 AppContent::Media { bytes, .. } => bytes,
-                AppContent::Opened(_) => &[],
+                AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => &[],
             };
             st.burn_out.insert(envelope_id, h, body, now)?;
             st.burn_meta
@@ -1162,6 +1239,11 @@ impl MeshLink {
                     burn_at_ms: node.burn_out.burn_at(&r.msg_id),
                 });
             }
+            (None, AppContent::FileMeta(b)) => files::on_offer(&mut node.files, peer, &b, out),
+            (None, AppContent::FileChunk(b)) => files::on_chunk(&mut node.files, peer, &b, out),
+            (Some(_), AppContent::FileMeta(_) | AppContent::FileChunk(_)) => {
+                return Err(invalid("burn file"))
+            }
             (None, AppContent::Text(t)) => {
                 rt.text = t;
                 out.received.push(rt);
@@ -1175,7 +1257,9 @@ impl MeshLink {
                 let (body, mime) = match &c {
                     AppContent::Text(t) => (t.as_bytes(), None),
                     AppContent::Media { mime, bytes } => (bytes.as_slice(), Some(mime.clone())),
-                    AppContent::Opened(_) => unreachable!(),
+                    AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => {
+                        unreachable!()
+                    }
                 };
                 node.burn_in
                     .insert(env.envelope_id, h, body, env.created_ms)?;
@@ -1244,6 +1328,45 @@ impl MeshLink {
             if !q.control {
                 out.flushed += 1;
             }
+        }
+        // Then the active file transfer, a few chunks per call.
+        let mut node = self.node.lock();
+        let Some(q) = node.files.out.get_mut(&peer) else {
+            return Ok(());
+        };
+        let mut batch: Vec<Queued> = Vec::new();
+        if let Some(f) = q.front_mut() {
+            if f.link != Some(self.handle) {
+                f.link = Some(self.handle);
+                f.cursor = 0;
+                batch.push(Queued {
+                    envelope_id: random_id16()?,
+                    created_ms: now_ms(),
+                    inner: f.offer.clone(),
+                    control: true,
+                });
+            }
+            for _ in 0..files::FILE_CHUNKS_PER_FLUSH {
+                let Some(c) = f.chunks.get(f.cursor) else {
+                    break;
+                };
+                batch.push(Queued {
+                    envelope_id: random_id16()?,
+                    created_ms: now_ms(),
+                    inner: c.clone(),
+                    control: true,
+                });
+                f.cursor += 1;
+            }
+            out.file_progress.push(f.progress(&peer));
+            if f.cursor >= f.chunks.len() {
+                q.pop_front();
+            }
+        }
+        out.more_pending = !q.is_empty();
+        drop(node);
+        for m in &batch {
+            Self::seal_into(&self.node, up, m, out)?;
         }
         Ok(())
     }
