@@ -46,12 +46,14 @@ apply; padding fits the 1 MiB cap.
 | (9) Sub-tags `BLAKE2b-64(exporter, "OMCP-sub" ‖ leaf_u32 ‖ epoch_u64)`, TLV `0x56` (8·n), chats ≤ 8 members; larger groups chat tag + Plumtree | `tag::{subtag, chat_subtag, put_subtags_in_aad, parse_routing_aad, uses_subtags}`; MLS-backed via `TagSecretSource` |
 | (9) Forwarding want > lowest carry > scoped flood within TTL, no spray | `routing::plan_forward(tags, ttl_hops, …)`; spray-and-wait removed |
 | (10) Per-message metadata ≤ max(256 B, 10 % ct); beacons only in idle budget | SY1 `per_message_metadata`, SY4 `metadata_per_delivered` (incl. carry deltas) |
-| (11) Full digest only to new neighbours / `DIGEST_REQ` / 30-min refresh; hello ≤ 60 s (≤ 32 nbrs) or 120 s | `hello::{DigestAdvertiser, needs_digest_req, hello_max_ms, SyncHello}` |
+| (11) Full digest only to new neighbours / `DIGEST_REQ` / 30-min refresh; hello ≤ 60 s (≤ 32 nbrs) or 120 s | `hello::{DigestAdvertiser, needs_digest_req, hello_max_ms}`; frames: `hello::{LinkControl, digest_id32}` |
 
-**Proposed pin (needs Writey's OK):** the sync beacon is 6 B,
-`type 0x48 | flags | digest_id[4]` (`DIGEST_REQ` = `0x52`, same layout).
-With the previous 12 B beacon the idle budget failed at 32 neighbours
-(p95 1.17 MB/day); with 6 B it is 0.83 MB/day.
+**§22.7(12) / §21.9 (normative):** `HELLO` (0x48) and `DIGEST_REQ` (0x52)
+are 6-byte link-control frames `type | flags | digest_id u32-be`; flags bit0
+`HAS_DELTA`, bits 1–7 reserved and rejected if set; `DIGEST_REQ` id 0 = full.
+`digest_id` = low 32 bits of BLAKE2b-512 over the encoded want-digest, read
+as the last 4 output bytes big-endian (our interpretation of "low 32 bits").
+Idle at 32 neighbours ≈ 0.83 MB/day.
 
 ## Stubs / not done
 

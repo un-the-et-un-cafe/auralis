@@ -4,6 +4,8 @@
 //!   (120 s with more than 32 neighbours, §22.7(11)).
 //! - Digests: deltas on change; a full digest only to a new neighbour, on
 //!   `DIGEST_REQ`, or as a 30-min safety refresh (§22.7(11)).
+//! - `HELLO` / `DIGEST_REQ` are 6-byte link-control frames (§22.7(12),
+//!   registry §21.9).
 
 use super::cuckoo::{CuckooFilter, DigestDelta};
 
@@ -14,7 +16,7 @@ pub const HELLO_MAX_DENSE_MS: u64 = 120_000;
 /// Neighbour count above which the longer hello ceiling applies.
 pub const DENSE_NEIGHBOURS: usize = 32;
 pub const DIGEST_REFRESH_MS: u64 = 30 * 60_000;
-/// `DIGEST_REQ` on the wire: `type u8 | flags u8 | digest_id[4]`.
+/// `DIGEST_REQ` on the wire (same 6-byte link-control layout).
 pub const DIGEST_REQ_BYTES: u64 = 6;
 
 /// Hello ceiling for a neighbourhood of `neighbours`.
@@ -25,45 +27,80 @@ pub fn hello_max_ms(neighbours: usize) -> u64 {
         HELLO_MAX_MS
     }
 }
-/// Sync beacon on the wire: `type u8 | flags u8 | digest_id[4]` (6 B).
-/// (Proposed pin; §22.7 leaves the beacon format open.)
+/// Link-control frame size (§22.7(12), registry §21.9).
 pub const HELLO_BYTES: u64 = 6;
-/// Beacon type byte.
-pub const TYPE_SYNC_HELLO: u8 = 0x48;
-/// `DIGEST_REQ` type byte.
+/// §21.9 link-control frame type `HELLO`.
+pub const TYPE_HELLO: u8 = 0x48;
+/// §21.9 link-control frame type `DIGEST_REQ`.
 pub const TYPE_DIGEST_REQ: u8 = 0x52;
+/// `flags` bit0: a delta digest follows this frame. Bits 1–7 reserved (0).
+pub const FLAG_HAS_DELTA: u8 = 0x01;
+/// `DIGEST_REQ` digest_id meaning "send me your full digest".
+pub const DIGEST_ID_FULL: u32 = 0;
 
-/// Periodic sync beacon (§22.7(2)/(11)): advertises the current digest id
-/// (first 4 bytes of [`CuckooFilter::digest_id`]) so neighbours know whether
-/// their cached digest is current or they must send `DIGEST_REQ`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SyncHello {
-    pub flags: u8,
-    pub digest_id: [u8; 4],
+/// `digest_id` = low 32 bits of BLAKE2b(-512) over the encoded want-digest,
+/// i.e. the last 4 output bytes read as a big-endian u32.
+pub fn digest_id32(f: &CuckooFilter) -> u32 {
+    use blake2::{Blake2b512, Digest};
+    let h = Blake2b512::digest(f.encode());
+    u32::from_be_bytes([h[60], h[61], h[62], h[63]])
 }
 
-impl SyncHello {
-    pub fn for_digest(f: &CuckooFilter, flags: u8) -> Self {
-        let id = f.digest_id();
-        Self {
-            flags,
-            digest_id: [id[0], id[1], id[2], id[3]],
+/// 6-byte link-control frame: `type u8 | flags u8 | digest_id u32-be`
+/// (§22.7(12)). These are link-control frames (§21.9), not `header_aad` TLVs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkControl {
+    /// Beacon advertising the current want-digest.
+    Hello { has_delta: bool, digest_id: u32 },
+    /// Request a digest (`digest_id` = [`DIGEST_ID_FULL`] for a full one).
+    DigestReq { has_delta: bool, digest_id: u32 },
+}
+
+impl LinkControl {
+    pub fn hello_for(f: &CuckooFilter, has_delta: bool) -> Self {
+        Self::Hello {
+            has_delta,
+            digest_id: digest_id32(f),
         }
     }
 
     pub fn encode(&self) -> [u8; 6] {
-        let d = self.digest_id;
-        [TYPE_SYNC_HELLO, self.flags, d[0], d[1], d[2], d[3]]
+        let (t, d, id) = match *self {
+            Self::Hello {
+                has_delta,
+                digest_id,
+            } => (TYPE_HELLO, has_delta, digest_id),
+            Self::DigestReq {
+                has_delta,
+                digest_id,
+            } => (TYPE_DIGEST_REQ, has_delta, digest_id),
+        };
+        let b = id.to_be_bytes();
+        [t, u8::from(d), b[0], b[1], b[2], b[3]]
     }
 
+    /// Decode; rejects wrong length, unregistered types and non-zero
+    /// reserved flag bits.
     pub fn decode(b: &[u8]) -> crate::Result<Self> {
-        if b.len() != 6 || b[0] != TYPE_SYNC_HELLO {
-            return Err(crate::OmcpError::Sync("sync hello"));
+        if b.len() != HELLO_BYTES as usize {
+            return Err(crate::OmcpError::Sync("link-control length"));
         }
-        Ok(Self {
-            flags: b[1],
-            digest_id: [b[2], b[3], b[4], b[5]],
-        })
+        if b[1] & !FLAG_HAS_DELTA != 0 {
+            return Err(crate::OmcpError::Sync("link-control reserved flags"));
+        }
+        let has_delta = b[1] & FLAG_HAS_DELTA != 0;
+        let digest_id = u32::from_be_bytes([b[2], b[3], b[4], b[5]]);
+        match b[0] {
+            TYPE_HELLO => Ok(Self::Hello {
+                has_delta,
+                digest_id,
+            }),
+            TYPE_DIGEST_REQ => Ok(Self::DigestReq {
+                has_delta,
+                digest_id,
+            }),
+            _ => Err(crate::OmcpError::Sync("link-control type not in §21.9")),
+        }
     }
 }
 
@@ -194,15 +231,47 @@ impl DigestAdvertiser {
     }
 }
 
-/// Should we send `DIGEST_REQ`? Yes if a neighbour's hello carries a digest
-/// id we hold no digest (or delta chain) for.
-pub fn needs_digest_req(cached: Option<&CuckooFilter>, hello: &SyncHello) -> bool {
-    cached.is_none_or(|f| SyncHello::for_digest(f, 0).digest_id != hello.digest_id)
+/// Should we send `DIGEST_REQ`? Yes if a neighbour's `HELLO` carries a
+/// digest id we hold no digest (or delta chain) for.
+pub fn needs_digest_req(cached: Option<&CuckooFilter>, hello_digest_id: u32) -> bool {
+    cached.is_none_or(|f| digest_id32(f) != hello_digest_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_control_frames_exact_layout() {
+        let mut rng = SplitMix64(4);
+        let f = CuckooFilter::build_digest(&[[1; 8]], 16, &mut rng).unwrap();
+        // digest_id = low 32 bits (last 4 bytes, BE) of BLAKE2b-512(digest).
+        use blake2::{Blake2b512, Digest};
+        let h = Blake2b512::digest(f.encode());
+        let want = u32::from_be_bytes(h[60..64].try_into().unwrap());
+        assert_eq!(digest_id32(&f), want);
+        let hello = LinkControl::hello_for(&f, true);
+        let b = hello.encode();
+        assert_eq!(b[0], 0x48);
+        assert_eq!(b[1], 0x01);
+        assert_eq!(&b[2..], &want.to_be_bytes());
+        assert_eq!(LinkControl::decode(&b).unwrap(), hello);
+        let req = LinkControl::DigestReq {
+            has_delta: false,
+            digest_id: DIGEST_ID_FULL,
+        };
+        assert_eq!(req.encode(), [0x52, 0, 0, 0, 0, 0]);
+        assert_eq!(LinkControl::decode(&req.encode()).unwrap(), req);
+        // reserved flag bits must be zero
+        for bit in 1..8 {
+            let mut x = b;
+            x[1] |= 1 << bit;
+            assert!(LinkControl::decode(&x).is_err());
+        }
+        assert!(LinkControl::decode(&[0x49, 0, 0, 0, 0, 0]).is_err());
+        assert!(LinkControl::decode(&b[..5]).is_err());
+        assert!(LinkControl::decode(&[0x48, 0, 0, 0, 0, 0, 0]).is_err());
+    }
     use crate::sync::SplitMix64;
 
     #[test]
@@ -228,13 +297,11 @@ mod tests {
         assert!((715..=730).contains(&dense), "{dense}");
         let mut rng = SplitMix64(3);
         let f = CuckooFilter::build_digest(&[[1; 8]], 16, &mut rng).unwrap();
-        let h = SyncHello::for_digest(&f, 0);
-        assert_eq!(SyncHello::decode(&h.encode()).unwrap(), h);
-        assert_eq!(h.encode().len() as u64, HELLO_BYTES);
-        assert!(needs_digest_req(None, &h));
-        assert!(!needs_digest_req(Some(&f), &h));
+        let id = digest_id32(&f);
+        assert!(!needs_digest_req(Some(&f), id));
+        assert!(needs_digest_req(None, id));
         let g = CuckooFilter::build_digest(&[[2; 8]], 16, &mut rng).unwrap();
-        assert!(needs_digest_req(Some(&g), &h));
+        assert!(needs_digest_req(Some(&g), id));
     }
 
     #[test]
