@@ -127,13 +127,29 @@ Messages and images that delete themselves once they've been read.
 
 ### Device-side protection
 - Burnable content is kept only in an encrypted, in-memory store or a separate encrypted DB table. Deletion zeroizes the keys, so it's crypto-shredded and can't be recovered from disk.
-- **Screenshots**: Android uses `FLAG_SECURE` on the viewer (screenshots and screen recording show black). iOS detects screenshots and screen recording, hides the content during recording, and notifies the sender ("📸 Took a screenshot").
+- **Screenshots**: blocked app-wide (see "Product decisions (2026-10-24)" item 5).
 - Burnable content never appears in notification previews, backups, the search index or share sheets.
 - **Honest copy**: the app tells users plainly that burn after read can't stop someone photographing the screen with another device.
 
 ### Acceptance tests
 - B1: A burn-after-read text is gone from both devices ≤ 1 s after the timer runs out, and there's no trace in the DB file afterwards (forensic test).
 - B2: A view-once image can be opened exactly once. A second tap shows the placeholder, and save, forward and quote are disabled.
-- B3: On Android the viewer produces a black screenshot; on iOS a screenshot sends the sender a notice.
+- B3: Burn content can never be captured, per SS1 (app-wide screenshot block).
 - B4: An unopened burn message expires at unread_ttl on the receiver and is dropped by relays (envelope `expires_at`).
 - B5: Burn content is excluded from cloud backup, notifications and search.
+
+## Product decisions (2026-10-24)
+1. **Private-mode calls** show "Hopla · Incoming call" (no caller name). Every other notification shows "New message".
+2. **Per-chat override**: a single chat may turn Private notifications **off**, even when it's on globally.
+3. **Android "Hide on lock screen"** shows "Hopla · New message" (not blank).
+4. **Nearby must be a pleasure to use**, including on iOS:
+   - **Nearby session**: one tap on "Go Nearby" starts a session (30 / 60 / 120 min). On iOS this runs as a **Live Activity** and Dynamic Island item (people nearby, new likes) and keeps BLE scanning active for the whole session. On Android it's a foreground service with an ongoing notification.
+   - **Background fallback**: outside a session, discovery keeps working over the gateway using the coarse geohash cell. iOS uses BLE state restoration and background app refresh to pick up cards opportunistically, so matches and likes still arrive as notifications.
+   - **Instant start**: cached nearby cards appear in under 1 s when the tab is opened. Photos load progressively (blurhash first), swipes are 60/120 fps with haptics, and the "Nobody nearby yet" state shows a live radar and suggests starting a session or widening the radius.
+   - **Honest status**: a small status chip ("Live nearby · 42 min left", or "Area mode") instead of warnings. There are no confusing OS limitation messages.
+   - Acceptance: NX1 the first card shows in under 1 s from a cold tab open (with a cache); NX2 an iOS session keeps discovering for 60 min with the phone locked; NX3 a match in background (area mode) is notified within 5 min.
+5. **No screenshots anywhere in Hopla** (replaces the "notify sender" behaviour):
+   - **Android**: `FLAG_SECURE` on every app window, so screenshots, screen recordings, casting and the recent-apps thumbnail all show black.
+   - **iOS**: all sensitive views (chats, media, Nearby, profiles) render inside a secure-capture layer (the `UITextField.isSecureTextEntry` container technique), so they come out blank in screenshots and recordings. The app switcher shows a blurred privacy cover. If screen recording or mirroring is detected (`UIScreen.isCaptured`), the content is hidden behind a cover until it stops.
+   - The app tells users plainly (in Settings > Privacy) that a second camera can still photograph the screen.
+   - Acceptance: SS1 screenshots and recordings of every Hopla screen are black or blank on Android 10–15 and iOS 17–26; SS2 the app switcher never shows chat content.
