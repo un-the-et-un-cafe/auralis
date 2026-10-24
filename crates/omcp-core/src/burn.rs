@@ -141,13 +141,24 @@ pub fn decode_inner(p: &[u8]) -> Result<(Option<BurnHeader>, &[u8])> {
 pub const INNER_CT_TEXT: u8 = 0x01;
 /// Inner content type: view-once media descriptor / bytes (beta: raw bytes).
 pub const INNER_CT_MEDIA: u8 = 0x02;
+/// Inner content type: file offer (`transfer_id ‖ content_key ‖ FileMeta`), PROTOCOL §7.
+pub const INNER_CT_FILE_META: u8 = crate::files::CONTENT_TYPE_FILE_META;
+/// Inner content type: one encrypted file chunk (`transfer_id ‖ FileChunk`).
+pub const INNER_CT_FILE_CHUNK: u8 = crate::files::CONTENT_TYPE_FILE_CHUNK;
 
 /// Decoded application content inside `InnerV1` (after the optional burn header).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppContent {
     Text(String),
-    Media { mime: String, bytes: Vec<u8> },
+    Media {
+        mime: String,
+        bytes: Vec<u8>,
+    },
     Opened(OpenedReceipt),
+    /// File offer body (opaque to this layer; parsed by the file transfer code).
+    FileMeta(Vec<u8>),
+    /// File chunk body (opaque to this layer).
+    FileChunk(Vec<u8>),
 }
 
 /// `InnerV1` plaintext for an application message: `tag [| burn] | inner_ct u8 | body`.
@@ -172,6 +183,17 @@ pub fn encode_app(burn: Option<&BurnHeader>, content: &AppContent) -> Result<Vec
             }
             body.extend_from_slice(&r.encode());
         }
+        AppContent::FileMeta(b) | AppContent::FileChunk(b) => {
+            if burn.is_some() {
+                return Err(OmcpError::Burn("files can't burn in the beta"));
+            }
+            body.push(if matches!(content, AppContent::FileMeta(_)) {
+                INNER_CT_FILE_META
+            } else {
+                INNER_CT_FILE_CHUNK
+            });
+            body.extend_from_slice(b);
+        }
     }
     Ok(encode_inner(burn, &body))
 }
@@ -194,6 +216,8 @@ pub fn decode_app(p: &[u8]) -> Result<(Option<BurnHeader>, AppContent)> {
                 bytes: rest[n..].to_vec(),
             }
         }
+        INNER_CT_FILE_META if burn.is_none() => AppContent::FileMeta(rest.to_vec()),
+        INNER_CT_FILE_CHUNK if burn.is_none() => AppContent::FileChunk(rest.to_vec()),
         CONTROL_OPENED if burn.is_none() => AppContent::Opened(OpenedReceipt::decode(body)?),
         _ => return Err(OmcpError::Burn("inner content type")),
     };
@@ -566,6 +590,14 @@ mod tests {
             opened_ms: 1,
         });
         assert!(encode_app(Some(&h), &r).is_err());
+        for c in [
+            AppContent::FileMeta(vec![7; 40]),
+            AppContent::FileChunk(vec![]),
+        ] {
+            let p = encode_app(None, &c).unwrap();
+            assert_eq!(decode_app(&p).unwrap(), (None, c.clone()));
+            assert!(encode_app(Some(&h), &c).is_err());
+        }
     }
 
     #[test]

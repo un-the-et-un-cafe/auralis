@@ -153,4 +153,21 @@
     <string name="burn_ttl_24h">24 h</string>
     <string name="burn_ttl_7d">7 jours</string>
     <string name="notif_incoming_call">Appel entrant</string>
+    <string name="file_state_received">%1$s Mo · Reçu</string>
+    <string name="file_integrity_checked">Intégrité vérifiée</string>
+    <string name="file_state_sending">Envoi · %1$s sur %2$s Mo</string>
+    <string name="file_state_sent">%1$s Mo · Envoyé</string>
+    <string name="file_state_receiving">Réception · %1$s sur %2$s Mo</string>
+    <string name="file_state_paused">En pause · hors de portée · %1$s sur %2$s Mo</string>
+    <string name="file_paused_meta">En attente du mesh · reprise automatique</string>
+    <string name="file_state_queued">En file d’attente · %1$s Mo · prochain envoi</string>
+    <string name="file_state_failed">Échec — nouvel essai via le mesh</string>
+    <string name="file_state_integrity">Le fichier ne correspond pas — demandez à %1$s de le renvoyer</string>
+    <string name="file_cancel_a11y">Annuler l’envoi de %1$s</string>
+    <string name="file_cancel_receive_a11y">Annuler la réception de %1$s</string>
+    <string name="file_open_a11y">Ouvrir %1$s</string>
+    <string name="file_delete">Supprimer</string>
+    <string name="file_progress_a11y">%1$d pour cent</string>
+    <string name="file_read_error">Impossible de lire ce fichier. Essayez-en un autre.</string>
+    <string name="file_attach">Joindre un fichier</string>
 </resources>

@@ -63,7 +63,7 @@ class OnboardingViewModel(
 
     /** Fresh install: look for an existing cloud backup ("Welcome back"). */
     fun detectBackup() {
-        val blob = runCatching { cloud.download() }.getOrNull() ?: return
+        val blob = runCatching { cloud.downloadSilently() }.getOrNull() ?: return
         val meta = core.backupInfo(blob) ?: return
         pendingBlob = blob
         _state.update { it.copy(step = OnboardingStep.RestorePrompt, foundBackup = meta) }

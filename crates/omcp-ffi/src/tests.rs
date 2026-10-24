@@ -352,3 +352,133 @@ impl<T: std::fmt::Debug> Single<T> for Vec<T> {
         self.pop().unwrap()
     }
 }
+
+#[test]
+fn icloud_key_backup_roundtrip_and_no_plaintext() {
+    let a = node("Alice");
+    let b = node("Bob");
+    let c = a.add_contact_from_qr(b.qr_payload()).unwrap();
+    a.set_verified(c.contact_id.clone(), true).unwrap();
+    let key = generate_backup_key().unwrap();
+    assert_eq!(key.len(), 32);
+    let blob = a
+        .create_backup_with_key(key.clone(), "iPhone".into(), 7)
+        .unwrap();
+    let info = backup_info(blob.clone()).unwrap();
+    assert!(!info.needs_password);
+    // O2: neither the phrase words nor the key appear in the blob.
+    let phrase = a.recovery_phrase().unwrap();
+    for w in phrase.split(' ').filter(|w| w.len() >= 5) {
+        assert!(!blob.windows(w.len()).any(|x| x == w.as_bytes()));
+    }
+    assert!(!blob.windows(32).any(|x| x == key.as_slice()));
+    let r = open_backup_with_key(blob.clone(), key).unwrap();
+    assert_eq!(r.phrase, phrase);
+    assert!(r.contacts[0].verified);
+    let wrong = generate_backup_key().unwrap();
+    assert!(open_backup_with_key(blob.clone(), wrong).is_err());
+    assert!(matches!(
+        open_backup_with_key(blob, vec![0; 31]),
+        Err(FfiError::Invalid { .. })
+    ));
+}
+
+/// Like `pump`, but keeps calling `flush()` while the sender reports more file chunks.
+fn pump_files(from: &MeshLink, to: &MeshLink) -> (Vec<ReceivedFile>, Vec<FileFailure>, u32) {
+    let (mut files, mut fails, mut flushes) = (Vec::new(), Vec::new(), 0);
+    loop {
+        let out = from.flush().unwrap();
+        flushes += 1;
+        let more = out.more_pending;
+        for p in out.outgoing {
+            let o = to.on_pdu(p).unwrap();
+            files.extend(o.files);
+            fails.extend(o.file_failures);
+        }
+        if !more {
+            return (files, fails, flushes);
+        }
+    }
+}
+
+#[test]
+fn file_transfer_end_to_end_in_64k_chunks() {
+    let (a, _b, la, lb) = paired();
+    let start = la.start().unwrap();
+    pump(&la, &lb, start);
+    let bob = a.contacts()[0].contact_id.clone();
+    let data: Vec<u8> = (0..(3 * FILE_CHUNK_BYTES + 123))
+        .map(|i| (i * 7) as u8)
+        .collect();
+    let offer = a
+        .queue_file(
+            bob.clone(),
+            "flyer.jpg".into(),
+            "image/jpeg".into(),
+            data.clone(),
+        )
+        .unwrap();
+    assert_eq!(offer.num_chunks, 4);
+    assert_eq!(a.files_pending_for(bob.clone()), 1);
+    let (files, fails, flushes) = pump_files(&la, &lb);
+    assert!(fails.is_empty());
+    assert!(flushes >= 2, "chunks must be drained over several flushes");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].name, "flyer.jpg");
+    assert_eq!(files[0].mime, "image/jpeg");
+    assert_eq!(files[0].bytes, data);
+    assert_eq!(a.files_pending_for(bob), 0);
+}
+
+#[test]
+fn file_too_large_rejected_before_encryption_and_cancel() {
+    let (a, _b, _la, _lb) = paired();
+    let bob = a.contacts()[0].contact_id.clone();
+    let big = vec![0u8; (max_file_bytes() + 1) as usize];
+    assert!(matches!(
+        a.queue_file(bob.clone(), "x.bin".into(), "".into(), big),
+        Err(FfiError::FileTooLarge { .. })
+    ));
+    let o = a
+        .queue_file(bob.clone(), "e.txt".into(), "text/plain".into(), vec![])
+        .unwrap();
+    assert_eq!(o.num_chunks, 1);
+    assert!(a.cancel_file(o.transfer_id_hex.clone()));
+    assert!(!a.cancel_file(o.transfer_id_hex));
+    assert_eq!(a.files_pending_for(bob), 0);
+}
+
+#[test]
+fn interrupted_file_transfer_completes_on_reconnect() {
+    let (a, b, la, lb) = paired();
+    let start = la.start().unwrap();
+    pump(&la, &lb, start);
+    let bob = a.contacts()[0].contact_id.clone();
+    let data: Vec<u8> = (0..(5 * FILE_CHUNK_BYTES))
+        .map(|i| (i % 251) as u8)
+        .collect();
+    a.queue_file(
+        bob.clone(),
+        "v.mp4".into(),
+        "video/mp4".into(),
+        data.clone(),
+    )
+    .unwrap();
+    // First link: one flush delivered, then the link drops.
+    let out = la.flush().unwrap();
+    assert!(out.more_pending);
+    for p in out.outgoing {
+        assert!(lb.on_pdu(p).unwrap().files.is_empty());
+    }
+    la.shutdown();
+    lb.shutdown();
+    // Reconnect: offer re-sent, chunks replayed, receiver keeps partial state.
+    let la2 = a.open_initiator_link(bob).unwrap();
+    let lb2 = b.open_responder_link().unwrap();
+    let start = la2.start().unwrap();
+    pump(&la2, &lb2, start);
+    let (files, fails, _) = pump_files(&la2, &lb2);
+    assert!(fails.is_empty());
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].bytes, data);
+}

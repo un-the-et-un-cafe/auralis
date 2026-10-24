@@ -1,6 +1,11 @@
 package chat.omcp.app
 
 import android.os.Bundle
+import androidx.activity.result.IntentSenderRequest
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 import chat.omcp.app.security.ScreenSecurity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,6 +23,17 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val app = application as OmcpApplication
+        // Google consent for Drive (requested from a background backup call).
+        val consentLauncher = registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
+        ) { r -> app.driveConsent.complete(if (r.resultCode == RESULT_OK) r.data else null) }
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.driveConsent.pending.collect { pi ->
+                    if (pi != null) consentLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                }
+            }
+        }
         setContent {
             OmcpTheme {
                 OmcpRoot(

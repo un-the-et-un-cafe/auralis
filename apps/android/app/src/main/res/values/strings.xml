@@ -153,4 +153,21 @@
     <string name="burn_ttl_24h">24 h</string>
     <string name="burn_ttl_7d">7 days</string>
     <string name="notif_incoming_call">Incoming call</string>
+    <string name="file_state_received">%1$s MB · Received</string>
+    <string name="file_integrity_checked">Integrity checked</string>
+    <string name="file_state_sending">Sending · %1$s of %2$s MB</string>
+    <string name="file_state_sent">%1$s MB · Sent</string>
+    <string name="file_state_receiving">Receiving · %1$s of %2$s MB</string>
+    <string name="file_state_paused">Paused · out of range · %1$s of %2$s MB</string>
+    <string name="file_paused_meta">Waiting for mesh · resumes automatically</string>
+    <string name="file_state_queued">Queued · %1$s MB · next in line</string>
+    <string name="file_state_failed">Couldn’t finish — will retry on mesh</string>
+    <string name="file_state_integrity">File didn’t match — ask %1$s to resend</string>
+    <string name="file_cancel_a11y">Cancel sending %1$s</string>
+    <string name="file_cancel_receive_a11y">Cancel receiving %1$s</string>
+    <string name="file_open_a11y">Open %1$s</string>
+    <string name="file_delete">Delete</string>
+    <string name="file_progress_a11y">%1$d percent</string>
+    <string name="file_read_error">Couldn’t read that file. Try another.</string>
+    <string name="file_attach">Attach file</string>
 </resources>

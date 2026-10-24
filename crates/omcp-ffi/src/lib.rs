@@ -45,6 +45,9 @@ use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
+mod files;
+pub use files::{FileFailure, FileOffer, FileProgress, ReceivedFile, FILE_CHUNK_BYTES};
+
 /// Max handshake bytes per PDU chunk.
 pub const HANDSHAKE_CHUNK: usize = 480;
 /// Link fragment plaintext payload; frame = 2 + 12 + payload + 16 (+1 kind) < 512.
@@ -223,6 +226,15 @@ pub struct LinkOutput {
     pub flushed: u32,
     /// `OPENED` receipts received on this call (our copies already handled in Rust).
     pub opened: Vec<OpenedEvent>,
+    /// File transfer progress (sender: chunks sealed; receiver: chunks received).
+    pub file_progress: Vec<FileProgress>,
+    /// Files fully received and verified (BLAKE3) on this call.
+    pub files: Vec<ReceivedFile>,
+    /// Transfers that failed (e.g. integrity) on this call.
+    pub file_failures: Vec<FileFailure>,
+    /// More outbound file chunks are waiting: call `flush()` again once the
+    /// platform's write/notify queue has drained.
+    pub more_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -334,15 +346,47 @@ pub fn open_backup_with_password(
     blob: Vec<u8>,
     password: String,
 ) -> Result<RestoredBackup, FfiError> {
-    let c = backup::open_backup(&blob, backup::BackupSecret::Password(&password))?;
+    restored(backup::open_backup(
+        &blob,
+        backup::BackupSecret::Password(&password),
+    )?)
+}
+
+/// Decrypt an iCloud "No password" backup with the 256-bit iCloud Keychain key.
+#[uniffi::export]
+pub fn open_backup_with_key(blob: Vec<u8>, key: Vec<u8>) -> Result<RestoredBackup, FfiError> {
+    let key = platform_key(key)?;
+    restored(backup::open_backup(
+        &blob,
+        backup::BackupSecret::PlatformKey(&key),
+    )?)
+}
+
+/// Fresh random 256-bit key for the iCloud "No password" backup mode.
+#[uniffi::export]
+pub fn generate_backup_key() -> Result<Vec<u8>, FfiError> {
+    let mut k = Zeroizing::new([0u8; 32]);
+    getrandom_fill(&mut k[..])?;
+    Ok(k.to_vec())
+}
+
+fn platform_key(key: Vec<u8>) -> Result<Zeroizing<[u8; 32]>, FfiError> {
+    let key = Zeroizing::new(key);
+    let arr: [u8; 32] = key[..]
+        .try_into()
+        .map_err(|_| invalid("backup key must be 32 bytes"))?;
+    Ok(Zeroizing::new(arr))
+}
+
+fn restored(c: backup::BackupContents) -> Result<RestoredBackup, FfiError> {
     Ok(RestoredBackup {
         phrase: recovery::seed_to_phrase(&c.entropy)?.to_string(),
         contacts: c
             .contacts
-            .into_iter()
+            .iter()
             .map(|b| BackupContact {
                 contact_id: hex::encode(b.peer_id),
-                display_name: b.name,
+                display_name: b.name.clone(),
                 verified: b.verified,
             })
             .collect(),
@@ -404,6 +448,7 @@ struct NodeState {
     links_up: HashMap<u64, [u8; 32]>,
     next_link: u64,
     seen: SeenCache,
+    files: files::FileState,
 }
 
 /// One queued outbound message: envelope id fixed at queue time so `OPENED` can match.
@@ -465,6 +510,37 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+impl OmcpNode {
+    fn seal(
+        &self,
+        secret: backup::BackupSecret<'_>,
+        device_hint: &str,
+        created_at_ms: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        let contacts = self
+            .inner
+            .lock()
+            .contacts
+            .iter()
+            .map(|(id, c)| backup::BackupContact {
+                peer_id: *id,
+                name: c.name.clone(),
+                verified: c.verified,
+            })
+            .collect();
+        let contents = backup::BackupContents {
+            entropy: Zeroizing::new(*self.inner.seed),
+            contacts,
+        };
+        Ok(backup::seal_backup(
+            &contents,
+            secret,
+            created_at_ms,
+            device_hint,
+        )?)
+    }
+}
+
 /// Local node: identity, contacts, offline queue.
 #[derive(uniffi::Object)]
 pub struct OmcpNode {
@@ -492,6 +568,7 @@ impl OmcpNode {
                     links_up: HashMap::new(),
                     next_link: 1,
                     seen: SeenCache::default(),
+                    files: files::FileState::default(),
                 }),
             }),
         }))
@@ -517,27 +594,27 @@ impl OmcpNode {
         device_hint: String,
         created_at_ms: u64,
     ) -> Result<Vec<u8>, FfiError> {
-        let contacts = self
-            .inner
-            .lock()
-            .contacts
-            .iter()
-            .map(|(id, c)| backup::BackupContact {
-                peer_id: *id,
-                name: c.name.clone(),
-                verified: c.verified,
-            })
-            .collect();
-        let contents = backup::BackupContents {
-            entropy: Zeroizing::new(*self.inner.seed),
-            contacts,
-        };
-        Ok(backup::seal_backup(
-            &contents,
+        self.seal(
             backup::BackupSecret::Password(&password),
-            created_at_ms,
             &device_hint,
-        )?)
+            created_at_ms,
+        )
+    }
+
+    /// iCloud "No password" mode: the blob is sealed under a 256-bit key that the app
+    /// keeps in iCloud Keychain (synchronizable). See [`generate_backup_key`].
+    pub fn create_backup_with_key(
+        &self,
+        key: Vec<u8>,
+        device_hint: String,
+        created_at_ms: u64,
+    ) -> Result<Vec<u8>, FfiError> {
+        let key = platform_key(key)?;
+        self.seal(
+            backup::BackupSecret::PlatformKey(&key),
+            &device_hint,
+            created_at_ms,
+        )
     }
 
     /// Contact QR payload: `omcp:1:<peer id hex>:<display name>`.
@@ -761,6 +838,69 @@ impl OmcpNode {
         st.burn_in.is_live(&id) || st.burn_out.is_live(&id)
     }
 
+    /// Queue a file (≤ 50 MB, checked before any encryption) for a contact. It is
+    /// encrypted into 64 KiB chunks now and sent when a link to them is up; one
+    /// transfer per contact is active at a time, others wait in line.
+    pub fn queue_file(
+        &self,
+        contact_id: String,
+        name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<FileOffer, FfiError> {
+        let id = parse_id(&contact_id)?;
+        check_file_size(bytes.len() as u64)?;
+        if !self.inner.lock().contacts.contains_key(&id) {
+            return Err(FfiError::UnknownContact);
+        }
+        let tid = random_id16()?;
+        let f = files::build_outgoing(tid, &name, &mime, &bytes)?;
+        let offer = FileOffer {
+            transfer_id_hex: hex::encode(tid),
+            contact_id,
+            name,
+            mime,
+            size: f.size,
+            num_chunks: f.total,
+        };
+        self.inner
+            .lock()
+            .files
+            .out
+            .entry(id)
+            .or_default()
+            .push_back(f);
+        Ok(offer)
+    }
+
+    /// Cancel an outbound transfer (queued or in progress). Returns whether it existed.
+    pub fn cancel_file(&self, transfer_id_hex: String) -> bool {
+        let Ok(tid) = parse_msg_id(&transfer_id_hex) else {
+            return false;
+        };
+        let mut st = self.inner.lock();
+        for q in st.files.out.values_mut() {
+            if let Some(i) = q.iter().position(|f| f.id == tid) {
+                q.remove(i);
+                return true;
+            }
+        }
+        st.files.incoming.remove(&tid).is_some()
+    }
+
+    /// Outbound file transfers (active + queued) for a contact.
+    pub fn files_pending_for(&self, contact_id: String) -> u32 {
+        let Ok(id) = parse_id(&contact_id) else {
+            return 0;
+        };
+        self.inner
+            .lock()
+            .files
+            .out
+            .get(&id)
+            .map_or(0, |q| q.len() as u32)
+    }
+
     pub fn queued_for(&self, contact_id: String) -> u32 {
         let Ok(id) = parse_id(&contact_id) else {
             return 0;
@@ -833,7 +973,7 @@ impl OmcpNode {
             let body: &[u8] = match &content {
                 AppContent::Text(t) => t.as_bytes(),
                 AppContent::Media { bytes, .. } => bytes,
-                AppContent::Opened(_) => &[],
+                AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => &[],
             };
             st.burn_out.insert(envelope_id, h, body, now)?;
             st.burn_meta
@@ -1099,6 +1239,11 @@ impl MeshLink {
                     burn_at_ms: node.burn_out.burn_at(&r.msg_id),
                 });
             }
+            (None, AppContent::FileMeta(b)) => files::on_offer(&mut node.files, peer, &b, out),
+            (None, AppContent::FileChunk(b)) => files::on_chunk(&mut node.files, peer, &b, out),
+            (Some(_), AppContent::FileMeta(_) | AppContent::FileChunk(_)) => {
+                return Err(invalid("burn file"))
+            }
             (None, AppContent::Text(t)) => {
                 rt.text = t;
                 out.received.push(rt);
@@ -1112,7 +1257,9 @@ impl MeshLink {
                 let (body, mime) = match &c {
                     AppContent::Text(t) => (t.as_bytes(), None),
                     AppContent::Media { mime, bytes } => (bytes.as_slice(), Some(mime.clone())),
-                    AppContent::Opened(_) => unreachable!(),
+                    AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => {
+                        unreachable!()
+                    }
                 };
                 node.burn_in
                     .insert(env.envelope_id, h, body, env.created_ms)?;
@@ -1181,6 +1328,45 @@ impl MeshLink {
             if !q.control {
                 out.flushed += 1;
             }
+        }
+        // Then the active file transfer, a few chunks per call.
+        let mut node = self.node.lock();
+        let Some(q) = node.files.out.get_mut(&peer) else {
+            return Ok(());
+        };
+        let mut batch: Vec<Queued> = Vec::new();
+        if let Some(f) = q.front_mut() {
+            if f.link != Some(self.handle) {
+                f.link = Some(self.handle);
+                f.cursor = 0;
+                batch.push(Queued {
+                    envelope_id: random_id16()?,
+                    created_ms: now_ms(),
+                    inner: f.offer.clone(),
+                    control: true,
+                });
+            }
+            for _ in 0..files::FILE_CHUNKS_PER_FLUSH {
+                let Some(c) = f.chunks.get(f.cursor) else {
+                    break;
+                };
+                batch.push(Queued {
+                    envelope_id: random_id16()?,
+                    created_ms: now_ms(),
+                    inner: c.clone(),
+                    control: true,
+                });
+                f.cursor += 1;
+            }
+            out.file_progress.push(f.progress(&peer));
+            if f.cursor >= f.chunks.len() {
+                q.pop_front();
+            }
+        }
+        out.more_pending = !q.is_empty();
+        drop(node);
+        for m in &batch {
+            Self::seal_into(&self.node, up, m, out)?;
         }
         Ok(())
     }

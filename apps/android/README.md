@@ -38,10 +38,13 @@ Backup blob = Rust core (`omcp_core::backup`): Argon2id (64 MiB, t=3, p=1) + XCh
 AAD `OMCP-Backup-v1‖suite‖created_at`, CBOR `{v,kdf,salt,nonce,ct,created_at,device_hint}`; plaintext
 contains entropy + contacts + verification state. Password: ≥ 8 chars, zxcvbn ≥ 3.
 
-**Google Drive is a stub** (`DriveAppDataBackupStore.available = false`): no OAuth client id ships in
-this repo. Debug builds use an in-memory “simulated Drive” (`BuildConfig.SIMULATED_DRIVE_BACKUP`) so
-the flow can be exercised; it does not survive reinstall. TODO: Credential Manager + `drive.appdata`
-REST (see class KDoc), WorkManager retry when offline.
+**Google Drive backup** (`backup/DriveAppData.kt`, `backup/GoogleDriveAuth.kt`): Google Identity
+Services `AuthorizationClient` (scope `drive.appdata` only, consent shown by `MainActivity`) +
+Drive v3 REST on `appDataFolder` (create / overwrite / download / delete one file). It is live
+when the build has `GOOGLE_OAUTH_CLIENT_ID` (Gradle property or env var, never committed); see
+[`../GOOGLE_DRIVE_BACKUP.md`](../GOOGLE_DRIVE_BACKUP.md) for creating the OAuth client. Without it,
+Drive shows as unavailable and debug builds use an in-memory “simulated Drive”. TODO: WorkManager
+retry when offline.
 
 Onboarding screens are plain layouts (`ui/components/Plain.kt`) pending design v0.1.2. Contact-add,
 QR and file-confirm follow DESIGN_SPEC §5.19–§5.24.
@@ -52,9 +55,9 @@ QR and file-confirm follow DESIGN_SPEC §5.19–§5.24.
 |------|--------|
 | O1 ≤ 4 screens to chats with cloud backup | JVM test (`OnboardingViewModelTest`); timing ≤ 60 s not measured on device |
 | O2 blob has no plaintext phrase/key | Rust tests (`backup::tests`, `omcp-ffi`) + Kotlin bridge test |
-| O3 reinstall → restore from Drive | Logic tested with in-memory store; **real Drive deferred** (OAuth) |
+| O3 reinstall → restore from Drive | Logic tested with in-memory store; Drive REST tested against a fake API (`DriveAppDataClientTest`); **not run against real Google** (needs an OAuth client + device) |
 | O4 wrong password fails, rate-limited, phrase fallback | Rust + JVM tests (`RetryLimiter`) |
-| O5 delete removes remote record | JVM test against in-memory store; real Drive API check deferred |
+| O5 delete removes remote record | JVM tests (in-memory store + fake Drive API); real Google check needs an OAuth client |
 | O6 skip → banner, blocked after 24 h | JVM test |
 | iCloud parts of O2/O3, platform-key mode UI | Deferred to iOS (M6); core supports `platform-key` KDF |
 
@@ -67,7 +70,8 @@ QR and file-confirm follow DESIGN_SPEC §5.19–§5.24.
 | 1:1 text over BLE GATT, offline queue flush on connect | Real code path; verified Kotlin↔Rust in JVM test with simulated PDUs, **not on phones** |
 | Notifications | Previews off by default (“New Hopla message”) |
 | Gateway settings | Policy from core (500 MB/day, Wi-Fi only, metered warns); no real gateway transport |
-| File send | Picker + 50 MB check (core constant) + queued bubble; **chunk transfer over BLE TODO** |
+| File send / receive | Picker + 50 MB check before reading; Rust encrypts 64 KiB chunks (`queue_file`), transport streams them (`more_pending`), pause/auto-resume on reconnect, BLAKE3-verified receive saved to app storage, v0.1.1 bubble states. Verified Kotlin↔Rust in JVM; **not on phones** |
+| Android ↔ iPhone discovery | Scan filters: OMCP service UUID, OMCP manufacturer data, OMCP local name, Apple overflow-area data; iPhones are probed via GATT service discovery + Control read (`ScanClassifier`). Not tried on hardware |
 | Groups (MLS), NFC, session reset / block, Room persistence of messages | TODO |
 | Communities / Live | “Coming in v0.2” empty states |
 

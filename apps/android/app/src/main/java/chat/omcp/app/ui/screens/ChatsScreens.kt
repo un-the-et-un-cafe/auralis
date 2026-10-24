@@ -17,6 +17,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Send
@@ -52,6 +56,7 @@ import chat.omcp.app.core.PathKind
 import chat.omcp.app.data.BackupGate
 import chat.omcp.app.data.ChatMessage
 import chat.omcp.app.data.FileAttachment
+import chat.omcp.app.data.FileAttachment.State as S
 import chat.omcp.app.ui.vm.ChatThreadViewModel
 import chat.omcp.app.ui.vm.ChatsViewModel
 import chat.omcp.app.ui.components.Callout
@@ -202,7 +207,18 @@ fun ChatThreadScreen(
                 cur.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = cur.getLong(it) }
             }
         }
-        vm.onFilePicked(name, size, ctx.contentResolver.getType(uri) ?: "application/octet-stream")
+        val resolver = ctx.contentResolver
+        vm.onFilePicked(name, size, resolver.getType(uri) ?: "application/octet-stream") {
+            resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("unreadable")
+        }
+    }
+    val fileError by vm.fileError.collectAsState()
+    if (fileError) {
+        AlertDialog(
+            onDismissRequest = vm::dismissFileError,
+            text = { Text(stringResource(R.string.file_read_error)) },
+            confirmButton = { TextButton(onClick = vm::dismissFileError) { Text(stringResource(R.string.cancel)) } },
+        )
     }
     val confirm by vm.fileConfirm.collectAsState()
     confirm?.let { f ->
@@ -271,7 +287,7 @@ fun ChatThreadScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.AttachFile, contentDescription = "Attach") }
+                IconButton(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.AttachFile, contentDescription = stringResource(R.string.file_attach)) }
                 TextField(
                     value = draft,
                     onValueChange = { draft = it },
@@ -328,7 +344,17 @@ fun ChatThreadScreen(
                     if (m.burn != null) {
                         BurnBubble(m) { vm.openBurn(m.id)?.let { body -> opened = OpenedBurn(vm.messages.value[vm.contactId]!!.first { it.id == m.id }, body) } }
                     } else if (f != null) {
-                        FileBubble(m.mine, f)
+                        FileBubble(
+                            mine = m.mine,
+                            f = f,
+                            peerName = contact?.displayName ?: "",
+                            onCancel = { vm.cancelTransfer(m.id) },
+                            onOpen = {
+                                val path = f.localPath ?: return@FileBubble
+                                val app = ctx.applicationContext as chat.omcp.app.OmcpApplication
+                                runCatching { ctx.startActivity(app.receivedFiles.openIntent(path, f.mime)) }
+                            },
+                        )
                     } else {
                         val meta = time(m.timeMs) + " · " + when (m.status) {
                             ChatMessage.Status.Queued -> "Queued"
@@ -343,33 +369,84 @@ fun ChatThreadScreen(
     }
 }
 
-/** File bubble (§5.24). Beta: transfers are queued only — chunk streaming is TODO(M5.1). */
+/**
+ * File bubble (§5.24, Designy v0.1.1 `file-transfer`): queued / sending / receiving / paused /
+ * sent / received (integrity checked in Rust) / failed / integrity fail, with Cancel, Open, Delete.
+ */
 @Composable
-private fun FileBubble(mine: Boolean, f: FileAttachment) {
+private fun FileBubble(
+    mine: Boolean,
+    f: FileAttachment,
+    peerName: String,
+    onCancel: () -> Unit,
+    onOpen: () -> Unit,
+) {
     val c = LocalOmcpColors.current
+    val done = mb(f.doneBytes)
+    val total = mb(f.sizeBytes)
+    val line = when (f.state) {
+        S.Queued -> stringResource(R.string.file_state_queued, total)
+        S.Sending -> stringResource(R.string.file_state_sending, done, total)
+        S.Sent -> stringResource(R.string.file_state_sent, total)
+        S.Receiving -> stringResource(R.string.file_state_receiving, done, total)
+        S.Paused -> stringResource(R.string.file_state_paused, done, total)
+        S.Received -> stringResource(R.string.file_state_received, total)
+        S.Failed -> stringResource(R.string.file_state_failed)
+        S.IntegrityFailed -> stringResource(R.string.file_state_integrity, peerName)
+    }
+    val meta = when (f.state) {
+        S.Received -> stringResource(R.string.file_integrity_checked)
+        S.Paused -> stringResource(R.string.file_paused_meta)
+        else -> null
+    }
+    val barColor = when (f.state) {
+        S.Paused, S.Queued -> c.pathQueue
+        S.Failed, S.IntegrityFailed -> c.danger
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val progress = when (f.state) {
+        S.Queued -> 0f
+        S.Received, S.Sent, S.IntegrityFailed -> 1f
+        else -> f.fraction.coerceIn(0f, 1f)
+    }
+    val pct = (progress * 100).toInt()
+    val progressLabel = stringResource(R.string.file_progress_a11y, pct)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Column(
             Modifier
                 .fillMaxWidth(0.8f)
                 .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, c.line, RoundedCornerShape(14.dp))
+                .border(1.dp, if (f.state == S.IntegrityFailed) c.danger else c.line, RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.surface)
+                .then(if (f.state == S.Received && f.localPath != null) Modifier.clickable(onClick = onOpen) else Modifier)
                 .padding(12.dp),
         ) {
-            Text(f.name, style = MaterialTheme.typography.titleSmall)
-            Text(
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(f.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 when (f.state) {
-                    FileAttachment.State.Queued -> "Queued · ${mb(f.sizeBytes)} MB · next in line"
-                    FileAttachment.State.Paused -> "Paused · out of range"
-                    FileAttachment.State.Received -> "${mb(f.sizeBytes)} MB · Received"
-                    FileAttachment.State.Failed -> "Couldn’t finish — will retry on mesh"
-                    FileAttachment.State.IntegrityFailed -> "File didn’t match — ask them to resend"
-                    else -> f.state.name
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = c.ink2,
+                    S.Queued, S.Sending, S.Paused, S.Receiving -> {
+                        val a11y = if (mine) stringResource(R.string.file_cancel_a11y, f.name) else stringResource(R.string.file_cancel_receive_a11y, f.name)
+                        IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = a11y) }
+                    }
+                    S.IntegrityFailed -> TextButton(onClick = onCancel) { Text(stringResource(R.string.file_delete)) }
+                    S.Received -> if (f.localPath != null) {
+                        IconButton(onClick = onOpen) {
+                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = stringResource(R.string.file_open_a11y, f.name))
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+            Text(line, style = MaterialTheme.typography.bodySmall, color = if (f.state == S.IntegrityFailed || f.state == S.Failed) c.danger else c.ink2)
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp)
+                    .semantics { contentDescription = progressLabel },
+                color = barColor,
             )
-            LinearProgressIndicator(progress = { 0f }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp), color = c.pathQueue)
+            meta?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.ink2, modifier = Modifier.padding(top = 4.dp)) }
         }
     }
 }
