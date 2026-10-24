@@ -602,7 +602,7 @@ fn wrong_storage_key_and_other_identity_are_refused() {
         OmcpNode::open(other, "B".into(), path, SKEY.to_vec()),
         Err(FfiError::Storage { .. })
     ));
-    assert_eq!(storage_schema_version(), 1);
+    assert_eq!(storage_schema_version(), 2);
     assert_eq!(generate_storage_key().unwrap().len(), 32);
 }
 
@@ -960,6 +960,16 @@ fn cb3_placeholder_refills_from_partner_and_unavailable_path() {
         )
         .unwrap();
     drain(&lb, &la);
+    // Bob's kept copies: the photo answers from the app below; the pdf is gone.
+    {
+        let st = b.inner.lock();
+        st.db()
+            .delete_kept_media(&parse_msg_id(&offer.transfer_id_hex).unwrap())
+            .unwrap();
+        st.db()
+            .delete_kept_media(&parse_msg_id(&gone.transfer_id_hex).unwrap())
+            .unwrap();
+    }
     let mut blobs = Vec::new();
     backup_all(&a, 1, &mut blobs);
     la.shutdown();
@@ -1006,9 +1016,145 @@ fn cb3_placeholder_refills_from_partner_and_unavailable_path() {
         .any(|u| u.msg_id_hex == gone.transfer_id_hex && u.state == StoredFileState::Unavailable));
     assert_eq!(st(&gone.transfer_id_hex), StoredFileState::Unavailable);
     // "Ask to resend" reaches Bob as a prompt.
-    a2.ask_to_resend(gone.transfer_id_hex.clone()).unwrap();
+    // (e) "Ask to resend" is ONE message carrying the optional note.
+    a2.ask_to_resend(
+        gone.transfer_id_hex.clone(),
+        Some("  lost it, pls resend ".into()),
+    )
+    .unwrap();
     let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
-    assert!(outs.iter().any(|o| o.resend_asks.len() == 1));
+    let asks: Vec<_> = outs.iter().flat_map(|o| o.resend_asks.clone()).collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].note.as_deref(), Some("lost it, pls resend"));
+    assert!(
+        outs.iter().all(|o| o.received.is_empty()),
+        "no separate text message"
+    );
+    // Without a note, and a too-long note is refused.
+    a2.ask_to_resend(gone.transfer_id_hex.clone(), None)
+        .unwrap();
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    let asks: Vec<_> = outs.iter().flat_map(|o| o.resend_asks.clone()).collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].note, None);
+    assert!(a2
+        .ask_to_resend(gone.transfer_id_hex.clone(), Some("x".repeat(281)))
+        .is_err());
+}
+
+#[test]
+fn e_resend_ask_wire_carries_note_and_old_form_still_decodes() {
+    use omcp_core::burn::{decode_app, encode_app, MediaControl, CONTROL_MEDIA_RESEND_ASK};
+    let c = MediaControl {
+        note: Some("merci".into()),
+        ..MediaControl::new(CONTROL_MEDIA_RESEND_ASK, [1; 16], [2; 32])
+    };
+    let wire = encode_app(None, &AppContent::MediaControl(c.clone())).unwrap();
+    assert_eq!(decode_app(&wire).unwrap().1, AppContent::MediaControl(c));
+    let bare = MediaControl::new(CONTROL_MEDIA_RESEND_ASK, [1; 16], [2; 32]);
+    assert_eq!(bare.encode().len(), MediaControl::WIRE_LEN);
+    assert_eq!(MediaControl::decode(&bare.encode()).unwrap(), bare);
+}
+
+#[test]
+fn rs3_restored_contact_refetches_file_sent_30_days_ago_burn_never_served() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let bob = b.identity().peer_id_hex;
+    // Bob sends Alice a photo, and a view-once photo.
+    lb.flush().unwrap();
+    let offer = b
+        .queue_file(
+            alice.clone(),
+            "pic.jpg".into(),
+            "image/jpeg".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    let once = b
+        .queue_media(
+            alice.clone(),
+            "image/jpeg".into(),
+            b"view-once".to_vec(),
+            Some(spec(BurnMode::OnOpen, 0, 86_400)),
+        )
+        .unwrap();
+    drain(&lb, &la);
+    let u = b.kept_media_usage().unwrap();
+    assert_eq!(
+        (u.count, u.bytes),
+        (1, PIC.len() as u64),
+        "burn media never kept"
+    );
+    assert_eq!(
+        b.kept_media_settings().unwrap(),
+        KeptMediaSettings {
+            max_days: 90,
+            max_bytes: 2_000_000_000
+        }
+    );
+    // 30 days later the copy is still kept.
+    let day = 86_400_000u64;
+    assert_eq!(b.evict_kept_media(now_ms() + 30 * day).unwrap(), 0);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    la.shutdown();
+    lb.shutdown();
+
+    // Alice restores; the photo is a placeholder. Bob's app answers nothing itself.
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let (l2, lb2, outs) = link(&a2, &b);
+    assert!(
+        outs.iter().all(|o| o.media_requests.is_empty()),
+        "served from the kept copy, no app round trip"
+    );
+    let mut files: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    files.extend(drain(&lb2, &l2).iter().flat_map(|o| o.files.clone()));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].transfer_id_hex, offer.transfer_id_hex);
+    assert_eq!(files[0].bytes, PIC);
+    assert_eq!(
+        blake3::hash(&files[0].bytes),
+        blake3::hash(PIC),
+        "hash verified"
+    );
+
+    // A (forged) request for the burn item is never served.
+    {
+        let mut st = a2.inner.lock();
+        let peer = parse_id(&bob).unwrap();
+        st.queue_control(
+            &peer,
+            AppContent::MediaControl(omcp_core::burn::MediaControl::new(
+                omcp_core::burn::CONTROL_MEDIA_REQUEST,
+                parse_msg_id(&once).unwrap(),
+                *blake3::hash(b"view-once").as_bytes(),
+            )),
+        )
+        .unwrap();
+    }
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    let outs2 = drain(&lb2, &l2);
+    assert!(outs
+        .iter()
+        .chain(outs2.iter())
+        .all(|o| o.files.is_empty() && o.media_requests.is_empty()));
+
+    // Limits are configurable; shrinking them evicts oldest first.
+    assert_eq!(
+        b.set_kept_media_settings(
+            KeptMediaSettings {
+                max_days: 90,
+                max_bytes: 10
+            },
+            now_ms()
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(b.kept_media_usage().unwrap().count, 0);
 }
 
 #[test]
@@ -1020,6 +1166,12 @@ fn cb3_refetch_with_wrong_bytes_is_rejected() {
         .queue_file(alice, "pic.jpg".into(), "image/jpeg".into(), PIC.to_vec())
         .unwrap();
     drain(&lb, &la);
+    // No kept copy: the misbehaving partner below answers by hand.
+    b.inner
+        .lock()
+        .db()
+        .delete_kept_media(&parse_msg_id(&offer.transfer_id_hex).unwrap())
+        .unwrap();
     let mut blobs = Vec::new();
     backup_all(&a, 1, &mut blobs);
     let dir = tempfile::tempdir().unwrap();

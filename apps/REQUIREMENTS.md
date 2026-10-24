@@ -91,6 +91,9 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
   - RS2 scope: the restored device keeps its own verifications of others. Contacts' verification of the restored account is cleared (consistent with O3).
   - Device binding: in every session handshake, the device key signs the Noise handshake hash. A certificate that's missing or superseded fails the handshake, so the restore notice can't be suppressed by replaying an old certificate.
   - Key types: PeerID = BLAKE2b-256 of the Ed25519 identity public key. X25519 keys are per-device and certified by the identity key. Contacts are keyed by PeerID, not by X25519.
+- **Ask to resend**: a one-tap request with an optional short note, which the user can add before confirming. It's sent as a single message, not two.
+- **Keep sent media**: Hopla keeps local copies of media you sent, by default for 90 days or up to 2 GB, with the oldest deleted first. Both limits can be changed in Settings > Storage. Burn-after-read and view-once media is never kept. These copies are served when a restored contact re-requests a file.
+- RS3: A restored contact re-requests a file you sent 30 days ago and receives it, hash verified. Burn-after-read media is never served.
 - RS2: After a restore, the safety number differs from the one before, the verified badge is cleared for all contacts, and verifying with the old QR code fails.
 - RS1: Every contact who comes online after the restore shows the notice within 5 s of syncing. The notice can't be suppressed by the restored device, and the old device key is marked superseded.
 - **Data use**: missing media re-downloads over a gateway on Wi-Fi only by default, with a setting to allow mobile data. Over direct BLE mesh it is always allowed.

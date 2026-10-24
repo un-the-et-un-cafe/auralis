@@ -131,6 +131,37 @@ impl Drop for OutboxRec {
     }
 }
 
+/// Index row of a kept local copy of sent media (REQUIREMENTS "Keep sent media").
+/// The bytes are a separate sealed row so eviction never decrypts them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptMediaRec {
+    #[serde(with = "b16")]
+    pub id: [u8; 16],
+    #[serde(with = "b32")]
+    pub peer: [u8; 32],
+    #[serde(with = "b32")]
+    pub hash: [u8; 32],
+    pub kept_ms: u64,
+    pub size: u64,
+}
+
+/// Settings > Storage limits for kept sent media.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptMediaLimits {
+    pub max_days: u32,
+    pub max_bytes: u64,
+}
+
+impl Default for KeptMediaLimits {
+    /// 90 days or 2 GB, whichever is hit first.
+    fn default() -> Self {
+        Self {
+            max_days: 90,
+            max_bytes: 2_000_000_000,
+        }
+    }
+}
+
 /// An outgoing file transfer; its sealed chunk payloads are separate rows.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutFileRec {

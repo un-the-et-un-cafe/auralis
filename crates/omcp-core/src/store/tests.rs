@@ -163,12 +163,12 @@ fn migrations_are_versioned_and_newer_schema_is_refused() {
     let path = dir.path().join("omcp.db");
     {
         let s = Store::open(&path, &KEY).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 1);
+        assert_eq!(s.schema_version().unwrap(), 2);
     }
     // Re-opening is idempotent.
     assert_eq!(
         Store::open(&path, &KEY).unwrap().schema_version().unwrap(),
-        1
+        2
     );
     {
         let c = Connection::open(&path).unwrap();
@@ -351,4 +351,77 @@ fn v014a_rekey_legacy_peer_and_owner() {
     assert_eq!(ms[0].peer, new);
     assert!(s.chat(&new).unwrap().is_some());
     assert!(s.chat(&PEER).unwrap().is_none());
+}
+
+#[test]
+fn v1_store_migrates_to_kept_media_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("omcp.db");
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(MIGRATIONS[0]).unwrap();
+        c.execute_batch("PRAGMA user_version = 1").unwrap();
+    }
+    let s = Store::open(&path, &KEY).unwrap();
+    assert_eq!(s.schema_version().unwrap(), 2);
+    assert!(s.kept_media_index().unwrap().is_empty());
+}
+
+#[test]
+fn kept_media_sealed_evicts_oldest_and_by_age() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Store::open(&dir.path().join("omcp.db"), &KEY).unwrap();
+    let day = 86_400_000u64;
+    let rec = |n: u8, kept_ms: u64| KeptMediaRec {
+        id: [n; 16],
+        peer: PEER,
+        hash: [n; 32],
+        kept_ms,
+        size: 1000,
+    };
+    let lim = KeptMediaLimits {
+        max_days: 90,
+        max_bytes: 2500,
+    };
+    let secret = b"KEPT-MEDIA-PLAINTEXT-MARKER".repeat(37);
+    let mut r1 = rec(1, day);
+    r1.size = secret.len() as u64;
+    assert!(s
+        .put_kept_media(&r1, &secret, KeptMediaLimits::default(), day)
+        .unwrap()
+        .is_empty());
+    assert!(
+        !contains(&disk(dir.path()), b"KEPT-MEDIA-PLAINTEXT-MARKER"),
+        "sealed at rest"
+    );
+    assert_eq!(
+        s.kept_media(&[1; 16]).unwrap().unwrap().as_slice(),
+        &secret[..]
+    );
+    s.delete_kept_media(&[1; 16]).unwrap();
+    assert!(s.kept_media(&[1; 16]).unwrap().is_none());
+    // Size limit: oldest first.
+    for n in 1..=3 {
+        s.put_kept_media(&rec(n, day * u64::from(n)), &[n; 1000], lim, day * 3)
+            .unwrap();
+    }
+    assert!(s.kept_media(&[1; 16]).unwrap().is_none());
+    assert!(s.kept_media(&[2; 16]).unwrap().is_some());
+    // Age limit: 30 days later both are kept, after 90 days the older one goes.
+    assert!(s.evict_kept_media(lim, day * 32).unwrap().is_empty());
+    assert_eq!(
+        s.evict_kept_media(lim, day * 92 + 1).unwrap(),
+        vec![[2; 16]]
+    );
+    // Defaults are 90 days / 2 GB.
+    assert_eq!(
+        KeptMediaLimits::default(),
+        KeptMediaLimits {
+            max_days: 90,
+            max_bytes: 2_000_000_000
+        }
+    );
+    // Re-keyed with the contact.
+    s.rekey_peer(&PEER, &[0x33; 32]).unwrap();
+    assert_eq!(s.kept_media_index().unwrap()[0].peer, [0x33; 32]);
 }

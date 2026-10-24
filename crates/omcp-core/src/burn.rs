@@ -169,37 +169,66 @@ pub enum AppContent {
     MediaControl(MediaControl),
 }
 
-/// Media re-fetch control. Wire: `type u8 | locator 16 | content_hash 32`.
-/// Carries nothing beyond what the original file offer already told the partner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Media re-fetch control. Wire: `type u8 | locator 16 | content_hash 32`, and for
+/// `0x33` (Ask to resend, v0.1.4b) an optional trailing UTF-8 note of at most
+/// [`MediaControl::MAX_NOTE`] bytes, so the request and its note are ONE message.
+/// Carries nothing else beyond what the original file offer already told the partner.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaControl {
     pub kind: u8,
     pub locator: [u8; 16],
     pub hash: [u8; 32],
+    /// Only on `CONTROL_MEDIA_RESEND_ASK`.
+    pub note: Option<String>,
 }
 
 impl MediaControl {
     pub const WIRE_LEN: usize = 49;
-    pub fn encode(&self) -> [u8; 49] {
-        let mut b = [0u8; 49];
-        b[0] = self.kind;
-        b[1..17].copy_from_slice(&self.locator);
-        b[17..].copy_from_slice(&self.hash);
+    pub const MAX_NOTE: usize = 280;
+    pub fn new(kind: u8, locator: [u8; 16], hash: [u8; 32]) -> Self {
+        Self {
+            kind,
+            locator,
+            hash,
+            note: None,
+        }
+    }
+    pub fn encode(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(Self::WIRE_LEN);
+        b.push(self.kind);
+        b.extend_from_slice(&self.locator);
+        b.extend_from_slice(&self.hash);
+        if self.kind == CONTROL_MEDIA_RESEND_ASK {
+            if let Some(n) = self.note.as_deref().filter(|n| !n.is_empty()) {
+                b.extend_from_slice(n.as_bytes());
+            }
+        }
         b
     }
     pub fn decode(b: &[u8]) -> Result<Self> {
-        if b.len() != Self::WIRE_LEN
-            || !matches!(
-                b[0],
-                CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE | CONTROL_MEDIA_RESEND_ASK
-            )
-        {
+        let ok_len = match b.first() {
+            Some(&CONTROL_MEDIA_RESEND_ASK) => {
+                (Self::WIRE_LEN..=Self::WIRE_LEN + Self::MAX_NOTE).contains(&b.len())
+            }
+            Some(&(CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE)) => b.len() == Self::WIRE_LEN,
+            _ => false,
+        };
+        if !ok_len {
             return Err(OmcpError::Burn("media control"));
         }
+        let note = if b.len() > Self::WIRE_LEN {
+            Some(
+                String::from_utf8(b[Self::WIRE_LEN..].to_vec())
+                    .map_err(|_| OmcpError::Burn("note utf8"))?,
+            )
+        } else {
+            None
+        };
         Ok(Self {
             kind: b[0],
             locator: b[1..17].try_into().expect("len"),
-            hash: b[17..].try_into().expect("len"),
+            hash: b[17..49].try_into().expect("len"),
+            note,
         })
     }
 }

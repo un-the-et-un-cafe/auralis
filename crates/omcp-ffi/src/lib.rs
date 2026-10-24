@@ -59,8 +59,8 @@ mod chatbackup;
 mod files;
 mod persist;
 pub use chatbackup::{
-    ChatBackupBlob, ChatBackupSummary, DeviceInfo, MediaBackupItem, MediaBackupSettings,
-    MediaRequestEvent, MediaUpdate, RestoreNotice,
+    ChatBackupBlob, ChatBackupSummary, DeviceInfo, KeptMediaSettings, KeptMediaUsage,
+    MediaBackupItem, MediaBackupSettings, MediaRequestEvent, MediaUpdate, RestoreNotice,
 };
 pub use files::{FileFailure, FileOffer, FileProgress, ReceivedFile, FILE_CHUNK_BYTES};
 pub use persist::{
@@ -1173,7 +1173,7 @@ impl OmcpNode {
         let f = files::build_outgoing(tid, &name, &mime, &bytes)?;
         let mut st = self.inner.lock();
         st.persist_out_file(&id, &f)?;
-        st.db().put_message(&MessageRec {
+        let msg = MessageRec {
             id: tid,
             peer: id,
             mine: true,
@@ -1194,7 +1194,9 @@ impl OmcpNode {
                 hash: Some(blake3::hash(&bytes).as_bytes().to_vec()),
                 locator: Some(tid.to_vec()),
             }),
-        })?;
+        };
+        st.db().put_message(&msg)?;
+        st.keep_sent(&msg, &bytes, now_ms())?;
         let offer = FileOffer {
             transfer_id_hex: hex::encode(tid),
             contact_id,

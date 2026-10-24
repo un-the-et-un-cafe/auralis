@@ -109,7 +109,24 @@ pub struct MediaRequestEvent {
     pub mime: String,
     /// Our copy, if the app saved one.
     pub local_path: Option<String>,
+    /// Ask to resend only: the requester's optional note (same message, v0.1.4b).
+    pub note: Option<String>,
 }
+
+/// Settings > Storage > "Keep sent media" (defaults: 90 days, 2 GB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct KeptMediaSettings {
+    pub max_days: u32,
+    pub max_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct KeptMediaUsage {
+    pub count: u32,
+    pub bytes: u64,
+}
+
+const META_KEPT_LIMITS: &[u8] = b"kept_media_limits";
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct MediaUpdate {
@@ -175,7 +192,7 @@ fn file_hash(m: &MessageRec) -> Option<[u8; 32]> {
 }
 
 impl NodeState {
-    fn queue_control(&mut self, peer: &[u8; 32], c: AppContent) -> Result<(), FfiError> {
+    pub(crate) fn queue_control(&mut self, peer: &[u8; 32], c: AppContent) -> Result<(), FfiError> {
         let q = Queued {
             envelope_id: random_id16()?,
             created_ms: now_ms(),
@@ -313,11 +330,7 @@ impl NodeState {
             };
             self.queue_control(
                 peer,
-                AppContent::MediaControl(MediaControl {
-                    kind: CONTROL_MEDIA_REQUEST,
-                    locator: loc,
-                    hash,
-                }),
+                AppContent::MediaControl(MediaControl::new(CONTROL_MEDIA_REQUEST, loc, hash)),
             )?;
             self.set_file_state(&m.id, st::FILE_REQUESTED)?;
             out.media_updates.push(MediaUpdate {
@@ -347,6 +360,7 @@ impl NodeState {
         out: &mut LinkOutput,
     ) -> Result<(), FfiError> {
         let m = self.find_media(&peer, &c)?;
+        let note = c.note.clone();
         let event = |m: &MessageRec| {
             let f = m.file.as_ref().expect("file");
             MediaRequestEvent {
@@ -356,6 +370,7 @@ impl NodeState {
                 name: f.name.clone(),
                 mime: f.mime.clone(),
                 local_path: f.local_path.clone(),
+                note: note.clone(),
             }
         };
         match c.kind {
@@ -369,14 +384,20 @@ impl NodeState {
                         )
                     }) =>
                 {
-                    out.media_requests.push(event(&m))
+                    // "Keep sent media": serve our sealed local copy directly.
+                    if !self.serve_kept_copy(&peer, &m)? {
+                        out.media_requests.push(event(&m))
+                    }
                 }
+                // A sent item whose app-side state is unknown but whose copy we kept.
+                Some(m) if self.serve_kept_copy(&peer, &m)? => {}
                 _ => self.queue_control(
                     &peer,
-                    AppContent::MediaControl(MediaControl {
-                        kind: CONTROL_MEDIA_UNAVAILABLE,
-                        ..c
-                    }),
+                    AppContent::MediaControl(MediaControl::new(
+                        CONTROL_MEDIA_UNAVAILABLE,
+                        c.locator,
+                        c.hash,
+                    )),
                 )?,
             },
             CONTROL_MEDIA_UNAVAILABLE => {
@@ -401,6 +422,51 @@ impl NodeState {
             _ => {}
         }
         Ok(())
+    }
+
+    fn kept_limits(&self) -> Result<st::KeptMediaLimits, FfiError> {
+        Ok(self.db.get_meta(META_KEPT_LIMITS)?.unwrap_or_default())
+    }
+
+    /// Keep a sealed copy of media we sent. Burn / view-once content never comes here.
+    pub(crate) fn keep_sent(&self, m: &MessageRec, bytes: &[u8], now: u64) -> Result<(), FfiError> {
+        let Some(hash) = file_hash(m) else {
+            return Ok(());
+        };
+        if m.burn.is_some() || !m.mine {
+            return Ok(());
+        }
+        let rec = st::KeptMediaRec {
+            id: m.id,
+            peer: m.peer,
+            hash,
+            kept_ms: now,
+            size: bytes.len() as u64,
+        };
+        self.db
+            .put_kept_media(&rec, bytes, self.kept_limits()?, now)?;
+        Ok(())
+    }
+
+    /// Re-send our kept copy of `m` (hash-checked, never burn content). False if none.
+    fn serve_kept_copy(&mut self, peer: &[u8; 32], m: &MessageRec) -> Result<bool, FfiError> {
+        if m.burn.is_some() || !m.mine {
+            return Ok(false);
+        }
+        let (Some(f), Some(hash)) = (m.file.as_ref(), file_hash(m)) else {
+            return Ok(false);
+        };
+        let Some(bytes) = self.db.kept_media(&m.id)? else {
+            return Ok(false);
+        };
+        if blake3::hash(&bytes).as_bytes() != &hash {
+            self.db.delete_kept_media(&m.id)?;
+            return Ok(false);
+        }
+        let out = files::build_outgoing(m.id, &f.name, &f.mime, &bytes)?;
+        self.persist_out_file(peer, &out)?;
+        self.files.out.entry(*peer).or_default().push_back(out);
+        Ok(true)
     }
 
     /// A re-fetched file must match the placeholder's hash before it replaces it.
@@ -725,9 +791,17 @@ impl OmcpNode {
         st.request_missing_media(&peer, &mut out)
     }
 
-    /// "Ask to resend" (after the user confirmed): the partner sees a prompt.
-    pub fn ask_to_resend(&self, msg_id_hex: String) -> Result<(), FfiError> {
+    /// "Ask to resend" (after the user confirmed): ONE message to the partner,
+    /// carrying the optional short note (≤ 280 UTF-8 bytes); they see a prompt.
+    pub fn ask_to_resend(&self, msg_id_hex: String, note: Option<String>) -> Result<(), FfiError> {
         let id = parse_msg_id(&msg_id_hex)?;
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        if note
+            .as_ref()
+            .is_some_and(|n| n.len() > MediaControl::MAX_NOTE)
+        {
+            return Err(invalid("note too long"));
+        }
         let mut st = self.inner.lock();
         let m = st
             .db()
@@ -737,11 +811,49 @@ impl OmcpNode {
         st.queue_control(
             &m.peer,
             AppContent::MediaControl(MediaControl {
-                kind: CONTROL_MEDIA_RESEND_ASK,
-                locator: id,
-                hash,
+                note,
+                ..MediaControl::new(CONTROL_MEDIA_RESEND_ASK, id, hash)
             }),
         )
+    }
+
+    // ---- kept copies of sent media ("Keep sent media", RS3) ----
+
+    pub fn kept_media_settings(&self) -> Result<KeptMediaSettings, FfiError> {
+        let l = self.inner.lock().kept_limits()?;
+        Ok(KeptMediaSettings {
+            max_days: l.max_days,
+            max_bytes: l.max_bytes,
+        })
+    }
+
+    /// Settings > Storage. Applies at once (evicting oldest first); returns how many went.
+    pub fn set_kept_media_settings(
+        &self,
+        s: KeptMediaSettings,
+        now_ms: u64,
+    ) -> Result<u32, FfiError> {
+        let st = self.inner.lock();
+        let l = st::KeptMediaLimits {
+            max_days: s.max_days,
+            max_bytes: s.max_bytes,
+        };
+        st.db.put_meta(META_KEPT_LIMITS, &l)?;
+        Ok(st.db.evict_kept_media(l, now_ms)?.len() as u32)
+    }
+
+    pub fn kept_media_usage(&self) -> Result<KeptMediaUsage, FfiError> {
+        let idx = self.inner.lock().db.kept_media_index()?;
+        Ok(KeptMediaUsage {
+            count: idx.len() as u32,
+            bytes: idx.iter().map(|k| k.size).sum(),
+        })
+    }
+
+    /// Age-based eviction; the apps call it on start and daily.
+    pub fn evict_kept_media(&self, now_ms: u64) -> Result<u32, FfiError> {
+        let st = self.inner.lock();
+        Ok(st.db.evict_kept_media(st.kept_limits()?, now_ms)?.len() as u32)
     }
 
     /// Answer a [`MediaRequestEvent`]: `bytes` = our copy (re-sent as a file
@@ -771,11 +883,7 @@ impl OmcpNode {
             }
             None => st.queue_control(
                 &peer,
-                AppContent::MediaControl(MediaControl {
-                    kind: CONTROL_MEDIA_UNAVAILABLE,
-                    locator: id,
-                    hash,
-                }),
+                AppContent::MediaControl(MediaControl::new(CONTROL_MEDIA_UNAVAILABLE, id, hash)),
             ),
         }
     }

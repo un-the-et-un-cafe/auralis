@@ -77,7 +77,19 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX file_chunks_grp ON file_chunks(grp, seq);
      CREATE TABLE burn(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
      CREATE TABLE burn_keys(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);",
+    // v2 (v0.1.4b): kept local copies of sent media (index + sealed bytes rows).
+    "CREATE TABLE kept_media(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX kept_media_grp ON kept_media(grp, seq);",
 ];
+
+const KEPT_INDEX_GRP: &[u8] = b"kept-index";
+const DAY_MS: u64 = 86_400_000;
+
+fn kept_key(tag: u8, id: &[u8; 16]) -> [u8; 17] {
+    let mut k = [tag; 17];
+    k[1..].copy_from_slice(id);
+    k
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Table {
@@ -90,6 +102,7 @@ enum Table {
     FileChunks,
     Burn,
     BurnKeys,
+    KeptMedia,
 }
 
 impl Table {
@@ -104,6 +117,7 @@ impl Table {
             Table::FileChunks => "file_chunks",
             Table::Burn => "burn",
             Table::BurnKeys => "burn_keys",
+            Table::KeptMedia => "kept_media",
         }
     }
 }
@@ -298,6 +312,17 @@ impl Store {
             for mut f in s.list::<OutFileRec>(Table::OutFiles, Some(old))? {
                 f.peer = *new;
                 s.put(Table::OutFiles, &f.id, Some(new), &f)?;
+            }
+            for mut k in s.kept_media_index()? {
+                if &k.peer == old {
+                    k.peer = *new;
+                    s.put(
+                        Table::KeptMedia,
+                        &kept_key(b'i', &k.id),
+                        Some(KEPT_INDEX_GRP),
+                        &k,
+                    )?;
+                }
             }
             for mut b in s.list::<BurnRec>(Table::Burn, None)? {
                 if &b.peer == old {
@@ -588,6 +613,71 @@ impl Store {
                 Ok((f, chunks))
             })
             .collect()
+    }
+
+    // ---- kept copies of sent media ----
+
+    /// Keep a sealed local copy of media we sent (never burn content: callers
+    /// MUST NOT pass burn/view-once items), then evict to `limits`.
+    pub fn put_kept_media(
+        &self,
+        rec: &KeptMediaRec,
+        bytes: &[u8],
+        limits: KeptMediaLimits,
+        now_ms: u64,
+    ) -> Result<Vec<[u8; 16]>> {
+        self.transaction(|s| {
+            s.put_raw(Table::KeptMedia, &kept_key(b'd', &rec.id), None, bytes)?;
+            s.put(
+                Table::KeptMedia,
+                &kept_key(b'i', &rec.id),
+                Some(KEPT_INDEX_GRP),
+                rec,
+            )
+        })?;
+        self.evict_kept_media(limits, now_ms)
+    }
+
+    /// The kept copy's bytes, if still kept.
+    pub fn kept_media(&self, id: &[u8; 16]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        if self
+            .get_raw(Table::KeptMedia, &kept_key(b'i', id))?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        self.get_raw(Table::KeptMedia, &kept_key(b'd', id))
+    }
+
+    /// Kept copies, oldest first.
+    pub fn kept_media_index(&self) -> Result<Vec<KeptMediaRec>> {
+        let mut v: Vec<KeptMediaRec> = self.list(Table::KeptMedia, Some(KEPT_INDEX_GRP))?;
+        v.sort_by_key(|k| k.kept_ms);
+        Ok(v)
+    }
+
+    pub fn delete_kept_media(&self, id: &[u8; 16]) -> Result<()> {
+        self.transaction(|s| {
+            s.del_raw(Table::KeptMedia, &kept_key(b'd', id))?;
+            s.del_raw(Table::KeptMedia, &kept_key(b'i', id))
+        })
+    }
+
+    /// Drop copies older than `max_days`, then the oldest until the total is
+    /// within `max_bytes`. Returns the evicted message ids.
+    pub fn evict_kept_media(&self, limits: KeptMediaLimits, now_ms: u64) -> Result<Vec<[u8; 16]>> {
+        let idx = self.kept_media_index()?;
+        let cutoff = now_ms.saturating_sub(u64::from(limits.max_days) * DAY_MS);
+        let mut total: u64 = idx.iter().map(|k| k.size).sum();
+        let mut gone = Vec::new();
+        for k in &idx {
+            if k.kept_ms < cutoff || total > limits.max_bytes {
+                self.delete_kept_media(&k.id)?;
+                total -= k.size;
+                gone.push(k.id);
+            }
+        }
+        Ok(gone)
     }
 
     // ---- burn after read ----
