@@ -33,6 +33,9 @@ targets:
   OpenMeshChat:
     type: application
     platform: iOS
+    configFiles:
+      Debug: Config/Base.xcconfig
+      Release: Config/Base.xcconfig
     sources:
       - path: OpenMeshChat
     dependencies:

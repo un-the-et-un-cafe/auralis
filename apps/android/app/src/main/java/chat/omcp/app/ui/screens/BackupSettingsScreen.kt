@@ -1,5 +1,6 @@
 package chat.omcp.app.ui.screens
 
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,6 +38,8 @@ fun BackupSettingsScreen(
     onBack: () -> Unit,
 ) {
     val s by vm.state.collectAsState()
+    // Cloud I/O (Drive REST, consent) never runs on the main thread.
+    val io = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(s.shownPhrase != null) { secureWindow(s.shownPhrase != null) }
     PlainPage(stringResource(R.string.backup_settings_title)) {
         Text(stringResource(R.string.backup_drive), style = MaterialTheme.typography.titleMedium)
@@ -58,11 +61,11 @@ fun BackupSettingsScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrect = false),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Button(onClick = { vm.uploadWithPassword() }, enabled = s.passwordOk, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { io.launch(kotlinx.coroutines.Dispatchers.IO) { vm.uploadWithPassword() } }, enabled = s.passwordOk, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.backup_drive_cta))
             }
             if (s.driveOn) {
-                OutlinedButton(onClick = { vm.deleteCloudBackup() }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { io.launch(kotlinx.coroutines.Dispatchers.IO) { vm.deleteCloudBackup() } }, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.backup_delete))
                 }
             }

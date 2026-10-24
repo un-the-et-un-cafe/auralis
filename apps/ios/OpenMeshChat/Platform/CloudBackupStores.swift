@@ -1,5 +1,7 @@
+import AuthenticationServices
 import CloudKit
 import Foundation
+import UIKit
 import HoplaKit
 
 /// iCloud backup: one `OMCPBackup` record in the CloudKit **private** database. The record holds
@@ -70,28 +72,34 @@ final class ICloudKeychainBackupKeyStore: BackupKeyStore {
     func delete() throws { Keychain.delete(account: account, synchronizable: true) }
 }
 
-/// Google Drive backup on iOS: blob in `appDataFolder`, scope `drive.appdata` only, via the
-/// Drive v3 REST API. STUB: no Google OAuth client is configured for the iOS beta, so
-/// `tokenProvider` returns nil and the method shows as unavailable. Plug in GoogleSignIn
-/// (scope https://www.googleapis.com/auth/drive.appdata) to enable it.
-final class GoogleDriveBackupStore: CloudBackupStore {
-    let method = backupDrive
-    var tokenProvider: () -> String? = { nil }
-    private let fileName = "omcp-backup-v1.cbor"
-    var available: Bool { tokenProvider() != nil }
+// MARK: Google Drive (logic + tests in HoplaKit/GoogleDrive.swift)
 
-    private func request(_ url: String, method: String = "GET", body: Data? = nil, contentType: String? = nil) throws -> (Data, Int) {
-        guard let token = tokenProvider(), let u = URL(string: url) else { throw CoreError.other("drive unavailable") }
-        var r = URLRequest(url: u)
+/// Builds the Drive store from Info.plist `GOOGLE_OAUTH_CLIENT_ID` (empty → unavailable).
+enum GoogleDrive {
+    static func makeStore(info: [String: Any]? = Bundle.main.infoDictionary) -> GoogleDriveBackupStore {
+        let http = URLSessionTransport()
+        guard let config = GoogleOAuthConfig.fromInfo(info) else {
+            return GoogleDriveBackupStore(config: nil, http: http, tokens: nil)
+        }
+        let tokens = GoogleTokenManager(config: config, http: http, store: KeychainRefreshTokenStore(),
+                                        authorize: WebAuthenticator.shared.authorize)
+        return GoogleDriveBackupStore(config: config, http: http, tokens: tokens)
+    }
+}
+
+/// Blocking URLSession transport (Drive and OAuth calls already run off the main thread).
+final class URLSessionTransport: HTTPTransport {
+    func send(method: String, url: URL, headers: [String: String], body: Data?) throws -> (status: Int, body: Data) {
+        precondition(!Thread.isMainThread, "network on main thread")
+        var r = URLRequest(url: url, timeoutInterval: 30)
         r.httpMethod = method
-        r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if let contentType { r.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        headers.forEach { r.setValue($0.value, forHTTPHeaderField: $0.key) }
         r.httpBody = body
         let sem = DispatchSemaphore(value: 0)
-        var out: (Data, Int) = (Data(), 0)
+        var out: (Int, Data) = (0, Data())
         var err: Error?
         URLSession.shared.dataTask(with: r) { d, resp, e in
-            out = (d ?? Data(), (resp as? HTTPURLResponse)?.statusCode ?? 0)
+            out = ((resp as? HTTPURLResponse)?.statusCode ?? 0, d ?? Data())
             err = e
             sem.signal()
         }.resume()
@@ -99,34 +107,42 @@ final class GoogleDriveBackupStore: CloudBackupStore {
         if let err { throw err }
         return out
     }
+}
 
-    private func fileId() throws -> String? {
-        let (d, _) = try request("https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D%27\(fileName)%27&fields=files(id)")
-        let j = try JSONSerialization.jsonObject(with: d) as? [String: Any]
-        return ((j?["files"] as? [[String: Any]])?.first?["id"]) as? String
-    }
+/// Refresh token: device-only Keychain item (not iCloud-synced; survives reinstall).
+final class KeychainRefreshTokenStore: RefreshTokenStore {
+    private let account = "omcp.googleDrive.refreshToken.v1"
+    func load() -> String? { Keychain.read(account: account).map { String(decoding: $0, as: UTF8.self) } }
+    func save(_ token: String) { Keychain.write(Data(token.utf8), account: account, synchronizable: false) }
+    func clear() { Keychain.delete(account: account, synchronizable: false) }
+}
 
-    func upload(_ blob: Data) throws {
-        if let id = try fileId() {
-            _ = try request("https://www.googleapis.com/upload/drive/v3/files/\(id)?uploadType=media", method: "PATCH", body: blob, contentType: "application/octet-stream")
-            return
+/// Google's consent page in an `ASWebAuthenticationSession` (system browser sheet, shares no
+/// cookies with the app). Called from a background thread; presents on main and waits.
+final class WebAuthenticator: NSObject, ASWebAuthenticationPresentationContextProviding {
+    static let shared = WebAuthenticator()
+    private var session: ASWebAuthenticationSession?
+
+    func authorize(_ url: URL, callbackScheme: String) throws -> URL {
+        precondition(!Thread.isMainThread, "authorize blocks; call off the main thread")
+        let sem = DispatchSemaphore(value: 0)
+        var result: Result<URL, Error> = .failure(GoogleOAuthError.cancelled)
+        DispatchQueue.main.async {
+            let s = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { cb, err in
+                if let cb { result = .success(cb) } else { result = .failure(err.map { _ in GoogleOAuthError.cancelled } ?? GoogleOAuthError.cancelled) }
+                sem.signal()
+            }
+            s.presentationContextProvider = self
+            s.prefersEphemeralWebBrowserSession = true
+            self.session = s
+            if !s.start() { sem.signal() }
         }
-        let boundary = "omcp-\(UUID().uuidString)"
-        var body = Data("--\(boundary)\r\nContent-Type: application/json\r\n\r\n{\"name\":\"\(fileName)\",\"parents\":[\"appDataFolder\"]}\r\n--\(boundary)\r\nContent-Type: application/octet-stream\r\n\r\n".utf8)
-        body.append(blob)
-        body.append(Data("\r\n--\(boundary)--".utf8))
-        let (_, code) = try request("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", method: "POST", body: body,
-                                    contentType: "multipart/related; boundary=\(boundary)")
-        guard (200..<300).contains(code) else { throw CoreError.other("drive \(code)") }
+        sem.wait()
+        session = nil
+        return try result.get()
     }
 
-    func download() throws -> Data? {
-        guard let id = try fileId() else { return nil }
-        return try request("https://www.googleapis.com/drive/v3/files/\(id)?alt=media").0
-    }
-
-    func delete() throws {
-        guard let id = try fileId() else { return }
-        _ = try request("https://www.googleapis.com/drive/v3/files/\(id)", method: "DELETE")
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
     }
 }

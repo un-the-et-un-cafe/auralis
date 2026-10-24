@@ -1,5 +1,6 @@
 package chat.omcp.app.ui.screens
 
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -41,7 +42,9 @@ fun OnboardingFlow(
     secureWindow: (Boolean) -> Unit,
 ) {
     val s by vm.state.collectAsState()
-    LaunchedEffect(Unit) { vm.detectBackup() }
+    // Cloud I/O (Drive REST, consent) never runs on the main thread.
+    val io = androidx.compose.runtime.rememberCoroutineScope()
+    LaunchedEffect(Unit) { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { vm.detectBackup() } }
     // FLAG_SECURE while the phrase is on screen.
     LaunchedEffect(s.step) { secureWindow(s.step == OnboardingStep.WriteDown || s.step == OnboardingStep.Quiz) }
 
@@ -71,7 +74,7 @@ fun OnboardingFlow(
             )
             s.error?.let { Callout(it, CalloutKind.Danger) }
             if (s.restoreLockMs > 0) Callout(stringResource(R.string.onb_retry_wait, (s.restoreLockMs / 1000).toInt()), CalloutKind.Warn)
-            Button(onClick = { vm.restoreFromCloud() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onb_restore)) }
+            Button(onClick = { io.launch(kotlinx.coroutines.Dispatchers.IO) { vm.restoreFromCloud() } }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onb_restore)) }
             TextButton(onClick = vm::usePhraseInstead) { Text(stringResource(R.string.onb_restore_phrase)) }
             TextButton(onClick = vm::getStarted) { Text(stringResource(R.string.onb_start_fresh)) }
         }
@@ -130,7 +133,7 @@ fun OnboardingFlow(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrect = false),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Button(onClick = { vm.backupToDrive() }, enabled = s.drivePasswordOk, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { io.launch(kotlinx.coroutines.Dispatchers.IO) { vm.backupToDrive() } }, enabled = s.drivePasswordOk, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.backup_drive_cta))
                 }
             }

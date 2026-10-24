@@ -1,3 +1,12 @@
+// Google OAuth client for Drive backup (appDataFolder). Never committed: pass it with
+// -PGOOGLE_OAUTH_CLIENT_ID=… or put it in ~/.gradle/gradle.properties / env GOOGLE_OAUTH_CLIENT_ID.
+// Empty = Drive backup reports "not configured" (debug builds fall back to a simulated Drive).
+// See apps/android/README.md › "Google Drive backup".
+val googleOAuthClientId: String =
+    (findProperty("GOOGLE_OAUTH_CLIENT_ID") as String?)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv("GOOGLE_OAUTH_CLIENT_ID")?.trim().orEmpty()
+require(googleOAuthClientId.all { it.isLetterOrDigit() || it in ".-_" }) { "GOOGLE_OAUTH_CLIENT_ID has unexpected characters" }
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -19,7 +28,8 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         // Designy lock-in: sample chats off by default; enable only for design-review builds.
         buildConfigField("boolean", "SHOW_SAMPLE_CHATS_FOR_DESIGN_REVIEW", "false")
-        // No Google OAuth client ships in this repo: Drive backup is a stub in release.
+        // Drive backup is live only when a client id is configured at build time.
+        buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$googleOAuthClientId\"")
         buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", "false")
     }
 
@@ -33,8 +43,9 @@ android {
         }
         debug {
             applicationIdSuffix = ".debug"
-            // Debug only: in-memory "Drive" so the backup flow can be exercised end to end.
-            buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", "true")
+            // Debug only, and only without a real client id: in-memory "Drive" so the
+            // backup flow can be exercised end to end.
+            buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", (googleOAuthClientId.isEmpty()).toString())
         }
     }
 
@@ -83,6 +94,8 @@ dependencies {
 
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.biometric:biometric:1.1.0")
+    // Drive backup: Google Identity Services AuthorizationClient (scope drive.appdata only).
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
     // UniFFI Kotlin bindings load libomcp_ffi.so through JNA.
     implementation("net.java.dev.jna:jna:5.15.0@aar")
     // QR: generate with ZXing core; scan with zxing-android-embedded (no Play services).

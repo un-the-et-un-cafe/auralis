@@ -67,7 +67,10 @@ CI: the `ios` job in `.github/workflows/ci.yml` (macos-latest) runs exactly this
   a cover while `UIScreen.isCaptured`. No screenshot notice. Settings › Privacy has the honest
   "second camera" copy.
 - **Files**: picker confirm with the 50 MB cap read from `max_file_bytes()` (too-large state before
-  any encryption). Transfers stay queued (chunk streaming is M5.1, same as Android).
+  the file is read or encrypted). Rust encrypts 64 KiB chunks (`queue_file`); the CoreBluetooth
+  transport drains them on write/notify (`more_pending`), pauses on disconnect and resumes on the
+  next link; received files are BLAKE3-verified in Rust, saved in Application Support and opened
+  with Quick Look. Bubble states follow Designy v0.1.1 `file-transfer`.
 - **Gateway**: cap from `default_gateway_daily_cap_bytes()`, Wi-Fi-only/metered decision from
   `gateway_decision()`; meter stays at 0 until real metering.
 - EN/FR strings, placeholder icon.
@@ -82,17 +85,22 @@ CI: the `ios` job in `.github/workflows/ci.yml` (macos-latest) runs exactly this
   Two backgrounded iPhones discover each other poorly; foreground or an Android companion nearby
   works best (copy on You › Gateway). Nearby sessions will use a Live Activity (v0.3).
 - iOS peripherals can't advertise manufacturer data, so iOS serves the 13-byte discovery
-  advertisement on the **Control** characteristic. Android centrals currently filter scans on
-  manufacturer data, so **Android → iPhone discovery needs an Android change** (accept
-  service-UUID-only results and read Control). iPhone → Android works (iOS reads Control).
+  advertisement on the **Control** characteristic and advertises the local name `OMCP`. Android
+  scans for the service UUID, the local name *and* Apple's overflow-area manufacturer data (what a
+  backgrounded iPhone sends), then connects, discovers services and reads Control
+  (`ScanClassifier.kt`). iPhone → Android works (iOS reads Control).
 
 ## Stubs / not done
 
-- Google Drive on iOS: REST implementation present, but no Google OAuth client / GoogleSignIn, so
-  it shows as unavailable.
+- Google Drive on iOS: implemented (`HoplaKit/GoogleDrive.swift`: PKCE OAuth + Drive v3
+  `appDataFolder`, tested on Linux against fakes; app side `ASWebAuthenticationSession`, device
+  Keychain refresh token). Needs an iOS OAuth client in `Config/Secrets.xcconfig` (git-ignored),
+  see [`../GOOGLE_DRIVE_BACKUP.md`](../GOOGLE_DRIVE_BACKUP.md); unavailable without it. Not run
+  against real Google.
 - Notification Service Extension: validates the payload and shows "Hopla · New message"; mailbox
   fetch + decrypt waits for the M4 gateway mailbox API and an App Group keychain.
 - APNs token is stored locally only (no gateway registration yet).
 - Calls don't exist yet; `NotificationPolicy.callContent` is the policy the call stack will use.
-- File chunk transfer, NFC, PeerID entry, Nearby: not in this beta.
+- NFC, PeerID entry, Nearby: not in this beta. File transfer has no end-to-end ack yet (sender
+  shows "Sent" once the last chunk is on the link).
 - Message history is in memory (as on Android); contacts and settings persist.

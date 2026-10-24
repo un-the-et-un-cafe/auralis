@@ -35,3 +35,6 @@ apps/ios/HoplaKit/.build/
 apps/ios/build/
 apps/ios/Generated/
 apps/ios/*.xcodeproj/
+
+# Google OAuth client config (never commit)
+apps/ios/Config/Secrets.xcconfig

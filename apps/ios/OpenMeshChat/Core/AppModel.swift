@@ -11,7 +11,7 @@ final class AppModel: ObservableObject {
     @Published var onboarded: Bool
     let repo: MeshRepository
     let iCloud = ICloudBackupStore()
-    let drive = GoogleDriveBackupStore()
+    let drive = GoogleDrive.makeStore()
     let backupKeys = ICloudKeychainBackupKeyStore()
     private(set) var ble: BleMeshTransport?
     private var burnTimer: Timer?

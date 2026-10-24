@@ -1,0 +1,10 @@
+// Build settings for the OpenMeshChat app target.
+// Google Drive backup needs an iOS OAuth client (see apps/ios/README.md › Google Drive backup).
+// Never commit the real values: put them in Config/Secrets.xcconfig (git-ignored), e.g.
+//   GOOGLE_OAUTH_CLIENT_ID = 1234567890-abc123.apps.googleusercontent.com
+//   GOOGLE_OAUTH_REVERSED_CLIENT_ID = com.googleusercontent.apps.1234567890-abc123
+// Empty client id = Drive backup shows as unavailable.
+GOOGLE_OAUTH_CLIENT_ID =
+GOOGLE_OAUTH_REVERSED_CLIENT_ID = com.googleusercontent.apps.unconfigured
+
+#include? "Secrets.xcconfig"
