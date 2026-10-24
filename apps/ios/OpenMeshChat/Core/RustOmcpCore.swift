@@ -55,7 +55,16 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
             opened: o.opened.map {
                 OpenedInfo(contactId: $0.contactId, msgId: $0.msgIdHex, openedMs: Int64($0.openedMs),
                            shredded: $0.shredded, burnAtMs: $0.burnAtMs.map(Int64.init))
-            })
+            },
+            fileProgress: o.fileProgress.map {
+                FileProgressInfo(transferId: $0.transferIdHex, contactId: $0.contactId, incoming: $0.incoming, name: $0.name,
+                                 size: $0.size, doneChunks: Int($0.doneChunks), totalChunks: Int($0.totalChunks))
+            },
+            files: o.files.map {
+                ReceivedFileInfo(transferId: $0.transferIdHex, contactId: $0.contactId, name: $0.name, mime: $0.mime, bytes: $0.bytes)
+            },
+            fileFailures: o.fileFailures.map { FileFailureInfo(transferId: $0.transferIdHex, contactId: $0.contactId, reason: $0.reason) },
+            morePending: o.morePending)
     }
 
     public func generateRecoveryPhrase() throws -> String { try call { try OmcpFFI.generateRecoveryPhrase() } }
@@ -118,6 +127,13 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     public func tickBurn(nowMs: Int64) -> [String] { node?.tickBurn(nowMs: UInt64(nowMs)) ?? [] }
     public func burnIsLive(_ msgId: String) -> Bool { node?.burnIsLive(msgIdHex: msgId) ?? false }
     public func burnSpecValid(_ spec: HoplaKit.BurnSpec) -> Bool { OmcpFFI.burnSpecValid(spec: Self.spec(spec)) }
+    public func queueFile(_ contactId: String, name: String, mime: String, bytes: Data) throws -> FileOfferInfo {
+        let o = try call { try n().queueFile(contactId: contactId, name: name, mime: mime, bytes: bytes) }
+        return FileOfferInfo(transferId: o.transferIdHex, contactId: o.contactId, name: o.name, mime: o.mime, size: o.size,
+                             chunks: Int(o.numChunks))
+    }
+
+    @discardableResult public func cancelFile(_ transferId: String) -> Bool { node?.cancelFile(transferIdHex: transferId) ?? false }
     public func queuedFor(_ contactId: String) -> Int { Int(node?.queuedFor(contactId: contactId) ?? 0) }
 
     public func pathStatus() -> MeshStatus {

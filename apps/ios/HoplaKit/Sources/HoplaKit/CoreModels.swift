@@ -130,6 +130,74 @@ public struct IncomingText: Equatable, Sendable {
     }
 }
 
+/// A queued outbound file (encrypted into 64 KiB chunks by the Rust core).
+public struct FileOfferInfo: Equatable, Sendable {
+    public var transferId: String
+    public var contactId: String
+    public var name: String
+    public var mime: String
+    public var size: UInt64
+    public var chunks: Int
+    public init(transferId: String, contactId: String, name: String, mime: String, size: UInt64, chunks: Int) {
+        self.transferId = transferId
+        self.contactId = contactId
+        self.name = name
+        self.mime = mime
+        self.size = size
+        self.chunks = chunks
+    }
+}
+
+/// Transfer progress: sender = chunks sealed onto the link, receiver = chunks received.
+public struct FileProgressInfo: Equatable, Sendable {
+    public var transferId: String
+    public var contactId: String
+    public var incoming: Bool
+    public var name: String
+    public var size: UInt64
+    public var doneChunks: Int
+    public var totalChunks: Int
+    public init(transferId: String, contactId: String, incoming: Bool, name: String, size: UInt64, doneChunks: Int, totalChunks: Int) {
+        self.transferId = transferId
+        self.contactId = contactId
+        self.incoming = incoming
+        self.name = name
+        self.size = size
+        self.doneChunks = doneChunks
+        self.totalChunks = totalChunks
+    }
+    public var fraction: Double { totalChunks == 0 ? 1 : Double(doneChunks) / Double(totalChunks) }
+    public var doneBytes: UInt64 { UInt64(Double(size) * fraction) }
+}
+
+/// A fully received file whose BLAKE3 hash was verified in Rust.
+public struct ReceivedFileInfo: Equatable, Sendable {
+    public var transferId: String
+    public var contactId: String
+    public var name: String
+    public var mime: String
+    public var bytes: Data
+    public init(transferId: String, contactId: String, name: String, mime: String, bytes: Data) {
+        self.transferId = transferId
+        self.contactId = contactId
+        self.name = name
+        self.mime = mime
+        self.bytes = bytes
+    }
+}
+
+/// `integrity` (hash/AEAD failed), `invalid` or `busy`.
+public struct FileFailureInfo: Equatable, Sendable {
+    public var transferId: String
+    public var contactId: String
+    public var reason: String
+    public init(transferId: String, contactId: String, reason: String) {
+        self.transferId = transferId
+        self.contactId = contactId
+        self.reason = reason
+    }
+}
+
 /// PDUs to transmit (in order) + decrypted messages from one link step.
 public struct LinkResult: Sendable {
     public var outgoing: [Data]
@@ -138,13 +206,24 @@ public struct LinkResult: Sendable {
     public var peerContactId: String?
     public var flushed: Int
     public var opened: [OpenedInfo]
-    public init(outgoing: [Data], received: [IncomingText], established: Bool, peerContactId: String?, flushed: Int, opened: [OpenedInfo] = []) {
+    public var fileProgress: [FileProgressInfo]
+    public var files: [ReceivedFileInfo]
+    public var fileFailures: [FileFailureInfo]
+    /// More file chunks wait: call `flush()` again once the BLE write/notify queue is empty.
+    public var morePending: Bool
+    public init(outgoing: [Data], received: [IncomingText], established: Bool, peerContactId: String?, flushed: Int,
+                opened: [OpenedInfo] = [], fileProgress: [FileProgressInfo] = [], files: [ReceivedFileInfo] = [],
+                fileFailures: [FileFailureInfo] = [], morePending: Bool = false) {
         self.outgoing = outgoing
         self.received = received
         self.established = established
         self.peerContactId = peerContactId
         self.flushed = flushed
         self.opened = opened
+        self.fileProgress = fileProgress
+        self.files = files
+        self.fileFailures = fileFailures
+        self.morePending = morePending
     }
 }
 
@@ -237,6 +316,9 @@ public protocol OmcpCore: AnyObject {
     func tickBurn(nowMs: Int64) -> [String]
     func burnIsLive(_ msgId: String) -> Bool
     func burnSpecValid(_ spec: BurnSpec) -> Bool
+    /// Queue a file (≤ `maxFileBytes()`, checked in Rust before encryption). Throws `.fileTooLarge`.
+    func queueFile(_ contactId: String, name: String, mime: String, bytes: Data) throws -> FileOfferInfo
+    @discardableResult func cancelFile(_ transferId: String) -> Bool
     func queuedFor(_ contactId: String) -> Int
     func pathStatus() -> MeshStatus
 

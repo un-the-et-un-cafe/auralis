@@ -41,6 +41,43 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertTrue(c.gatewayDecision(wifiOnly: false, network: .cellular, metered: true).meteredWarning)
     }
 
+    final class MemSink: FileSink {
+        var bytes: Data?
+        func save(_ file: ReceivedFileInfo) -> String? { bytes = file.bytes; return "mem:\(file.name)" }
+    }
+
+    /// File transfer through the real core: 64 KiB chunks drained over several flushes.
+    func testFileTransferIn64kChunks() throws {
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let bOnA = try ra.addContact(qr: try cb.qrPayload(), action: .chatWithoutVerifying)
+        _ = try rb.addContact(qr: try ca.qrPayload(), action: .chatWithoutVerifying)
+        let la = try ca.openInitiatorLink(bOnA.id)
+        let lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        let data = Data((0..<200_000).map { UInt8($0 % 251) })
+        let sink = MemSink()
+        rb.fileSink = sink
+        let id = try ra.sendFile(bOnA.id, name: "flyer.jpg", mime: "image/jpeg", bytes: data)
+        var flushes = 0
+        var more = true
+        while more {
+            let out = try la.flush()
+            flushes += 1
+            more = out.morePending
+            ra.applyFileEvents(out)
+            for p in out.outgoing {
+                XCTAssertLessThanOrEqual(p.count, 512)
+                rb.applyFileEvents(try lb.onPdu(p))
+            }
+        }
+        XCTAssertGreaterThanOrEqual(flushes, 2)
+        XCTAssertEqual(sink.bytes, data)
+        XCTAssertEqual(rb.messages.values.flatMap { $0 }.first?.file?.state, .received)
+        XCTAssertEqual(ra.messages[bOnA.id]?.first { $0.id == id }?.file?.state, .sent)
+        XCTAssertThrowsError(try ra.sendFile(bOnA.id, name: "big", mime: "", bytes: Data(count: 50_000_001)))
+    }
+
     func testQrSafetyNumbersAndChatAndBurn() throws {
         let (ca, ra) = try node("Ana")
         let (cb, rb) = try node("Ben")

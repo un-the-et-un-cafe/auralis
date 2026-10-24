@@ -40,6 +40,8 @@ final class BleMeshTransport: NSObject, MeshKick {
     private var responders: [UUID: CoreLink] = [:]
     private var subscribers: [UUID: CBCentral] = [:]
     private var notifyQueue: [(UUID, Data)] = []
+    private var responderMore: [UUID: Bool] = [:]
+    private var responderPeer: [UUID: String] = [:]
 
     // Central side
     private final class Client {
@@ -49,6 +51,8 @@ final class BleMeshTransport: NSObject, MeshKick {
         var inbox: CBCharacteristic?
         var writes: [Data] = []
         var writing = false
+        /// Rust has more file chunks for this link: flush again when `writes` drains.
+        var more = false
         init(_ p: CBPeripheral) { self.p = p }
     }
     private var clients: [UUID: Client] = [:]
@@ -78,6 +82,7 @@ final class BleMeshTransport: NSObject, MeshKick {
         onMain { [repo] in
             r.received.forEach(repo.onReceived)
             r.opened.forEach(repo.onOpened)
+            repo.applyFileEvents(r)
             if let cid { repo.markFlushed(cid, count: r.flushed) }
         }
     }
@@ -87,33 +92,63 @@ final class BleMeshTransport: NSObject, MeshKick {
         q.async { [self] in
             for c in clients.values where c.contactId == contactId && c.link?.isEstablished == true {
                 guard let r = try? c.link?.flush() else { continue }
-                c.writes += r.outgoing
-                handle(r, contact: contactId)
-                pumpWrites(c)
+                onClientResult(c, r)
             }
             for (id, link) in responders where link.isEstablished {
-                guard let r = try? link.flush(), r.peerContactId == contactId || r.flushed > 0 else { continue }
-                r.outgoing.forEach { notifyQueue.append((id, $0)) }
-                handle(r, contact: contactId)
+                guard let r = try? link.flush() else { continue }
+                onResponderResult(id, r)
             }
             pumpNotify()
         }
     }
 
+    private func onClientResult(_ c: Client, _ r: LinkResult) {
+        c.more = r.morePending
+        c.writes += r.outgoing
+        handle(r, contact: c.contactId)
+        pumpWrites(c)
+    }
+
+    private func onResponderResult(_ id: UUID, _ r: LinkResult) {
+        if let p = r.peerContactId { responderPeer[id] = p }
+        responderMore[id] = r.morePending
+        r.outgoing.forEach { notifyQueue.append((id, $0)) }
+        handle(r, contact: responderPeer[id])
+    }
+
     private func pumpWrites(_ c: Client) {
-        guard !c.writing, let ch = c.inbox, !c.writes.isEmpty else { return }
+        guard !c.writing, let ch = c.inbox else { return }
+        if c.writes.isEmpty, c.more, let link = c.link, link.isEstablished, let r = try? link.flush() {
+            // Write queue drained: pull the next file chunks from Rust.
+            c.more = r.morePending
+            c.writes += r.outgoing
+            handle(r, contact: c.contactId)
+        }
+        guard !c.writes.isEmpty else { return }
         c.writing = true
         c.p.writeValue(c.writes.removeFirst(), for: ch, type: .withResponse)
     }
 
     private func pumpNotify() {
         guard let ch = outboxChar else { return }
-        while let item = notifyQueue.first {
-            let (id, pdu) = item
+        while true {
+            if notifyQueue.isEmpty {
+                // Notify queue drained: pull the next file chunks for any responder link that has more.
+                guard let (id, link) = responders.first(where: { responderMore[$0.key] == true && $0.value.isEstablished }),
+                      let r = try? link.flush() else { return }
+                onResponderResult(id, r)
+                if notifyQueue.isEmpty { return }
+            }
+            let (id, pdu) = notifyQueue[0]
             guard let sub = subscribers[id] else { notifyQueue.removeFirst(); continue }
             if !peripheral.updateValue(pdu, for: ch, onSubscribedCentrals: [sub]) { return } // wait for ready
             notifyQueue.removeFirst()
         }
+    }
+
+    private func pause(_ contactId: String?) {
+        guard let contactId else { return }
+        onMain { [repo] in repo.pauseTransfers(contactId) }
     }
 }
 
@@ -136,7 +171,9 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
     func centralManager(_ c: CBCentralManager, didConnect p: CBPeripheral) { p.discoverServices([service]) }
 
     func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
-        clients.removeValue(forKey: p.identifier)?.link?.close()
+        let c = clients.removeValue(forKey: p.identifier)
+        c?.link?.close()
+        pause(c?.contactId)
     }
 
     func centralManager(_ c: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
@@ -168,24 +205,21 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
             c.link = link
             if let ob = p.services?.first?.characteristics?.first(where: { $0.uuid == outbox }) { p.setNotifyValue(true, for: ob) }
         } else if ch.uuid == outbox, let link = c.link, let r = try? link.onPdu(value) {
-            c.writes += r.outgoing
-            handle(r, contact: c.contactId)
-            pumpWrites(c)
+            onClientResult(c, r)
         }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
         guard ch.uuid == outbox, ch.isNotifying, let c = clients[p.identifier], let r = try? c.link?.start() else { return }
-        c.writes += r.outgoing
-        pumpWrites(c)
+        onClientResult(c, r)
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
         guard let c = clients[p.identifier] else { return }
         c.writing = false
         if error == nil, let link = c.link, link.isEstablished, c.writes.isEmpty, let r = try? link.flush() {
-            c.writes += r.outgoing
-            handle(r, contact: c.contactId)
+            onClientResult(c, r)
+            return
         }
         pumpWrites(c)
     }
@@ -225,14 +259,15 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
     func peripheralManager(_ pm: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom ch: CBCharacteristic) {
         subscribers.removeValue(forKey: central.identifier)
         responders.removeValue(forKey: central.identifier)?.close()
+        responderMore.removeValue(forKey: central.identifier)
+        pause(responderPeer.removeValue(forKey: central.identifier))
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
         for req in requests where req.characteristic.uuid == inbox {
             let id = req.central.identifier
             guard let link = responders[id], let v = req.value, let r = try? link.onPdu(v) else { continue }
-            r.outgoing.forEach { notifyQueue.append((id, $0)) }
-            handle(r, contact: nil)
+            onResponderResult(id, r)
         }
         if let first = requests.first { pm.respond(to: first, withResult: .success) }
         pumpNotify()

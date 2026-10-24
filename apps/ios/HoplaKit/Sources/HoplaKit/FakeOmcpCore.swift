@@ -115,6 +115,18 @@ public final class FakeOmcpCore: OmcpCore {
         [BurnSpec.unread1h, BurnSpec.unread24h, BurnSpec.unread7d].contains(spec.unreadTtlSecs)
             && (spec.mode == .onOpen ? spec.secs == 0 : (1...3600).contains(spec.secs))
     }
+    /// Fake: records the offer only (no crypto); chunking is Rust-only.
+    public private(set) var files: Set<String> = []
+    public func queueFile(_ contactId: String, name: String, mime: String, bytes: Data) throws -> FileOfferInfo {
+        guard book[contactId] != nil else { throw CoreError.invalid("unknown contact") }
+        guard UInt64(bytes.count) <= maxFile else { throw CoreError.fileTooLarge(size: UInt64(bytes.count), max: maxFile) }
+        counter += 1
+        let id = "file-\(counter)"
+        files.insert(id)
+        return FileOfferInfo(transferId: id, contactId: contactId, name: name, mime: mime, size: UInt64(bytes.count),
+                             chunks: max(1, (bytes.count + 65_535) / 65_536))
+    }
+    public func cancelFile(_ transferId: String) -> Bool { files.remove(transferId) != nil }
     public func queuedFor(_ contactId: String) -> Int { queued[contactId] ?? 0 }
     public func pathStatus() -> MeshStatus {
         let q = queued.values.reduce(0, +)

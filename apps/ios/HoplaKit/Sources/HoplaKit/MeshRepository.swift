@@ -1,11 +1,38 @@
 import Foundation
 
+/// File attachment state (DESIGN_SPEC §5.24, Designy v0.1.1 `file-transfer`).
 public struct FileAttachment: Equatable, Sendable {
-    public enum State: Sendable { case queued, sending, receiving, paused, received, failed, integrityFailed }
+    public enum State: Sendable { case queued, sending, receiving, paused, sent, received, failed, integrityFailed }
     public var name: String
     public var sizeBytes: UInt64
     public var mime: String
     public var state: State
+    /// Bytes sent (sealed onto the link) or received so far.
+    public var doneBytes: UInt64 = 0
+    /// Received files: where the verified plaintext was saved (app container).
+    public var localPath: String?
+
+    public init(name: String, sizeBytes: UInt64, mime: String, state: State, doneBytes: UInt64 = 0, localPath: String? = nil) {
+        self.name = name
+        self.sizeBytes = sizeBytes
+        self.mime = mime
+        self.state = state
+        self.doneBytes = doneBytes
+        self.localPath = localPath
+    }
+
+    public var fraction: Double {
+        switch state {
+        case .queued: return 0
+        case .sent, .received, .integrityFailed: return 1
+        default: return sizeBytes == 0 ? 0 : min(1, Double(doneBytes) / Double(sizeBytes))
+        }
+    }
+}
+
+/// Stores a verified received file; returns its local path (nil = couldn't save).
+public protocol FileSink: AnyObject {
+    func save(_ file: ReceivedFileInfo) -> String?
 }
 
 public struct ChatMessage: Equatable, Identifiable, Sendable {
@@ -48,11 +75,11 @@ public final class MeshRepository {
     public let store: AppStore
     public weak var kick: MeshKick?
     public var notifier: Notifier?
+    public var fileSink: FileSink?
     public var onChange: (() -> Void)?
     public var genericBody = "New message"
     private let clock: () -> Int64
     public private(set) var messages: [String: [ChatMessage]] = [:]
-    private var seq = 0
 
     public init(core: OmcpCore, store: AppStore, clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.core = core
@@ -149,14 +176,88 @@ public final class MeshRepository {
         kick?.kick(contactId)
     }
 
-    /// Record an outgoing file after checking the core's cap (50 MB).
-    public func queueFile(_ contactId: String, name: String, size: UInt64, mime: String) throws {
+    /// Check a picked file against the core's cap (50 MB) before reading or encrypting it.
+    public func checkFile(size: UInt64) throws {
         if case .tooLarge(let max) = FilePolicy.check(size: size, core: core) {
             throw CoreError.fileTooLarge(size: size, max: max)
         }
-        seq += 1
-        append(ChatMessage(id: "file-\(seq)", contactId: contactId, text: "", mine: true, timeMs: clock(), status: .queued,
-                           file: FileAttachment(name: name, sizeBytes: size, mime: mime, state: .queued)))
+    }
+
+    /// Send a file: Rust encrypts it into 64 KiB chunks; the BLE transport streams them when a
+    /// link to `contactId` is up. Returns the transfer id.
+    @discardableResult
+    public func sendFile(_ contactId: String, name: String, mime: String, bytes: Data) throws -> String {
+        try checkFile(size: UInt64(bytes.count))
+        let o = try core.queueFile(contactId, name: name, mime: mime, bytes: bytes)
+        append(ChatMessage(id: o.transferId, contactId: contactId, text: "", mine: true, timeMs: clock(), status: .queued,
+                           file: FileAttachment(name: name, sizeBytes: o.size, mime: mime, state: .queued)))
+        kick?.kick(contactId)
+        return o.transferId
+    }
+
+    /// Cancel an outgoing (queued/sending) or incoming transfer and drop its bubble.
+    public func cancelFile(_ contactId: String, transferId: String) {
+        core.cancelFile(transferId)
+        messages[contactId]?.removeAll { $0.id == transferId }
+        changed()
+    }
+
+    /// From the link: chunks sealed (outgoing) or received (incoming).
+    public func onFileProgress(_ p: FileProgressInfo) {
+        guard let m = find(p.contactId, p.transferId) else {
+            guard p.incoming else { return } // cancelled locally
+            append(ChatMessage(id: p.transferId, contactId: p.contactId, text: "", mine: false, timeMs: clock(), status: .received,
+                               file: FileAttachment(name: p.name, sizeBytes: p.size, mime: "", state: .receiving, doneBytes: p.doneBytes)))
+            return
+        }
+        guard var f = m.file, f.state != .received, f.state != .integrityFailed else { return }
+        let done = p.doneChunks >= p.totalChunks
+        f.state = p.incoming ? .receiving : (done ? .sent : .sending)
+        f.doneBytes = p.doneBytes
+        var n = m
+        n.file = f
+        if !p.incoming && done { n.status = .sent }
+        replace(n)
+    }
+
+    /// From the link: a file arrived and its BLAKE3 hash matched (checked in Rust).
+    public func onFileReceived(_ r: ReceivedFileInfo) {
+        let path = fileSink?.save(r)
+        let ok = path != nil || fileSink == nil
+        let f = FileAttachment(name: r.name, sizeBytes: UInt64(r.bytes.count), mime: r.mime, state: ok ? .received : .failed,
+                               doneBytes: UInt64(r.bytes.count), localPath: path)
+        if var m = find(r.contactId, r.transferId) {
+            m.file = f
+            replace(m)
+        } else {
+            append(ChatMessage(id: r.transferId, contactId: r.contactId, text: "", mine: false, timeMs: clock(), status: .received, file: f))
+        }
+    }
+
+    public func onFileFailed(_ e: FileFailureInfo) {
+        guard var m = find(e.contactId, e.transferId), var f = m.file else { return }
+        f.state = e.reason == "integrity" ? .integrityFailed : .failed
+        m.file = f
+        replace(m)
+    }
+
+    /// Link dropped mid-transfer: transfers wait for the next link and resume automatically.
+    public func pauseTransfers(_ contactId: String) {
+        messages[contactId] = messages[contactId]?.map { m in
+            guard var f = m.file, f.state == .sending || f.state == .receiving else { return m }
+            f.state = .paused
+            var n = m
+            n.file = f
+            return n
+        }
+        changed()
+    }
+
+    /// Apply every file event from one link step.
+    public func applyFileEvents(_ r: LinkResult) {
+        r.fileProgress.forEach(onFileProgress)
+        r.files.forEach(onFileReceived)
+        r.fileFailures.forEach(onFileFailed)
     }
 
     public func markFlushed(_ contactId: String, count: Int) {

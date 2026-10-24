@@ -20,6 +20,7 @@ final class AppModel: ObservableObject {
         repo = MeshRepository(core: core, store: store)
         onboarded = store.onboarded && store.recoveryPhrase != nil
         repo.notifier = LocalNotifier()
+        repo.fileSink = ReceivedFiles()
         repo.genericBody = L("notif_new_message")
         // Flow steps may run off the main thread (cloud I/O); always publish on main.
         repo.onChange = { [weak self] in

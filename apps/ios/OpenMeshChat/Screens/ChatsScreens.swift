@@ -1,5 +1,6 @@
 import HoplaKit
 import PhotosUI
+import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -92,7 +93,8 @@ struct ChatThreadView: View {
     @State private var draft = ""
     @State private var burnNext = false
     @State private var viewing: (id: String, content: BurnContent)?
-    @State private var fileCandidate: (name: String, size: UInt64, mime: String)?
+    @State private var fileCandidate: (name: String, size: UInt64, mime: String, url: URL)?
+    @State private var previewURL: URL?
     @State private var showImporter = false
     @State private var error: String?
 
@@ -129,7 +131,7 @@ struct ChatThreadView: View {
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(UInt64.init) ?? 0
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            fileCandidate = (url.lastPathComponent, size, mime)
+            fileCandidate = (url.lastPathComponent, size, mime, url)
         }
         .sheet(isPresented: Binding(get: { fileCandidate != nil }, set: { if !$0 { fileCandidate = nil } })) {
             if let f = fileCandidate {
@@ -138,6 +140,7 @@ struct ChatThreadView: View {
                     .presentationDetents([.medium, .large])
             }
         }
+        .quickLookPreview($previewURL)
         .fullScreenCover(isPresented: Binding(get: { viewing != nil }, set: { if !$0 { closeViewer() } })) {
             if let v = viewing { BurnViewer(content: v.content, onClose: closeViewer) }
         }
@@ -169,9 +172,23 @@ struct ChatThreadView: View {
         } catch { self.error = L("send_failed") }
     }
 
-    private func send(file f: (name: String, size: UInt64, mime: String)) {
-        do { try model.repo.queueFile(contactId, name: f.name, size: f.size, mime: f.mime) } catch { self.error = L("file_too_large_title") }
+    /// Size is checked against the Rust cap before the file is read or encrypted (§5.23);
+    /// reading happens off the main thread, encryption into 64 KiB chunks in Rust.
+    private func send(file f: (name: String, size: UInt64, mime: String, url: URL)) {
         fileCandidate = nil
+        do { try model.repo.checkFile(size: f.size) } catch { self.error = L("file_too_large_title"); return }
+        let repo = model.repo, cid = contactId
+        Task.detached(priority: .userInitiated) {
+            let ok = f.url.startAccessingSecurityScopedResource()
+            defer { if ok { f.url.stopAccessingSecurityScopedResource() } }
+            let data = try? Data(contentsOf: f.url, options: .mappedIfSafe)
+            await MainActor.run {
+                guard let data else { self.error = L("file_read_error"); return }
+                do { try repo.sendFile(cid, name: f.name, mime: f.mime, bytes: data) } catch CoreError.fileTooLarge {
+                    self.error = L("file_too_large_title")
+                } catch { self.error = L("file_read_error") }
+            }
+        }
     }
 
     private func closeViewer() {
@@ -183,7 +200,11 @@ struct ChatThreadView: View {
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
             Group {
                 if m.burn != nil { burnBubble(m) }
-                else if let f = m.file { Label("\(f.name) · \(FilePolicy.label(f.sizeBytes))", systemImage: "doc") }
+                else if let f = m.file {
+                    FileBubble(file: f, mine: m.mine, peerName: model.repo.contact(contactId)?.displayName ?? "",
+                               onCancel: { model.repo.cancelFile(contactId, transferId: m.id) },
+                               onOpen: { if let p = f.localPath { previewURL = URL(fileURLWithPath: p) } })
+                }
                 else { Text(m.text) }
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
@@ -214,6 +235,71 @@ struct ChatThreadView: View {
                     .blur(radius: 0)
             }
         }
+    }
+}
+
+/// File bubble (§5.24, Designy v0.1.1 `file-transfer`): queued / sending / receiving / paused /
+/// sent / received (integrity checked in Rust) / failed / integrity fail, with Cancel, Open, Delete.
+struct FileBubble: View {
+    let file: FileAttachment
+    let mine: Bool
+    let peerName: String
+    let onCancel: () -> Void
+    let onOpen: () -> Void
+    @Environment(\.omcpColors) private var c
+
+    private func mb(_ b: UInt64) -> String { String(format: "%.1f", Double(b) / 1_000_000) }
+
+    private var line: String {
+        let done = mb(file.doneBytes), total = mb(file.sizeBytes)
+        switch file.state {
+        case .queued: return L("file_state_queued", total)
+        case .sending: return L("file_state_sending", done, total)
+        case .sent: return L("file_state_sent", total)
+        case .receiving: return L("file_state_receiving", done, total)
+        case .paused: return L("file_state_paused", done, total)
+        case .received: return L("file_state_received", total)
+        case .failed: return L("file_state_failed")
+        case .integrityFailed: return L("file_state_integrity", peerName)
+        }
+    }
+
+    private var tint: Color {
+        switch file.state {
+        case .paused, .queued: return c.pathQueue
+        case .failed, .integrityFailed: return c.danger
+        default: return c.brand
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "doc").accessibilityHidden(true)
+                Text(file.name).font(.subheadline.bold()).lineLimit(1)
+                Spacer()
+                switch file.state {
+                case .queued, .sending, .paused, .receiving:
+                    Button(action: onCancel) { Image(systemName: "xmark.circle") }
+                        .accessibilityLabel(L(mine ? "file_cancel_a11y" : "file_cancel_receive_a11y", file.name))
+                case .integrityFailed:
+                    Button(L("file_delete"), role: .destructive, action: onCancel)
+                case .received where file.localPath != nil:
+                    Button(action: onOpen) { Image(systemName: "arrow.up.forward.square") }
+                        .accessibilityLabel(L("file_open_a11y", file.name))
+                default:
+                    EmptyView()
+                }
+            }
+            Text(line).font(.caption).foregroundStyle(file.state == .failed || file.state == .integrityFailed ? c.danger : c.ink2)
+            ProgressView(value: file.fraction).tint(tint)
+                .accessibilityValue(L("file_progress_a11y", Int(file.fraction * 100)))
+            if file.state == .received { Text(L("file_integrity_checked")).font(.caption2).foregroundStyle(c.ink3) }
+            if file.state == .paused { Text(L("file_paused_meta")).font(.caption2).foregroundStyle(c.ink3) }
+        }
+        .frame(minWidth: 220)
+        .contentShape(Rectangle())
+        .onTapGesture { if file.state == .received { onOpen() } }
     }
 }
 

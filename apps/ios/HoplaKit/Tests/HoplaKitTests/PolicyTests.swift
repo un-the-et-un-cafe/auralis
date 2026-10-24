@@ -36,7 +36,44 @@ final class PolicyTests: XCTestCase {
         XCTAssertEqual(FilePolicy.check(size: 50_000_001, core: core), .tooLarge(max: 50_000_000))
         XCTAssertEqual(FilePolicy.label(core.maxFileBytes()), "50 MB")
         core.maxFile = 10 // UI follows the core, not a constant
-        XCTAssertThrowsError(try r.queueFile(c.id, name: "a", size: 11, mime: "a/b"))
+        XCTAssertThrowsError(try r.checkFile(size: 11))
+        XCTAssertThrowsError(try r.sendFile(c.id, name: "a", mime: "a/b", bytes: Data(count: 11)))
+        XCTAssertNoThrow(try r.sendFile(c.id, name: "a", mime: "a/b", bytes: Data(count: 10)))
+    }
+
+    final class MemSink: FileSink {
+        var saved: [String] = []
+        func save(_ file: ReceivedFileInfo) -> String? { saved.append(file.name); return "/tmp/\(file.name)" }
+    }
+
+    func testFileTransferStatesFollowLinkEvents() throws {
+        let (r, core) = makeRepo()
+        try r.saveIdentity(phrase: try core.generateRecoveryPhrase(), name: "A")
+        let c = try r.addContact(qr: "omcp:1:b0b:Bob", action: .chatWithoutVerifying)
+        let id = try r.sendFile(c.id, name: "a.pdf", mime: "application/pdf", bytes: Data(count: 200_000))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .queued)
+        r.onFileProgress(FileProgressInfo(transferId: id, contactId: c.id, incoming: false, name: "a.pdf", size: 200_000, doneChunks: 2, totalChunks: 4))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .sending)
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.doneBytes, 100_000)
+        r.pauseTransfers(c.id)
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .paused)
+        r.onFileProgress(FileProgressInfo(transferId: id, contactId: c.id, incoming: false, name: "a.pdf", size: 200_000, doneChunks: 4, totalChunks: 4))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .sent)
+
+        let sink = MemSink()
+        r.fileSink = sink
+        r.onFileProgress(FileProgressInfo(transferId: "in1", contactId: c.id, incoming: true, name: "b.jpg", size: 10, doneChunks: 0, totalChunks: 1))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .receiving)
+        r.onFileReceived(ReceivedFileInfo(transferId: "in1", contactId: c.id, name: "b.jpg", mime: "image/jpeg", bytes: Data(count: 10)))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .received)
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.localPath, "/tmp/b.jpg")
+        XCTAssertEqual(sink.saved, ["b.jpg"])
+        r.onFileProgress(FileProgressInfo(transferId: "in2", contactId: c.id, incoming: true, name: "c", size: 10, doneChunks: 0, totalChunks: 1))
+        r.onFileFailed(FileFailureInfo(transferId: "in2", contactId: c.id, reason: "integrity"))
+        XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .integrityFailed)
+        r.cancelFile(c.id, transferId: id)
+        XCTAssertFalse(r.messages[c.id]!.contains { $0.id == id })
+        XCTAssertFalse(core.files.contains(id))
     }
 
     func testGatewayFromCorePolicy() {
