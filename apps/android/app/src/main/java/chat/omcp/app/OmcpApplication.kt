@@ -37,7 +37,8 @@ class OmcpApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(chat.omcp.app.security.ScreenSecurity.Callbacks())
-        repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this))
+        // Encrypted local store (Rust core); its key is sealed with the Android Keystore.
+        repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this), getDatabasePath("omcp-store.db").apply { parentFile?.mkdirs() }.path)
         repository.fileSink = receivedFiles
         runCatching { repository.restore() }
     }

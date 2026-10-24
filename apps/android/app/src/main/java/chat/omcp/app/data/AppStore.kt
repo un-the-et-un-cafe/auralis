@@ -26,6 +26,8 @@ interface AppStore {
     var lastCloudBackupMs: Long
     /** "Remind me later" deadline (24 h); 0 = not deferred. */
     var backupRemindDeadlineMs: Long
+    /** 256-bit key of the encrypted local store. On device it is sealed with a Keystore key. */
+    var storageKey: ByteArray?
 }
 
 class InMemoryAppStore : AppStore {
@@ -42,4 +44,5 @@ class InMemoryAppStore : AppStore {
     override var backupMethods: Set<String> = emptySet()
     override var lastCloudBackupMs = 0L
     override var backupRemindDeadlineMs = 0L
+    override var storageKey: ByteArray? = null
 }

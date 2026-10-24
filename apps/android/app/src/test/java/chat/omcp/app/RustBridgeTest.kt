@@ -11,6 +11,7 @@ import chat.omcp.app.data.MeshRepository
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -106,10 +107,12 @@ class RustBridgeTest {
 
     // ---- Burn after read end to end: two Rust nodes behind two MeshRepositories ----
 
-    private class Side(name: String, var now: Long) {
+    /** One app instance. Same [store] + [dbPath] again = the app restarted. */
+    private class Side(name: String, var now: Long, val store: InMemoryAppStore = InMemoryAppStore(), dbPath: String? = null) {
         val core = RustOmcpCore()
-        val repo = MeshRepository(core, InMemoryAppStore()) { now }
-            .also { it.saveIdentity(core.generateRecoveryPhrase(), name) }
+        val repo = MeshRepository(core, store, dbPath) { now }.also {
+            if (store.recoveryPhrase == null) it.saveIdentity(core.generateRecoveryPhrase(), name) else assertTrue(it.restore())
+        }
     }
 
     private class Pair2(val a: Side, val b: Side, val la: CoreLink, val lb: CoreLink, val bobId: String, val aliceId: String)
@@ -221,5 +224,66 @@ class RustBridgeTest {
             throw AssertionError("expected wrong password")
         } catch (_: WrongBackupPasswordException) {}
         assertEquals(core.recoveryPhrase(), core.openBackup(blob, "correct horse battery staple").phrase)
+    }
+
+    // ---- Encrypted local store: chats survive an app restart ----
+
+    @Test
+    fun messagesQueueAndBurnSurviveRestart() {
+        val dir = kotlin.io.path.createTempDirectory("omcp-store").toFile()
+        val db = File(dir, "omcp-store.db").path
+        val t = System.currentTimeMillis()
+        val a = Side("Alice", t)
+        val bobStore = InMemoryAppStore()
+        var b = Side("Bob", t, bobStore, db)
+        val bobId = a.repo.addContact(b.core.qrPayload(), verified = false).id
+        val aliceId = b.repo.addContact(a.core.qrPayload(), verified = true).id
+        assertTrue(bobStore.contacts.isEmpty()) // not in plain prefs: in the encrypted store
+        val secret = "burn: meet at gate 7"
+        a.repo.send(bobId, "hello Bob")
+        a.repo.send(bobId, secret, BurnSpec.timer(10))
+        var la = a.core.openInitiatorLink(bobId)
+        var lb = b.core.openResponderLink()
+        deliver(a, b, la, lb, la.start())
+        b.repo.send(aliceId, "queued for Alice") // b's link isn't flushed: stays queued
+        la.close(); lb.close()
+        assertNotNull(bobStore.storageKey)
+        assertFalse(String(File(db).readBytes(), Charsets.ISO_8859_1).contains("hello Bob"))
+
+        // Restart Bob: contacts, verification, chat, queue and the unopened burn message are back.
+        b = Side("Bob", t, bobStore, db)
+        assertTrue(b.repo.contacts.value.single().verified)
+        val chat = b.repo.messages.value[aliceId]!!
+        assertEquals(listOf("hello Bob", "", "queued for Alice"), chat.map { it.text })
+        assertEquals(ChatMessage.BurnState.Unopened, chat[1].burnState)
+        assertEquals(ChatMessage.Status.Queued, chat[2].status)
+        assertEquals(1, b.core.queuedFor(aliceId))
+        assertEquals(secret, b.repo.openBurn(aliceId, chat[1].id, b.now)!!.text)
+        b.now += 10_000
+        assertEquals(1, b.repo.tickBurn())
+
+        // Restart again: the burned message is gone for good; the queue still goes out.
+        b = Side("Bob", b.now, bobStore, db)
+        assertEquals(listOf("hello Bob", "queued for Alice"), b.repo.messages.value[aliceId]!!.map { it.text })
+        assertFalse(b.core.burnIsLive(chat[1].id))
+        la = a.core.openInitiatorLink(bobId)
+        lb = b.core.openResponderLink()
+        deliver(a, b, la, lb, la.start())
+        assertEquals("queued for Alice", a.repo.messages.value[bobId]!!.last().text)
+        assertEquals(0, b.core.queuedFor(aliceId))
+        la.close(); lb.close()
+        dir.listFiles()!!.forEach { assertFalse(String(it.readBytes(), Charsets.ISO_8859_1).contains(secret)) }
+    }
+
+    @Test
+    fun unreadableStoreIsSetAsideNotFatal() {
+        val dir = kotlin.io.path.createTempDirectory("omcp-store").toFile()
+        val db = File(dir, "omcp-store.db").path
+        val store = InMemoryAppStore()
+        Side("Bob", 1L, store, db)
+        store.storageKey = ByteArray(32) { 7 } // e.g. Keystore wiped
+        val b = Side("Bob", 2L, store, db)
+        assertTrue(b.repo.onboarded.value)
+        assertTrue(dir.listFiles()!!.any { it.name.startsWith("omcp-store.db.unreadable-") })
     }
 }
