@@ -13,9 +13,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-/** File attachment state (DESIGN_SPEC §5.24). Only `Queued` is produced in the beta. */
-data class FileAttachment(val name: String, val sizeBytes: Long, val mime: String, val state: State) {
-    enum class State { Queued, Sending, Receiving, Paused, Received, Failed, IntegrityFailed }
+/** File attachment state (DESIGN_SPEC §5.24, Designy v0.1.1 `file-transfer`). */
+data class FileAttachment(
+    val name: String,
+    val sizeBytes: Long,
+    val mime: String,
+    val state: State,
+    /** Bytes sent (sealed onto the link) or received so far. */
+    val doneBytes: Long = 0,
+    /** Received files: where the verified plaintext was saved (app-private storage). */
+    val localPath: String? = null,
+) {
+    enum class State { Queued, Sending, Receiving, Paused, Sent, Received, Failed, IntegrityFailed }
+    val fraction: Float get() = if (sizeBytes <= 0) (if (state == State.Received || state == State.Sent) 1f else 0f) else doneBytes.toFloat() / sizeBytes
+}
+
+/** Stores a verified received file; returns its local path (null = couldn't save). */
+fun interface FileSink {
+    fun save(file: chat.omcp.app.core.ReceivedFileInfo): String?
 }
 
 data class ChatMessage(
@@ -73,7 +88,7 @@ class MeshRepository(
     val appStore: AppStore get() = store
 
     @Volatile var kick: MeshKick? = null
-    private var seq = 0L
+    @Volatile var fileSink: FileSink? = null
 
     /** Load an existing identity from the store; returns true if onboarded. */
     fun restore(): Boolean {
@@ -164,17 +179,96 @@ class MeshRepository(
     }
 
     /**
-     * Record an outgoing file. Size is already checked against [OmcpCore.maxFileBytes].
-     * TODO(M5.1): stream encrypt_file chunks over the MeshLink; for now it stays queued.
+     * Send a file. Size is checked against [OmcpCore.maxFileBytes] before reading/encrypting
+     * (callers check first too); Rust encrypts it into 64 KiB chunks and the BLE transport
+     * streams them when a link to [contactId] is up. Returns the transfer id.
      */
-    fun queueFile(contactId: String, name: String, size: Long, mime: String) {
-        require(size <= core.maxFileBytes()) { "file too large" }
+    fun sendFile(contactId: String, name: String, mime: String, bytes: ByteArray): String {
+        require(bytes.size <= core.maxFileBytes()) { "file too large" }
+        val o = core.queueFile(contactId, name, mime, bytes)
         append(
             ChatMessage(
-                "file-${seq++}", contactId, "", true, clock(), ChatMessage.Status.Queued,
-                FileAttachment(name, size, mime, FileAttachment.State.Queued),
+                o.transferId, contactId, "", true, clock(), ChatMessage.Status.Queued,
+                FileAttachment(name, o.size, mime, FileAttachment.State.Queued),
             ),
         )
+        refresh()
+        kick?.kick(contactId)
+        return o.transferId
+    }
+
+    /** Cancel an outgoing (queued/sending) or incoming transfer and drop its bubble. */
+    fun cancelFile(contactId: String, transferId: String) {
+        core.cancelFile(transferId)
+        _messages.update { all -> all + (contactId to all[contactId].orEmpty().filterNot { it.id == transferId }) }
+    }
+
+    /** From the link: chunks sealed (outgoing) or received (incoming). */
+    fun onFileProgress(p: chat.omcp.app.core.FileProgressInfo) {
+        val existing = find(p.contactId, p.transferId)
+        if (existing == null) {
+            if (!p.incoming) return // cancelled locally
+            append(
+                ChatMessage(
+                    p.transferId, p.contactId, "", false, clock(), ChatMessage.Status.Received,
+                    FileAttachment(p.name, p.size, "", FileAttachment.State.Receiving, p.doneBytes),
+                ),
+            )
+            return
+        }
+        val f = existing.file ?: return
+        if (f.state == FileAttachment.State.Received || f.state == FileAttachment.State.IntegrityFailed) return
+        val done = p.doneChunks >= p.totalChunks
+        val state = when {
+            p.incoming -> FileAttachment.State.Receiving
+            done -> FileAttachment.State.Sent
+            else -> FileAttachment.State.Sending
+        }
+        replace(
+            existing.copy(
+                status = if (!p.incoming && done) ChatMessage.Status.Sent else existing.status,
+                file = f.copy(state = state, doneBytes = p.doneBytes),
+            ),
+        )
+    }
+
+    /** From the link: a file arrived and its BLAKE3 hash matched (checked in Rust). */
+    fun onFileReceived(r: chat.omcp.app.core.ReceivedFileInfo) {
+        val path = fileSink?.save(r)
+        val f = FileAttachment(
+            r.name, r.bytes.size.toLong(), r.mime,
+            if (path != null || fileSink == null) FileAttachment.State.Received else FileAttachment.State.Failed,
+            r.bytes.size.toLong(), path,
+        )
+        val existing = find(r.contactId, r.transferId)
+        if (existing == null) {
+            append(ChatMessage(r.transferId, r.contactId, "", false, clock(), ChatMessage.Status.Received, f))
+        } else {
+            replace(existing.copy(file = f))
+        }
+    }
+
+    fun onFileFailed(e: chat.omcp.app.core.FileFailureInfo) {
+        val m = find(e.contactId, e.transferId) ?: return
+        val f = m.file ?: return
+        val state = if (e.reason == "integrity") FileAttachment.State.IntegrityFailed else FileAttachment.State.Failed
+        replace(m.copy(file = f.copy(state = state)))
+    }
+
+    /** Link dropped mid-transfer: outgoing/incoming transfers wait for the next link (auto-resume). */
+    fun pauseTransfers(contactId: String) {
+        _messages.update { all ->
+            all + (
+                contactId to all[contactId].orEmpty().map { m ->
+                    val f = m.file
+                    if (f != null && (f.state == FileAttachment.State.Sending || f.state == FileAttachment.State.Receiving)) {
+                        m.copy(file = f.copy(state = FileAttachment.State.Paused))
+                    } else {
+                        m
+                    }
+                }
+                )
+        }
     }
 
     /** Called by the transport when [count] queued texts to [contactId] went out. */

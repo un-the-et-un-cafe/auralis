@@ -69,6 +69,14 @@ class RustOmcpCore : OmcpCore {
     override fun tickBurn(nowMs: Long): List<String> = n().tickBurn(nowMs.toULong())
     override fun burnIsLive(msgId: String) = n().burnIsLive(msgId)
     override fun burnSpecValid(spec: BurnSpec) = chat.omcp.ffi.burnSpecValid(spec.toFfi())
+    override fun queueFile(contactId: String, name: String, mime: String, bytes: ByteArray): FileOfferInfo = try {
+        n().queueFile(contactId, name, mime, bytes).let {
+            FileOfferInfo(it.transferIdHex, it.contactId, it.name, it.mime, it.size.toLong(), it.numChunks.toInt())
+        }
+    } catch (e: FfiException.FileTooLarge) {
+        throw IllegalArgumentException("file too large", e)
+    }
+    override fun cancelFile(transferId: String) = n().cancelFile(transferId)
     override fun queuedFor(contactId: String) = n().queuedFor(contactId).toInt()
 
     override fun pathStatus(): MeshStatus {
@@ -144,6 +152,12 @@ private fun LinkOutput.toResult() = LinkResult(
     peerContactId = peerContactId,
     flushed = flushed.toInt(),
     opened = opened.map { OpenedInfo(it.contactId, it.msgIdHex, it.openedMs.toLong(), it.shredded, it.burnAtMs?.toLong()) },
+    fileProgress = fileProgress.map {
+        FileProgressInfo(it.transferIdHex, it.contactId, it.incoming, it.name, it.size.toLong(), it.doneChunks.toInt(), it.totalChunks.toInt())
+    },
+    files = files.map { ReceivedFileInfo(it.transferIdHex, it.contactId, it.name, it.mime, it.bytes) },
+    fileFailures = fileFailures.map { FileFailureInfo(it.transferIdHex, it.contactId, it.reason) },
+    morePending = morePending,
 )
 
 private class RustLink(private val link: MeshLink) : CoreLink {

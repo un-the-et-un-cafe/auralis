@@ -15,6 +15,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import chat.omcp.app.core.FileFailureInfo
+import chat.omcp.app.core.FileProgressInfo
+import chat.omcp.app.core.ReceivedFileInfo
+import chat.omcp.app.data.FileAttachment
+import chat.omcp.app.data.FileSink
 import org.junit.Test
 
 class ChatAndContactViewModelTest {
@@ -80,16 +85,55 @@ class ChatAndContactViewModelTest {
     @Test
     fun `file over core limit is too large before any encryption`() {
         val c = repo.addContact(bobQr, verified = false)
-        val vm = ChatThreadViewModel(repo, c.id)
-        vm.onFilePicked("clip.mp4", core.maxFileBytes() + 1, "video/mp4")
+        val vm = ChatThreadViewModel(repo, c.id, kotlinx.coroutines.Dispatchers.Unconfined)
+        var reads = 0
+        vm.onFilePicked("clip.mp4", core.maxFileBytes() + 1, "video/mp4") { reads++; ByteArray(0) }
         assertTrue(vm.fileConfirm.value!!.tooLarge)
         vm.confirmFile()
         assertNull(repo.messages.value[c.id])
-        vm.onFilePicked("flyer.jpg", 2_000_000, "image/jpeg")
+        assertEquals("too large must not even read the file", 0, reads)
+        vm.onFilePicked("flyer.jpg", 2_000_000, "image/jpeg") { reads++; ByteArray(2_000_000) }
         assertFalse(vm.fileConfirm.value!!.tooLarge)
         assertEquals(50_000_000L, vm.fileConfirm.value!!.maxBytes)
         vm.confirmFile()
-        assertEquals("flyer.jpg", repo.messages.value[c.id]!!.single().file!!.name)
+        assertEquals(1, reads)
+        val m = repo.messages.value[c.id]!!.single()
+        assertEquals("flyer.jpg", m.file!!.name)
+        assertEquals(FileAttachment.State.Queued, m.file!!.state)
+    }
+
+    @Test
+    fun `file transfer states follow link events`() {
+        val c = repo.addContact(bobQr, verified = false)
+        val id = repo.sendFile(c.id, "a.pdf", "application/pdf", ByteArray(200_000))
+        repo.onFileProgress(FileProgressInfo(id, c.id, false, "a.pdf", 200_000, 2, 4))
+        var f = repo.messages.value[c.id]!!.single().file!!
+        assertEquals(FileAttachment.State.Sending, f.state)
+        assertEquals(100_000L, f.doneBytes)
+        repo.pauseTransfers(c.id)
+        assertEquals(FileAttachment.State.Paused, repo.messages.value[c.id]!!.single().file!!.state)
+        repo.onFileProgress(FileProgressInfo(id, c.id, false, "a.pdf", 200_000, 4, 4))
+        f = repo.messages.value[c.id]!!.single().file!!
+        assertEquals(FileAttachment.State.Sent, f.state)
+
+        // Incoming: progress creates a Receiving bubble, then the verified file lands.
+        val saved = mutableListOf<String>()
+        repo.fileSink = FileSink { saved += it.name; "/data/files/${it.name}" }
+        repo.onFileProgress(FileProgressInfo("in1", c.id, true, "b.jpg", 10, 0, 1))
+        assertEquals(FileAttachment.State.Receiving, repo.messages.value[c.id]!!.last().file!!.state)
+        repo.onFileReceived(ReceivedFileInfo("in1", c.id, "b.jpg", "image/jpeg", ByteArray(10)))
+        f = repo.messages.value[c.id]!!.last().file!!
+        assertEquals(FileAttachment.State.Received, f.state)
+        assertEquals("/data/files/b.jpg", f.localPath)
+        assertEquals(listOf("b.jpg"), saved)
+
+        repo.onFileProgress(FileProgressInfo("in2", c.id, true, "c.bin", 10, 0, 1))
+        repo.onFileFailed(FileFailureInfo("in2", c.id, "integrity"))
+        assertEquals(FileAttachment.State.IntegrityFailed, repo.messages.value[c.id]!!.last().file!!.state)
+
+        repo.cancelFile(c.id, id)
+        assertTrue(repo.messages.value[c.id]!!.none { it.id == id })
+        assertFalse(core.files.contains(id))
     }
 
     @Test

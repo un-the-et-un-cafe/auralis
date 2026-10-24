@@ -21,10 +21,13 @@ class OmcpApplication : Application() {
         if (BuildConfig.SIMULATED_DRIVE_BACKUP) InMemoryCloudBackupStore() else DriveAppDataBackupStore()
     }
 
+    val receivedFiles by lazy { chat.omcp.app.files.ReceivedFiles(this) }
+
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(chat.omcp.app.security.ScreenSecurity.Callbacks())
         repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this))
+        repository.fileSink = receivedFiles
         runCatching { repository.restore() }
     }
 }

@@ -27,6 +27,29 @@ data class IncomingText(
     val mime: String? = null,
 )
 
+/** A queued outbound file (encrypted into 64 KiB chunks by the Rust core). */
+data class FileOfferInfo(val transferId: String, val contactId: String, val name: String, val mime: String, val size: Long, val chunks: Int)
+
+/** Transfer progress: sender = chunks sealed onto the link, receiver = chunks received. */
+data class FileProgressInfo(
+    val transferId: String,
+    val contactId: String,
+    val incoming: Boolean,
+    val name: String,
+    val size: Long,
+    val doneChunks: Int,
+    val totalChunks: Int,
+) {
+    val fraction: Float get() = if (totalChunks == 0) 1f else doneChunks.toFloat() / totalChunks
+    val doneBytes: Long get() = (size * fraction).toLong()
+}
+
+/** A fully received file whose BLAKE3 hash was verified in Rust. */
+class ReceivedFileInfo(val transferId: String, val contactId: String, val name: String, val mime: String, val bytes: ByteArray)
+
+/** `integrity` (hash/AEAD failed), `invalid` or `busy`. */
+data class FileFailureInfo(val transferId: String, val contactId: String, val reason: String)
+
 /** PDUs to transmit (in order) + decrypted messages from one link step. */
 data class LinkResult(
     val outgoing: List<ByteArray>,
@@ -35,6 +58,11 @@ data class LinkResult(
     val peerContactId: String?,
     val flushed: Int,
     val opened: List<chat.omcp.app.burn.OpenedInfo> = emptyList(),
+    val fileProgress: List<FileProgressInfo> = emptyList(),
+    val files: List<ReceivedFileInfo> = emptyList(),
+    val fileFailures: List<FileFailureInfo> = emptyList(),
+    /** More file chunks wait: call [CoreLink.flush] again once the GATT queue is empty. */
+    val morePending: Boolean = false,
 )
 
 enum class NetworkType { Offline, Wifi, Cellular }
@@ -101,6 +129,9 @@ interface OmcpCore {
     fun tickBurn(nowMs: Long): List<String>
     fun burnIsLive(msgId: String): Boolean
     fun burnSpecValid(spec: chat.omcp.app.burn.BurnSpec): Boolean
+    /** Queue a file (≤ [maxFileBytes], checked before encryption). Throws [IllegalArgumentException] if too large. */
+    fun queueFile(contactId: String, name: String, mime: String, bytes: ByteArray): FileOfferInfo
+    fun cancelFile(transferId: String): Boolean
     fun queuedFor(contactId: String): Int
     fun pathStatus(): MeshStatus
 

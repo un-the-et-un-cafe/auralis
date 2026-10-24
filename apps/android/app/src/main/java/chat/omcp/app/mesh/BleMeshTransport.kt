@@ -61,6 +61,8 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     private val notifyQueues = ConcurrentHashMap<String, ArrayDeque<ByteArray>>()
     private val notifyBusy = ConcurrentHashMap<String, Boolean>()
     private val subscribed = ConcurrentHashMap<String, BluetoothDevice>()
+    private val serverMore = ConcurrentHashMap<String, Boolean>()
+    private val serverPeer = ConcurrentHashMap<String, String>()
 
     /** Central side: per-peripheral initiator links. */
     private inner class Client(val address: String, var contactId: String?, var probing: Boolean = false) {
@@ -70,6 +72,8 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         val key: String get() = contactId ?: address
         val writes = ArrayDeque<ByteArray>()
         var busy = false
+        /** Rust has more file chunks for this link: flush again when [writes] drains. */
+        var more = false
     }
     private val clients = ConcurrentHashMap<String, Client>() // by contactId (or address while probing)
 
@@ -145,6 +149,8 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                     serverLinks.remove(device.address)?.close()
                     notifyQueues.remove(device.address)
                     subscribed.remove(device.address)
+                    serverMore.remove(device.address)
+                    serverPeer.remove(device.address)?.let(repo::pauseTransfers)
                     repo.refresh()
                 }
             }
@@ -176,8 +182,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                     serverLinks.remove(d.address)?.close()
                     return@execute
                 }
-                handle(r)
-                r.outgoing.forEach { enqueueNotify(d, it) }
+                onServerResult(d, r)
             }
         }
 
@@ -194,10 +199,29 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         pumpNotify(d)
     }
 
+    private fun onServerResult(d: BluetoothDevice, r: LinkResult) {
+        r.peerContactId?.let { serverPeer[d.address] = it }
+        serverMore[d.address] = r.morePending
+        handle(r)
+        r.outgoing.forEach { enqueueNotify(d, it) }
+        if (r.outgoing.isEmpty()) pumpNotify(d)
+    }
+
     private fun pumpNotify(d: BluetoothDevice) {
         if (notifyBusy[d.address] == true) return
-        val q = notifyQueues[d.address] ?: return
-        val next = q.removeFirstOrNull() ?: return
+        val q = notifyQueues.getOrPut(d.address) { ArrayDeque() }
+        val next = q.removeFirstOrNull() ?: run {
+            // Queue drained: pull the next file chunks for this peer, if any.
+            val link = serverLinks[d.address]
+            if (serverMore[d.address] == true && link != null && link.isEstablished()) {
+                serverMore[d.address] = false
+                val r = runCatching { link.flush() }.getOrNull() ?: return
+                serverMore[d.address] = r.morePending
+                handle(r)
+                q.addAll(r.outgoing)
+            }
+            q.removeFirstOrNull() ?: return
+        }
         val ch = server?.getService(service)?.getCharacteristic(outbox) ?: return
         notifyBusy[d.address] = true
         if (Build.VERSION.SDK_INT >= 33) {
@@ -308,6 +332,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                     endProbe(c, useful = false)
                     c.link?.close()
                     clients.remove(c.key)
+                    c.contactId?.let(repo::pauseTransfers)
                     runCatching { g.close() }
                     repo.refresh()
                 }
@@ -378,8 +403,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                 val cid = c.contactId ?: return@execute
                 val link = runCatching { repo.core.openInitiatorLink(cid) }.getOrNull() ?: return@execute
                 c.link = link
-                link.start().outgoing.forEach { c.writes.addLast(it) }
-                pumpWrites(c)
+                onClientResult(c, link.start())
             }
         }
 
@@ -410,17 +434,33 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                     g.disconnect()
                     return@execute
                 }
-                handle(r)
-                r.outgoing.forEach { c.writes.addLast(it) }
-                pumpWrites(c)
+                onClientResult(c, r)
             }
         }
+    }
+
+    private fun onClientResult(c: Client, r: LinkResult) {
+        c.more = r.morePending
+        handle(r)
+        r.outgoing.forEach { c.writes.addLast(it) }
+        pumpWrites(c)
     }
 
     private fun pumpWrites(c: Client) {
         if (c.busy) return
         val g = c.gatt ?: return
-        val next = c.writes.removeFirstOrNull() ?: return
+        val next = c.writes.removeFirstOrNull() ?: run {
+            // Write queue drained: pull the next file chunks, if Rust has more.
+            val link = c.link
+            if (c.more && link != null && link.isEstablished()) {
+                c.more = false
+                val r = runCatching { link.flush() }.getOrNull() ?: return
+                c.more = r.morePending
+                handle(r)
+                r.outgoing.forEach { c.writes.addLast(it) }
+            }
+            c.writes.removeFirstOrNull() ?: return
+        }
         val ch = g.getService(service)?.getCharacteristic(inbox) ?: return
         c.busy = true
         if (Build.VERSION.SDK_INT >= 33) {
@@ -439,6 +479,9 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     private fun handle(r: LinkResult) {
         r.received.forEach { repo.onReceived(it); MeshNotifications.onMessage(context, repo, it) }
         r.opened.forEach(repo::onOpened)
+        r.fileProgress.forEach(repo::onFileProgress)
+        r.files.forEach(repo::onFileReceived)
+        r.fileFailures.forEach(repo::onFileFailed)
         r.peerContactId?.let { repo.markFlushed(it, r.flushed) } ?: repo.refresh()
     }
 
@@ -447,10 +490,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         clients[contactId]?.let { c ->
             val link = c.link ?: return@let
             if (!link.isEstablished()) return@let
-            val r = link.flush()
-            handle(r)
-            r.outgoing.forEach { c.writes.addLast(it) }
-            pumpWrites(c)
+            onClientResult(c, link.flush())
             return
         }
         // Peripheral side: flushing a link only drains *its* peer's queue, so
@@ -458,9 +498,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         for ((addr, link) in serverLinks) {
             if (!link.isEstablished()) continue
             val d = subscribed[addr] ?: continue
-            val r = link.flush()
-            handle(r)
-            r.outgoing.forEach { enqueueNotify(d, it) }
+            onServerResult(d, link.flush())
         }
     }
 }

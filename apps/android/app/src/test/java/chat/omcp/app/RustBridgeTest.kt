@@ -65,6 +65,45 @@ class RustBridgeTest {
         assertEquals(50_000_000L, alice.maxFileBytes())
     }
 
+    @Test
+    fun fileTransferThroughBindingsIn64kChunks() {
+        val alice = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Alice") }
+        val bob = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Bob") }
+        val b = alice.addContactFromQr(bob.qrPayload())
+        bob.addContactFromQr(alice.qrPayload())
+        val la = alice.openInitiatorLink(b.id)
+        val lb = bob.openResponderLink()
+        pump(la, lb, la.start().outgoing)
+        val data = ByteArray(200_000) { (it % 251).toByte() }
+        val offer = alice.queueFile(b.id, "flyer.jpg", "image/jpeg", data)
+        assertEquals(4, offer.chunks)
+        val repo = MeshRepository(bob, InMemoryAppStore())
+        var got: ByteArray? = null
+        repo.fileSink = chat.omcp.app.data.FileSink { got = it.bytes; "mem:${it.name}" }
+        var flushes = 0
+        do {
+            val out = la.flush()
+            flushes++
+            out.outgoing.forEach { p ->
+                assertTrue(p.size <= 512)
+                val r = lb.onPdu(p)
+                r.fileProgress.forEach(repo::onFileProgress)
+                r.files.forEach(repo::onFileReceived)
+            }
+        } while (out.morePending)
+        assertTrue(flushes >= 2)
+        val m = repo.messages.value.values.flatten().single()
+        assertEquals(chat.omcp.app.data.FileAttachment.State.Received, m.file!!.state)
+        assertEquals("flyer.jpg", m.file!!.name)
+        assertArrayEquals(data, got)
+        try {
+            alice.queueFile(b.id, "big.bin", "", ByteArray(50_000_001))
+            error("expected too large")
+        } catch (_: IllegalArgumentException) {
+        }
+        la.close(); lb.close()
+    }
+
     // ---- Burn after read end to end: two Rust nodes behind two MeshRepositories ----
 
     private class Side(name: String, var now: Long) {

@@ -7,6 +7,12 @@ import chat.omcp.app.data.MeshRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class ChatsViewModel(val repo: MeshRepository) : ViewModel() {
     val contacts = repo.contacts
@@ -25,7 +31,17 @@ data class FileConfirm(
     val tooLarge get() = sizeBytes > maxBytes
 }
 
-class ChatThreadViewModel(val repo: MeshRepository, val contactId: String) : ViewModel() {
+class ChatThreadViewModel(
+    val repo: MeshRepository,
+    val contactId: String,
+    io: CoroutineDispatcher = Dispatchers.IO,
+) : ViewModel() {
+    /** Reading + encrypting up to 50 MB happens off the main thread. */
+    private val ioScope = CoroutineScope(SupervisorJob() + io)
+    private var reader: (() -> ByteArray)? = null
+    private val _fileError = MutableStateFlow(false)
+    /** Reading/encrypting the picked file failed (picker gave us an unreadable Uri). */
+    val fileError: StateFlow<Boolean> = _fileError.asStateFlow()
     val messages = repo.messages
     val status = repo.status
     private val _file = MutableStateFlow<FileConfirm?>(null)
@@ -48,18 +64,37 @@ class ChatThreadViewModel(val repo: MeshRepository, val contactId: String) : Vie
     fun closeBurn(id: String) = repo.closeBurn(contactId, id)
     fun tickBurn() = repo.tickBurn()
 
-    fun onFilePicked(name: String, size: Long, mime: String) {
+    /**
+     * System picker returned a file. [read] loads its bytes and is only called after the user
+     * confirms and the size passed the core limit (too large is decided before any read/encrypt).
+     */
+    fun onFilePicked(name: String, size: Long, mime: String, read: () -> ByteArray) {
+        reader = read
         _file.value = FileConfirm(name, size, mime, repo.core.maxFileBytes(), path())
     }
 
     fun confirmFile() {
         val f = _file.value ?: return
         if (f.tooLarge) return
-        repo.queueFile(contactId, f.name, f.sizeBytes, f.mime)
+        val read = reader ?: return
         _file.value = null
+        reader = null
+        ioScope.launch {
+            runCatching {
+                val bytes = read()
+                require(bytes.size.toLong() <= f.maxBytes) { "file too large" }
+                repo.sendFile(contactId, f.name, f.mime, bytes)
+            }.onFailure { _fileError.value = true }
+        }
     }
 
-    fun cancelFile() { _file.value = null }
+    fun cancelFile() { _file.value = null; reader = null }
+    fun dismissFileError() { _fileError.value = false }
+
+    /** Cancel an in-flight transfer (Sending / Receiving / Queued bubble). */
+    fun cancelTransfer(transferId: String) = repo.cancelFile(contactId, transferId)
+
+    override fun onCleared() { ioScope.cancel() }
 
     fun setVerified(v: Boolean) = repo.setVerified(contactId, v)
 }

@@ -83,6 +83,15 @@ class FakeOmcpCore : OmcpCore {
     override fun burnIsLive(msgId: String) = false
     override fun burnSpecValid(spec: chat.omcp.app.burn.BurnSpec) = true
 
+    /** Fake: records the offer only (no crypto); chunking is Rust-only. */
+    override fun queueFile(contactId: String, name: String, mime: String, bytes: ByteArray): FileOfferInfo {
+        require(contactId in contacts) { "unknown contact" }
+        require(bytes.size <= maxFileBytes()) { "file too large" }
+        val chunks = maxOf(1, (bytes.size + 65_535) / 65_536)
+        return FileOfferInfo("file-${msgSeq++}", contactId, name, mime, bytes.size.toLong(), chunks).also { files += it.transferId }
+    }
+    val files = mutableSetOf<String>()
+    override fun cancelFile(transferId: String) = files.remove(transferId)
     override fun queuedFor(contactId: String) = queues[contactId]?.size ?: 0
 
     override fun pathStatus(): MeshStatus {
