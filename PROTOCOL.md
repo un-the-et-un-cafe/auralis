@@ -703,6 +703,8 @@ Computed per community, and per stream host, from **participant attestations**:
 10. **Metadata metric (replaces 2).** *Per-message metadata* is the bytes needed to deliver one envelope beyond its ciphertext (header, routing TLVs, reconciliation exchanges caused by it). The averaged requirement is **≤ 256 B per delivered envelope, or ≤ 10 % of the ciphertext, whichever is larger**. Periodic hellos and digests count only towards the idle budget.
 11. **Idle budget and refresh (replaces the 5-min refresh in 2).** Digests are sent as deltas on change. A full digest is sent **only to a new neighbour, on request** (`DIGEST_REQ`), and as a safety refresh every 30 min. Idle overhead is ≤ 1 MB/day per node with up to 32 neighbours, and above that the hello interval backs off further (up to 120 s).
 
+12. **Compact beacon frames (normative).** Hello beacons and digest requests are 6-byte link-control frames: `type (u8) | flags (u8) | digest_id (u32, big-endian)`. `HELLO` = `0x48`; `DIGEST_REQ` = `0x52`, where `digest_id` is the digest being requested (0 = full). `flags` bit0 = `HAS_DELTA` (a delta digest follows), and bits 1–7 are reserved (0). `digest_id` is the low 32 bits of BLAKE2b over the current want-digest. With these frames the idle budget is met with 32 neighbours (≈ 0.83 MB/day in simulation).
+
 ### 21.8 `header_aad` TLV registry
 | Type | Name | Length | Section |
 |---|---|---|---|
@@ -711,6 +713,14 @@ Computed per community, and per stream host, from **participant attestations**:
 | `0x56` | `recipient_subtags` | 8·n | §22.7(9) |
 | `0x55`, `0x57`–`0x7F` | unassigned (extension process §16) | — | — |
 | `0x80`–`0xFF` | experimental / private use | — | — |
+
+
+### 21.9 Link-control frame types
+| Type | Name | Size | Section |
+|---|---|---|---|
+| `0x48` | `HELLO` | 6 B | §22.7(12) |
+| `0x52` | `DIGEST_REQ` | 6 B | §22.7(12) |
+| other | unassigned (extension process §16) | — | — |
 
 ### 23.8 Clarifications (v0.2.1)
 1. **Hash matching scope and governance.**
