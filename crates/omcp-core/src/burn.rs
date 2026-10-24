@@ -33,6 +33,12 @@ pub const INNER_TAG_NONE: u8 = 0x00;
 pub const INNER_TAG_BURN: u8 = 0x01;
 /// Control message type for `OPENED` (PROTOCOL §19.1).
 pub const CONTROL_OPENED: u8 = 0x30;
+/// Control: re-request a media item by locator + hash (PROTOCOL §7.1, v0.1.4).
+pub const CONTROL_MEDIA_REQUEST: u8 = 0x31;
+/// Control: "I no longer have this media item".
+pub const CONTROL_MEDIA_UNAVAILABLE: u8 = 0x32;
+/// Control: user-confirmed "Ask to resend" for a media item the partner lacks.
+pub const CONTROL_MEDIA_RESEND_ASK: u8 = 0x33;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BurnMode {
@@ -159,6 +165,43 @@ pub enum AppContent {
     FileMeta(Vec<u8>),
     /// File chunk body (opaque to this layer).
     FileChunk(Vec<u8>),
+    /// Media re-fetch controls (`0x31`/`0x32`/`0x33`), never with a burn header.
+    MediaControl(MediaControl),
+}
+
+/// Media re-fetch control. Wire: `type u8 | locator 16 | content_hash 32`.
+/// Carries nothing beyond what the original file offer already told the partner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MediaControl {
+    pub kind: u8,
+    pub locator: [u8; 16],
+    pub hash: [u8; 32],
+}
+
+impl MediaControl {
+    pub const WIRE_LEN: usize = 49;
+    pub fn encode(&self) -> [u8; 49] {
+        let mut b = [0u8; 49];
+        b[0] = self.kind;
+        b[1..17].copy_from_slice(&self.locator);
+        b[17..].copy_from_slice(&self.hash);
+        b
+    }
+    pub fn decode(b: &[u8]) -> Result<Self> {
+        if b.len() != Self::WIRE_LEN
+            || !matches!(
+                b[0],
+                CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE | CONTROL_MEDIA_RESEND_ASK
+            )
+        {
+            return Err(OmcpError::Burn("media control"));
+        }
+        Ok(Self {
+            kind: b[0],
+            locator: b[1..17].try_into().expect("len"),
+            hash: b[17..].try_into().expect("len"),
+        })
+    }
 }
 
 /// `InnerV1` plaintext for an application message: `tag [| burn] | inner_ct u8 | body`.
@@ -182,6 +225,12 @@ pub fn encode_app(burn: Option<&BurnHeader>, content: &AppContent) -> Result<Vec
                 return Err(OmcpError::Burn("control messages can't burn"));
             }
             body.extend_from_slice(&r.encode());
+        }
+        AppContent::MediaControl(c) => {
+            if burn.is_some() {
+                return Err(OmcpError::Burn("control messages can't burn"));
+            }
+            body.extend_from_slice(&c.encode());
         }
         AppContent::FileMeta(b) | AppContent::FileChunk(b) => {
             if burn.is_some() {
@@ -219,6 +268,11 @@ pub fn decode_app(p: &[u8]) -> Result<(Option<BurnHeader>, AppContent)> {
         INNER_CT_FILE_META if burn.is_none() => AppContent::FileMeta(rest.to_vec()),
         INNER_CT_FILE_CHUNK if burn.is_none() => AppContent::FileChunk(rest.to_vec()),
         CONTROL_OPENED if burn.is_none() => AppContent::Opened(OpenedReceipt::decode(body)?),
+        CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE | CONTROL_MEDIA_RESEND_ASK
+            if burn.is_none() =>
+        {
+            AppContent::MediaControl(MediaControl::decode(body)?)
+        }
         _ => return Err(OmcpError::Burn("inner content type")),
     };
     Ok((burn, c))

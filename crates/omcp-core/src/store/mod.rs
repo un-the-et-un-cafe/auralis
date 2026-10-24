@@ -259,6 +259,19 @@ impl Store {
         }
     }
 
+    /// Sealed app/core settings in the `meta` table (chat-backup state, device key).
+    pub fn put_meta<T: Serialize>(&self, key: &[u8], v: &T) -> Result<()> {
+        let mut k = b"app:".to_vec();
+        k.extend_from_slice(key);
+        self.put(Table::Meta, &k, None, v)
+    }
+
+    pub fn get_meta<T: DeserializeOwned>(&self, key: &[u8]) -> Result<Option<T>> {
+        let mut k = b"app:".to_vec();
+        k.extend_from_slice(key);
+        self.get(Table::Meta, &k)
+    }
+
     // ---- generic sealed rows ----
 
     fn rid(&self, t: Table, natural: &[u8]) -> [u8; 32] {

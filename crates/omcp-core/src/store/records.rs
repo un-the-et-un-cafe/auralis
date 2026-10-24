@@ -26,6 +26,16 @@ pub const FILE_SENT: u8 = 4;
 pub const FILE_RECEIVED: u8 = 5;
 pub const FILE_FAILED: u8 = 6;
 pub const FILE_INTEGRITY_FAILED: u8 = 7;
+/// Restored from a chat backup without its bytes: a missing-media placeholder
+/// that is re-requested from the partner by `locator` + `hash` (REQUIREMENTS CB3).
+pub const FILE_MISSING: u8 = 8;
+/// A re-request is in flight.
+pub const FILE_REQUESTED: u8 = 9;
+/// The partner answered that it no longer has the file ("Ask to resend").
+pub const FILE_UNAVAILABLE: u8 = 10;
+
+/// [`MessageStatus`] for an in-chat system notice (e.g. the restore notice, RS1).
+pub const STATUS_SYSTEM: u8 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContactRec {
@@ -33,6 +43,9 @@ pub struct ContactRec {
     pub peer: [u8; 32],
     pub name: String,
     pub verified: bool,
+    /// Device-key state learned from this contact's device certificates (RS1).
+    #[serde(default)]
+    pub device: Option<crate::device::ContactDevice>,
 }
 
 /// One 1:1 conversation.
@@ -54,6 +67,12 @@ pub struct FileRec {
     pub state: u8,
     pub done_bytes: u64,
     pub local_path: Option<String>,
+    /// BLAKE3 content hash (PROTOCOL §7); None for rows written before v0.1.4.
+    #[serde(default, with = "opt_bytes")]
+    pub hash: Option<Vec<u8>>,
+    /// Media locator: the 16-byte transfer id the partner knows the file by.
+    #[serde(default, with = "opt_bytes")]
+    pub locator: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

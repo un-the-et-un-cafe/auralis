@@ -201,7 +201,12 @@ fn backup_roundtrip_restores_identity_contacts_and_verification() {
         a2.restore_contact(k.contact_id, k.display_name, k.verified)
             .unwrap();
     }
-    assert_eq!(a2.contacts(), a.contacts());
+    let key = |v: Vec<ContactInfo>| {
+        v.into_iter()
+            .map(|c| (c.contact_id, c.display_name, c.verified))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(key(a2.contacts()), key(a.contacts()));
 }
 
 // ---- burn after read end to end (PROTOCOL §19.1) ----
@@ -667,38 +672,36 @@ fn burn_survives_restart_until_burned_then_is_unrecoverable() {
 }
 
 #[test]
-fn backup_carries_history_but_never_burn_content() {
+fn identity_backup_no_longer_carries_history() {
+    // v0.1.4: history moved to the chat backup (see `chatbackup` tests); the
+    // Argon2id identity backup is identity + contacts + name only.
     let (a, b, la, lb) = paired();
     pump(&la, &lb, la.start().unwrap());
-    let bob = a.contacts()[0].contact_id.clone();
-    pump(&la, &lb, la.send_text("kept in the backup".into()).unwrap());
-    a.queue_message(
-        bob.clone(),
-        "burn never in backup".into(),
-        Some(spec(BurnMode::OnOpen, 0, core_burn::UNREAD_TTL_1H)),
-    )
-    .unwrap();
+    pump(
+        &la,
+        &lb,
+        la.send_text("not in the identity backup".into()).unwrap(),
+    );
     let key = generate_backup_key().unwrap();
     let blob = a
         .create_backup_with_key(key.clone(), "d".into(), 1)
         .unwrap();
     let r = open_backup_with_key(blob, key).unwrap();
-    let h = r.history.clone().unwrap();
-    assert!(!has(&h, b"burn never in backup"));
-
+    assert!(r.history.is_none());
+    // Old blobs that still carry `history` keep restoring through `restore_history`.
+    let legacy = a.inner.lock().db().export_history().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let a2 = open_node(&r.phrase, "Alice", dir.path());
     for k in &r.contacts {
         a2.restore_contact(k.contact_id.clone(), k.display_name.clone(), k.verified)
             .unwrap();
     }
-    a2.restore_history(h).unwrap();
-    let ms = a2.stored_messages(bob.clone()).unwrap();
-    assert_eq!(ms.len(), 1);
-    assert_eq!(ms[0].text, "kept in the backup");
-    drop(a2);
-    let a3 = open_node(&r.phrase, "Alice", dir.path());
-    assert_eq!(a3.stored_messages(bob).unwrap().len(), 1);
+    a2.restore_history(legacy.to_vec()).unwrap();
+    let bob = a.contacts()[0].contact_id.clone();
+    assert_eq!(
+        a2.stored_messages(bob).unwrap()[0].text,
+        "not in the identity backup"
+    );
     drop(b);
 }
 
@@ -756,4 +759,430 @@ fn outgoing_file_and_received_file_reference_survive_restart() {
         (got.name.as_str(), got.size),
         ("notes.txt", data.len() as u64)
     );
+}
+
+// ---- chat backup, media re-fetch, restore indicator (CB1–CB5, RS1–RS2) ----
+
+/// Pump in both directions until quiet, collecting every output.
+fn pump_out(la: &MeshLink, lb: &MeshLink, out: LinkOutput) -> Vec<LinkOutput> {
+    let mut outs = Vec::new();
+    let mut queue = vec![(false, out.outgoing.clone())];
+    outs.push(out);
+    while let Some((back, pdus)) = queue.pop() {
+        for p in pdus {
+            let dst = if back { la } else { lb };
+            let o = dst.on_pdu(p).unwrap();
+            if !o.outgoing.is_empty() {
+                queue.push((!back, o.outgoing.clone()));
+            }
+            outs.push(o);
+        }
+    }
+    outs
+}
+
+/// Drain pending file chunks from `from` to `to` (and replies back).
+fn drain(from: &MeshLink, to: &MeshLink) -> Vec<LinkOutput> {
+    let mut outs = Vec::new();
+    loop {
+        let o = from.flush().unwrap();
+        let more = o.more_pending;
+        outs.extend(pump_out(from, to, o));
+        if !more {
+            return outs;
+        }
+    }
+}
+
+fn link(a: &Arc<OmcpNode>, b: &Arc<OmcpNode>) -> (Arc<MeshLink>, Arc<MeshLink>, Vec<LinkOutput>) {
+    let bid = b.identity().peer_id_hex;
+    let la = a.open_initiator_link(bid).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let outs = pump_out(&la, &lb, la.start().unwrap());
+    assert!(la.is_established() && lb.is_established());
+    (la, lb, outs)
+}
+
+/// Back up all chat blobs of `n` (snapshot + logs so far).
+fn backup_all(n: &OmcpNode, now: u64, blobs: &mut Vec<Vec<u8>>) {
+    if let Some(u) = n.chat_backup_next(now, false).unwrap() {
+        assert_eq!(
+            u.blob.len() % omcp_core::chat_backup::BUCKET,
+            0,
+            "CB2 padded"
+        );
+        n.chat_backup_commit(u.seq).unwrap();
+        blobs.push(u.blob);
+    }
+}
+
+/// Restore `a` onto a new device from its 24 words and the chat backup.
+fn restore_device(a: &OmcpNode, blobs: &[Vec<u8>], dir: &std::path::Path) -> Arc<OmcpNode> {
+    let phrase = a.recovery_phrase().unwrap();
+    let a2 = open_node(&phrase, "Alice", dir);
+    for c in a.contacts() {
+        a2.restore_contact(c.contact_id, c.display_name, c.verified)
+            .unwrap();
+    }
+    a2.mark_restored(now_ms()).unwrap();
+    a2.chat_backup_restore(blobs.to_vec()).unwrap();
+    a2
+}
+
+const PIC: &[u8] = b"pretend these are the bytes of a holiday photo";
+
+#[test]
+fn cb1_cb4_restore_brings_back_all_text_no_media_bytes_no_burn() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let bob = b.identity().peer_id_hex;
+    let mut sent = Vec::new();
+    for i in 0..30 {
+        let t = format!("text {i} – ünïcödé");
+        pump(&la, &lb, la.send_text(t.clone()).unwrap());
+        sent.push(t);
+    }
+    let got = pump(&lb, &la, lb.send_text("reply from Bob".into()).unwrap());
+    assert_eq!(got.len(), 1);
+    a.queue_message(
+        bob.clone(),
+        "burn never in backup".into(),
+        Some(spec(BurnMode::OnOpen, 0, core_burn::UNREAD_TTL_1H)),
+    )
+    .unwrap();
+    a.queue_file(
+        bob.clone(),
+        "pic.jpg".into(),
+        "image/jpeg".into(),
+        PIC.to_vec(),
+    )
+    .unwrap();
+    pump(&la, &lb, la.flush().unwrap());
+    drain(&la, &lb);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    pump(
+        &la,
+        &lb,
+        la.send_text("after the first upload".into()).unwrap(),
+    );
+    sent.push("after the first upload".into());
+    backup_all(&a, 2, &mut blobs);
+    assert_eq!(blobs.len(), 2, "snapshot + incremental log");
+    for blob in &blobs {
+        assert!(!has(blob, PIC), "no media bytes");
+        assert!(!has(blob, b"burn never in backup"), "CB4");
+        assert!(!has(blob, b"text 1"), "encrypted");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let msgs = a2.stored_messages(bob.clone()).unwrap();
+    let texts: Vec<&str> = msgs.iter().map(|m| m.text.as_str()).collect();
+    for t in &sent {
+        assert!(texts.contains(&t.as_str()), "missing {t}");
+    }
+    assert!(texts.contains(&"reply from Bob"));
+    assert!(msgs.iter().all(|m| m.burn.is_none()));
+    let pic = msgs.iter().find(|m| m.file.is_some()).unwrap();
+    let f = pic.file.as_ref().unwrap();
+    assert_eq!(f.state, StoredFileState::Missing);
+    assert_eq!((f.mime.as_str(), f.size), ("image/jpeg", PIC.len() as u64));
+    assert!(f.local_path.is_none());
+    // Text count is exact: everything that wasn't burn content.
+    let before = a.stored_messages(bob).unwrap();
+    assert_eq!(
+        msgs.len(),
+        before.iter().filter(|m| m.burn.is_none()).count()
+    );
+}
+
+#[test]
+fn cb2_wrong_words_cannot_decrypt() {
+    let (a, _b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    pump(&la, &lb, la.send_text("private".into()).unwrap());
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let other = node("Mallory");
+    assert!(matches!(
+        other.chat_backup_restore(blobs.clone()),
+        Err(FfiError::WrongBackupPassword)
+    ));
+    assert!(
+        a.chat_backup_next(2, false).unwrap().is_none(),
+        "nothing new"
+    );
+    assert!(a.chat_backup_due(1 + 3_600_000, true, false).unwrap());
+    assert!(
+        !a.chat_backup_due(1 + 3_600_000, false, false).unwrap(),
+        "Wi-Fi only"
+    );
+}
+
+#[test]
+fn cb3_placeholder_refills_from_partner_and_unavailable_path() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let bob = b.identity().peer_id_hex;
+    let alice = a.identity().peer_id_hex;
+    // Bob sends Alice a photo; Alice saves it.
+    lb.flush().unwrap();
+    let offer = b
+        .queue_file(
+            alice.clone(),
+            "pic.jpg".into(),
+            "image/jpeg".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    let outs = drain(&lb, &la);
+    let rf: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    assert_eq!(rf.len(), 1);
+    a.set_received_file_path(offer.transfer_id_hex.clone(), Some("/a/pic.jpg".into()))
+        .unwrap();
+    b.set_received_file_path(offer.transfer_id_hex.clone(), Some("/b/pic.jpg".into()))
+        .ok();
+    // A second file Bob will no longer have.
+    let gone = b
+        .queue_file(
+            alice.clone(),
+            "doc.pdf".into(),
+            "application/pdf".into(),
+            b"pdf".to_vec(),
+        )
+        .unwrap();
+    drain(&lb, &la);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    la.shutdown();
+    lb.shutdown();
+
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let st = |id: &str| {
+        a2.stored_messages(bob.clone())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id_hex == id)
+            .unwrap()
+            .file
+            .unwrap()
+            .state
+    };
+    assert_eq!(st(&offer.transfer_id_hex), StoredFileState::Missing);
+    // Bob comes into range: requests go out on link-up, Bob's app answers.
+    let t0 = Instant::now();
+    let (l2, lb2, outs) = link(&a2, &b);
+    assert!(outs.iter().any(|o| o
+        .media_updates
+        .iter()
+        .any(|u| u.state == StoredFileState::Requested)));
+    let reqs: Vec<_> = outs.iter().flat_map(|o| o.media_requests.clone()).collect();
+    assert_eq!(reqs.len(), 2);
+    for r in &reqs {
+        let bytes = (r.msg_id_hex == offer.transfer_id_hex).then(|| PIC.to_vec());
+        b.answer_media_request(r.contact_id.clone(), r.msg_id_hex.clone(), bytes)
+            .unwrap();
+    }
+    let outs = drain(&lb2, &l2);
+    let files: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].bytes, PIC);
+    assert!(t0.elapsed().as_secs() < 10, "CB3 within 10 s");
+    a2.set_received_file_path(files[0].transfer_id_hex.clone(), Some("/a2/pic.jpg".into()))
+        .unwrap();
+    assert_eq!(st(&offer.transfer_id_hex), StoredFileState::Received);
+    let unavailable: Vec<_> = outs.iter().flat_map(|o| o.media_updates.clone()).collect();
+    assert!(unavailable
+        .iter()
+        .any(|u| u.msg_id_hex == gone.transfer_id_hex && u.state == StoredFileState::Unavailable));
+    assert_eq!(st(&gone.transfer_id_hex), StoredFileState::Unavailable);
+    // "Ask to resend" reaches Bob as a prompt.
+    a2.ask_to_resend(gone.transfer_id_hex.clone()).unwrap();
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    assert!(outs.iter().any(|o| o.resend_asks.len() == 1));
+}
+
+#[test]
+fn cb3_refetch_with_wrong_bytes_is_rejected() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let offer = b
+        .queue_file(alice, "pic.jpg".into(), "image/jpeg".into(), PIC.to_vec())
+        .unwrap();
+    drain(&lb, &la);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let (l2, lb2, _) = link(&a2, &b);
+    // A misbehaving partner sends other bytes under the same locator.
+    let mut st = b.inner.lock();
+    let peer = st.contacts.keys().next().copied().unwrap();
+    let f = files::build_outgoing(
+        parse_msg_id(&offer.transfer_id_hex).unwrap(),
+        "pic.jpg",
+        "image/jpeg",
+        b"evil",
+    )
+    .unwrap();
+    st.files.out.entry(peer).or_default().push_back(f);
+    drop(st);
+    let outs = drain(&lb2, &l2);
+    assert!(outs.iter().all(|o| o.files.is_empty()));
+    assert!(outs
+        .iter()
+        .any(|o| o.file_failures.iter().any(|e| e.reason == "integrity")));
+}
+
+#[test]
+fn cb5_media_backup_on_restores_hash_verified_off_uploads_nothing() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let offer = b
+        .queue_file(alice, "pic.jpg".into(), "image/jpeg".into(), PIC.to_vec())
+        .unwrap();
+    drain(&lb, &la);
+    a.set_received_file_path(offer.transfer_id_hex.clone(), Some("/a/pic.jpg".into()))
+        .unwrap();
+    // Off by default: nothing to upload, sealing refused.
+    let s = a.media_backup_settings().unwrap();
+    assert!(!s.enabled && s.photos && s.voice && s.files && !s.videos && !s.mobile_data);
+    assert!(a.media_backup_todo().unwrap().is_empty());
+    assert!(!a.media_backup_due(100_000_000, true).unwrap());
+    let item_hash = hex::encode(blake3::hash(PIC).as_bytes());
+    assert!(a
+        .seal_media_backup(item_hash.clone(), PIC.to_vec())
+        .is_err());
+    // On.
+    a.set_media_backup_settings(MediaBackupSettings { enabled: true, ..s })
+        .unwrap();
+    assert!(a.media_backup_due(100_000_000, true).unwrap());
+    let todo = a.media_backup_todo().unwrap();
+    assert_eq!(todo.len(), 1);
+    assert_eq!(todo[0].hash_hex, item_hash);
+    let mb = a
+        .seal_media_backup(todo[0].hash_hex.clone(), PIC.to_vec())
+        .unwrap();
+    assert!(!has(&mb.blob, PIC));
+    a.media_backup_commit(todo[0].hash_hex.clone(), 5).unwrap();
+    assert!(a.media_backup_todo().unwrap().is_empty());
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let ph = a2.media_placeholders().unwrap();
+    assert_eq!(ph.len(), 1);
+    assert_eq!(ph[0].blob_name, mb.name);
+    let bytes = a2
+        .restore_media_from_backup(ph[0].msg_id_hex.clone(), mb.blob.clone())
+        .unwrap();
+    assert_eq!(bytes, PIC, "hash verified");
+    assert!(a2
+        .restore_media_from_backup(ph[0].msg_id_hex.clone(), blobs[0].clone())
+        .is_err());
+    // Turning it off hands back the blobs to delete.
+    let del = a
+        .set_media_backup_settings(MediaBackupSettings {
+            enabled: false,
+            ..s
+        })
+        .unwrap();
+    assert_eq!(del, vec![mb.name]);
+}
+
+#[test]
+fn rs1_contact_sees_unsuppressible_notice_and_old_key_superseded() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let old_dev = a.device_info().unwrap().device_key_hex;
+    assert!(b.contacts()[0].restored_at_ms.is_none());
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    let info = a2.device_info().unwrap();
+    assert_ne!(info.device_key_hex, old_dev);
+    assert!(
+        info.restored_at_ms.is_some(),
+        "banner on the restored phone"
+    );
+    let t0 = Instant::now();
+    let (l2, lb2, outs) = link(&a2, &b);
+    let notices: Vec<_> = outs
+        .iter()
+        .flat_map(|o| o.restore_notices.clone())
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert!(t0.elapsed().as_secs() < 5, "RS1 within 5 s");
+    assert_eq!(notices[0].contact_id, alice);
+    assert_eq!(notices[0].restored_at_ms, info.restored_at_ms);
+    let c = b
+        .contacts()
+        .into_iter()
+        .find(|c| c.contact_id == alice)
+        .unwrap();
+    assert!(c.restored_badge && c.restored_unverified && !c.verified);
+    let sys: Vec<_> = b
+        .stored_messages(alice.clone())
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.status == MessageStatus::System)
+        .collect();
+    assert_eq!(sys.len(), 1);
+    assert!(sys[0].text.starts_with("restored:"));
+    // Old device key superseded: the old install can no longer connect.
+    {
+        let st = b.inner.lock();
+        let d = &st.contacts.values().next().unwrap().device;
+        assert!(d.is_superseded(&hex::decode(&old_dev).unwrap().try_into().unwrap()));
+    }
+    let lo = a.open_initiator_link(b.identity().peer_id_hex).unwrap();
+    let lbo = b.open_responder_link().unwrap();
+    let mut failed = false;
+    for p in lo.start().unwrap().outgoing {
+        failed |= lbo.on_pdu(p).is_err();
+    }
+    assert!(failed && !lbo.is_established());
+    // Reconnecting with the same new device doesn't repeat the notice.
+    l2.shutdown();
+    lb2.shutdown();
+    let (_l3, _lb3, outs) = link(&a2, &b);
+    assert!(outs.iter().all(|o| o.restore_notices.is_empty()));
+}
+
+#[test]
+fn rs2_safety_number_changes_verified_cleared_old_qr_fails() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let old_qr = a.qr_payload();
+    b.verify_contact_from_qr(old_qr.clone()).unwrap();
+    a.set_verified(b.identity().peer_id_hex, true).unwrap();
+    let before = b.contacts()[0].safety_number.clone();
+    assert_eq!(before, a.contacts()[0].safety_number, "both sides agree");
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    // O3: our own verification of Bob carries over ("Still verified on your side").
+    assert!(a2.contacts().iter().all(|c| c.verified));
+    link(&a2, &b);
+    let c = b
+        .contacts()
+        .into_iter()
+        .find(|c| c.contact_id == alice)
+        .unwrap();
+    assert!(!c.verified, "contact side cleared");
+    assert_ne!(c.safety_number, before);
+    assert_eq!(c.safety_number, a2.contacts()[0].safety_number);
+    assert!(matches!(
+        b.verify_contact_from_qr(old_qr),
+        Err(FfiError::VerificationFailed)
+    ));
+    let v = b.verify_contact_from_qr(a2.qr_payload()).unwrap();
+    assert!(v.verified && !v.restored_unverified);
 }

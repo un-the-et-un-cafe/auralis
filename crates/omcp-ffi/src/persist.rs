@@ -17,6 +17,8 @@ pub enum MessageStatus {
     Queued,
     Sent,
     Received,
+    /// In-chat system notice (restore notice, RS1); `text` = `restored:<ms>`.
+    System,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -38,6 +40,12 @@ pub enum StoredFileState {
     Received,
     Failed,
     IntegrityFailed,
+    /// Restored without bytes: missing-media placeholder (CB3).
+    Missing,
+    /// Placeholder re-requested from the partner.
+    Requested,
+    /// The partner no longer has it ("Ask to resend").
+    Unavailable,
 }
 
 /// File-transfer metadata; `local_path` = where the app saved a received file.
@@ -84,6 +92,9 @@ pub(crate) fn file_state(s: u8) -> StoredFileState {
         st::FILE_SENT => StoredFileState::Sent,
         st::FILE_RECEIVED => StoredFileState::Received,
         st::FILE_INTEGRITY_FAILED => StoredFileState::IntegrityFailed,
+        st::FILE_MISSING => StoredFileState::Missing,
+        st::FILE_REQUESTED => StoredFileState::Requested,
+        st::FILE_UNAVAILABLE => StoredFileState::Unavailable,
         _ => StoredFileState::Failed,
     }
 }
@@ -98,6 +109,7 @@ pub(crate) fn to_stored(m: &MessageRec) -> StoredMessage {
         status: match m.status {
             st::STATUS_QUEUED => MessageStatus::Queued,
             st::STATUS_SENT => MessageStatus::Sent,
+            st::STATUS_SYSTEM => MessageStatus::System,
             _ => MessageStatus::Received,
         },
         mime: m.mime.clone(),
@@ -139,6 +151,7 @@ impl NodeState {
                 peer: *id,
                 name: c.name.clone(),
                 verified: c.verified,
+                device: Some(c.device.clone()),
             })?;
         }
         Ok(())
@@ -253,6 +266,8 @@ impl NodeState {
                         state: st::FILE_RECEIVING,
                         done_bytes: done,
                         local_path: None,
+                        hash: None,
+                        locator: None,
                     }),
                 })?,
                 None => {}
@@ -283,6 +298,8 @@ impl NodeState {
                 state: st::FILE_RECEIVED,
                 done_bytes: r.size,
                 local_path: None,
+                hash: Some(blake3::hash(&r.bytes).as_bytes().to_vec()),
+                locator: Some(id.to_vec()),
             };
             match self.db.message(&id)? {
                 Some(_) => self.update_message(&id, |m| m.file = Some(file))?,
@@ -325,7 +342,22 @@ impl NodeState {
             {
                 self.update_message(&m.id, |m| {
                     if let Some(f) = m.file.as_mut() {
-                        f.state = st::FILE_PAUSED;
+                        // A re-fetch that didn't finish goes back to the placeholder.
+                        f.state = if f.state == st::FILE_RECEIVING && f.hash.is_some() {
+                            st::FILE_MISSING
+                        } else {
+                            st::FILE_PAUSED
+                        };
+                    }
+                })?;
+            } else if m
+                .file
+                .as_ref()
+                .is_some_and(|f| f.state == st::FILE_REQUESTED)
+            {
+                self.update_message(&m.id, |m| {
+                    if let Some(f) = m.file.as_mut() {
+                        f.state = st::FILE_MISSING;
                     }
                 })?;
             }
@@ -341,6 +373,7 @@ impl NodeState {
                 Contact {
                     name: c.name.clone(),
                     verified: c.verified,
+                    device: c.device.clone().unwrap_or_default(),
                 },
             );
         }

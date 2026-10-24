@@ -47,3 +47,53 @@ mod tests {
         assert_ne!(n, safety_number(&a, &[3u8; 32]));
     }
 }
+
+/// Safety number v2 (REQUIREMENTS RS2): covers each side's identity key **and**
+/// current device key, so it changes after a restore. Order-independent:
+/// `BLAKE2b-512("OMCP-Safety-v2" || lo(peer || device) || hi(peer || device))`,
+/// iterated and grouped like v1. A missing device key (peer on an older app)
+/// counts as 32 zero bytes.
+pub fn safety_number_v2(
+    a: &[u8; 32],
+    a_device: Option<&[u8; 32]>,
+    b: &[u8; 32],
+    b_device: Option<&[u8; 32]>,
+) -> Vec<String> {
+    let mut x = a.to_vec();
+    x.extend_from_slice(a_device.unwrap_or(&[0; 32]));
+    let mut y = b.to_vec();
+    y.extend_from_slice(b_device.unwrap_or(&[0; 32]));
+    let (lo, hi) = if x <= y { (x, y) } else { (y, x) };
+    let mut h = Blake2b512::new();
+    h.update(b"OMCP-Safety-v2");
+    h.update(&lo);
+    h.update(&hi);
+    let first = h.finalize();
+    let mut second = Blake2b512::new();
+    second.update(first);
+    let second = second.finalize();
+    let mut bytes = first.to_vec();
+    bytes.extend_from_slice(&second);
+    (0..SAFETY_GROUPS)
+        .map(|i| {
+            let c = &bytes[i * 5..i * 5 + 5];
+            let v = c.iter().fold(0u64, |acc, x| (acc << 8) | u64::from(*x));
+            format!("{:05}", v % 100_000)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod v2_tests {
+    use super::*;
+
+    #[test]
+    fn rs2_v2_changes_with_device_key() {
+        let (a, b) = ([1u8; 32], [2u8; 32]);
+        let (d1, d2, e) = ([5u8; 32], [6u8; 32], [7u8; 32]);
+        let n = safety_number_v2(&a, Some(&d1), &b, Some(&e));
+        assert_eq!(n, safety_number_v2(&b, Some(&e), &a, Some(&d1)));
+        assert_ne!(n, safety_number_v2(&a, Some(&d2), &b, Some(&e)));
+        assert_ne!(n, safety_number(&a, &b));
+    }
+}

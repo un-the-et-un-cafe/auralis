@@ -44,6 +44,7 @@ fn survives_reopen_and_is_encrypted_at_rest() {
             peer: PEER,
             name: "Zanzibar Quokka".into(),
             verified: true,
+            device: None,
         })
         .unwrap();
         s.put_message(&msg(1, "meet at the old lighthouse", 10))
@@ -56,6 +57,8 @@ fn survives_reopen_and_is_encrypted_at_rest() {
             state: FILE_RECEIVED,
             done_bytes: 1234,
             local_path: Some("/data/files/holiday-plan.pdf".into()),
+            hash: None,
+            locator: None,
         });
         s.put_message(&m2).unwrap();
         s.put_outbox(
@@ -285,6 +288,8 @@ fn history_export_excludes_burn_and_imports() {
         state: FILE_RECEIVING,
         done_bytes: 0,
         local_path: Some("/old/device".into()),
+        hash: None,
+        locator: None,
     });
     s.put_message(&f).unwrap();
     s.put_outbox(

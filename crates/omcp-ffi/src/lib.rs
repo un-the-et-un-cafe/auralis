@@ -44,6 +44,7 @@ use omcp_core::ble::link::LinkSession;
 use omcp_core::ble::message::{open_app_envelope, seal_inner_envelope, CONTENT_TYPE_TEXT_PLAIN};
 use omcp_core::ble::{capabilities, DiscoveryAdvertisement};
 use omcp_core::burn::{self as core_burn, AppContent, BurnHeader, BurnStore, Opened};
+use omcp_core::device::{self as core_device, ContactDevice, OwnDevice};
 use omcp_core::gateway::policy::{GatewayPolicy, NetworkKind, DEFAULT_DAILY_BYTE_CAP};
 use omcp_core::store::{self as st, MessageRec, Store};
 use omcp_core::{
@@ -54,8 +55,13 @@ use zeroize::Zeroizing;
 
 uniffi::setup_scaffolding!();
 
+mod chatbackup;
 mod files;
 mod persist;
+pub use chatbackup::{
+    ChatBackupBlob, ChatBackupSummary, DeviceInfo, MediaBackupItem, MediaBackupSettings,
+    MediaRequestEvent, MediaUpdate, RestoreNotice,
+};
 pub use files::{FileFailure, FileOffer, FileProgress, ReceivedFile, FILE_CHUNK_BYTES};
 pub use persist::{
     ChatSummary, MessageStatus, StoredBurnState, StoredFile, StoredFileState, StoredMessage,
@@ -68,6 +74,8 @@ pub const LINK_FRAGMENT_PAYLOAD: usize = 400;
 const PDU_HANDSHAKE: u8 = 0x01;
 const PDU_LINK: u8 = 0x02;
 const QR_PREFIX: &str = "omcp:1:";
+/// v0.1.4 QR: `omcp:2:<peer id hex>:<device key hex>:<name>` (RS2).
+const QR_PREFIX_V2: &str = "omcp:2:";
 const TTL_HOPS: u8 = 8;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
 
@@ -91,6 +99,10 @@ pub enum FfiError {
     /// Local store failure: wrong storage key, newer schema, other identity, I/O.
     #[error("local storage: {msg}")]
     Storage { msg: String },
+    /// QR verification failed: the code doesn't match this contact's current
+    /// identity + device key (e.g. a QR from before a restore, RS2).
+    #[error("safety number doesn't match")]
+    VerificationFailed,
 }
 
 impl From<omcp_core::OmcpError> for FfiError {
@@ -146,6 +158,12 @@ pub struct ContactInfo {
     /// 12 groups of 5 digits.
     pub safety_number: Vec<String>,
     pub verified: bool,
+    /// "Restored" badge (7 days after a restore notice, RS1).
+    pub restored_badge: bool,
+    /// When the contact restored on a new device (from its device certificate).
+    pub restored_at_ms: Option<u64>,
+    /// "Restored, not verified" until re-verified by QR (RS2).
+    pub restored_unverified: bool,
 }
 
 /// Result of scanning a QR before the contact is saved (§5.22 preview sheet).
@@ -259,6 +277,14 @@ pub struct LinkOutput {
     /// More outbound file chunks are waiting: call `flush()` again once the
     /// platform's write/notify queue has drained.
     pub more_pending: bool,
+    /// Contacts now on a new (restored) device: in-chat notice + badge (RS1).
+    pub restore_notices: Vec<RestoreNotice>,
+    /// A partner asks for a media item again (answer with `answer_media_request`).
+    pub media_requests: Vec<MediaRequestEvent>,
+    /// A partner asks us to resend media we no longer have (show a prompt).
+    pub resend_asks: Vec<MediaRequestEvent>,
+    /// Placeholder state changes (requested / unavailable).
+    pub media_updates: Vec<MediaUpdate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -479,6 +505,7 @@ pub fn parse_advertisement(bytes: Vec<u8>) -> Option<String> {
 struct Contact {
     name: String,
     verified: bool,
+    device: ContactDevice,
 }
 
 struct NodeState {
@@ -495,6 +522,8 @@ struct NodeState {
     files: files::FileState,
     /// Encrypted local store (in-memory for [`OmcpNode::from_phrase`]).
     db: Store,
+    /// Chat-backup state to save once the planned upload succeeded.
+    pending_backup: Option<omcp_core::chat_backup::BackupState>,
 }
 
 /// One queued outbound message: envelope id fixed at queue time so `OPENED` can match.
@@ -533,6 +562,9 @@ struct NodeInner {
     peer_id: [u8; 32],
     name: String,
     state: Mutex<NodeState>,
+    /// This installation's device key (RS1). Never locked while holding `state`
+    /// is required; lock order is `state` → `device`.
+    device: Mutex<OwnDevice>,
 }
 
 impl NodeInner {
@@ -542,11 +574,40 @@ impl NodeInner {
     fn identity(&self) -> Result<StaticIdentity, FfiError> {
         Ok(StaticIdentity::from_seed(&self.seed)?)
     }
+    fn device(&self) -> MutexGuard<'_, OwnDevice> {
+        self.device.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    fn device_public(&self) -> [u8; 32] {
+        self.device().public().unwrap_or([0; 32])
+    }
+    /// Noise handshake payload with our device certificate.
+    fn handshake_payload(&self) -> Result<Vec<u8>, FfiError> {
+        Ok(core_device::handshake_payload(&self.device().cert()?))
+    }
 }
 
 pub(crate) fn parse_id(hex_id: &str) -> Result<[u8; 32], FfiError> {
     let v = hex::decode(hex_id).map_err(|_| invalid("contact id hex"))?;
     v.try_into().map_err(|_| invalid("contact id length"))
+}
+
+/// Safety number v2 (identity + current device keys, RS2) once both device keys
+/// are known; v1 (identity keys only) with a peer on an older app.
+pub(crate) fn contact_info(node: &NodeInner, id: &[u8; 32], c: &Contact) -> ContactInfo {
+    let mine = node.device_public();
+    let safety_number = match c.device.current_key() {
+        Some(theirs) => safety::safety_number_v2(&node.peer_id, Some(&mine), id, Some(&theirs)),
+        None => safety::safety_number(&node.peer_id, id),
+    };
+    ContactInfo {
+        contact_id: hex::encode(id),
+        display_name: c.name.clone(),
+        safety_number,
+        verified: c.verified,
+        restored_badge: c.device.badge_active(now_ms()),
+        restored_at_ms: c.device.restored_at_ms,
+        restored_unverified: c.device.restored_unverified && !c.verified,
+    }
 }
 
 fn now_ms() -> u64 {
@@ -574,12 +635,13 @@ impl OmcpNode {
                 verified: c.verified,
             })
             .collect();
-        let history = self.inner.lock().db().export_history()?;
+        // Message history moved to the chat backup (v0.1.4, see `chatbackup`);
+        // the Argon2id identity backup carries identity, contacts and name only.
         let contents = backup::BackupContents {
             entropy: Zeroizing::new(*self.inner.seed),
             contacts,
             display_name: Some(self.inner.name.clone()).filter(|n| !n.is_empty()),
-            history: Some(history),
+            history: None,
         };
         Ok(backup::seal_backup(
             &contents,
@@ -633,11 +695,13 @@ impl OmcpNode {
         let seed = recovery::phrase_to_seed(&phrase)?;
         let id = StaticIdentity::from_seed(&seed)?;
         db.bind_owner(&id.dh_public())?;
+        let device = chatbackup::load_or_create_device(&db, &seed, id.dh_public(), now_ms())?;
         let node = Arc::new(Self {
             inner: Arc::new(NodeInner {
                 seed,
                 peer_id: id.dh_public(),
                 name: display_name,
+                device: Mutex::new(device),
                 state: Mutex::new(NodeState {
                     contacts: HashMap::new(),
                     queues: HashMap::new(),
@@ -649,6 +713,7 @@ impl OmcpNode {
                     seen: SeenCache::default(),
                     files: files::FileState::default(),
                     db,
+                    pending_backup: None,
                 }),
             }),
         });
@@ -702,11 +767,13 @@ impl OmcpNode {
         )
     }
 
-    /// Contact QR payload: `omcp:1:<peer id hex>:<display name>`.
+    /// Contact QR payload: `omcp:2:<peer id hex>:<device key hex>:<display name>`.
+    /// The device key makes the code change after a restore (RS2).
     pub fn qr_payload(&self) -> String {
         format!(
-            "{QR_PREFIX}{}:{}",
+            "{QR_PREFIX_V2}{}:{}:{}",
             hex::encode(self.inner.peer_id),
+            hex::encode(self.inner.device_public()),
             self.inner.name
         )
     }
@@ -720,7 +787,7 @@ impl OmcpNode {
 
     /// Parse a QR and compute its safety number without saving anything.
     pub fn preview_contact_from_qr(&self, payload: String) -> Result<ContactPreview, FfiError> {
-        let (id, name) = self.parse_qr(&payload)?;
+        let (id, name, qr_dev) = self.parse_qr(&payload)?;
         let st = self.inner.lock();
         let known = st.contacts.get(&id);
         let mismatch_with = st
@@ -735,6 +802,10 @@ impl OmcpNode {
                 &Contact {
                     name,
                     verified: false,
+                    device: ContactDevice {
+                        current: qr_dev.map(|d| d.to_vec()),
+                        ..ContactDevice::default()
+                    },
                 },
             ),
         };
@@ -747,12 +818,17 @@ impl OmcpNode {
 
     /// Add a contact from a scanned QR payload.
     pub fn add_contact_from_qr(&self, payload: String) -> Result<ContactInfo, FfiError> {
-        let (id, name) = self.parse_qr(&payload)?;
+        let (id, name, qr_dev) = self.parse_qr(&payload)?;
         let mut st = self.inner.lock();
         let c = st.contacts.entry(id).or_insert(Contact {
             name,
             verified: false,
+            device: ContactDevice::default(),
         });
+        if c.device.current.is_none() && c.device.superseded.is_empty() {
+            // Pin the device key from the QR; the handshake certificate must match it.
+            c.device.current = qr_dev.map(|d| d.to_vec());
+        }
         let info = self.info(&id, c);
         st.persist_contact(&id)?;
         Ok(info)
@@ -760,12 +836,29 @@ impl OmcpNode {
 }
 
 impl OmcpNode {
-    fn parse_qr(&self, payload: &str) -> Result<([u8; 32], String), FfiError> {
-        let rest = payload
-            .trim()
-            .strip_prefix(QR_PREFIX)
-            .ok_or_else(|| invalid("not an OMCP contact QR"))?;
-        let (hex_id, name) = rest.split_once(':').unwrap_or((rest, ""));
+    /// `(peer id, name, device key)`; v1 codes carry no device key.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn parse_qr(
+        &self,
+        payload: &str,
+    ) -> Result<([u8; 32], String, Option<[u8; 32]>), FfiError> {
+        let p = payload.trim();
+        let (rest, v2) = match (p.strip_prefix(QR_PREFIX_V2), p.strip_prefix(QR_PREFIX)) {
+            (Some(r), _) => (r, true),
+            (None, Some(r)) => (r, false),
+            _ => return Err(invalid("not an OMCP contact QR")),
+        };
+        let (hex_id, rest) = rest.split_once(':').unwrap_or((rest, ""));
+        let (dev, name) = if v2 {
+            let (d, n) = rest.split_once(':').unwrap_or((rest, ""));
+            let d: [u8; 32] = hex::decode(d)
+                .ok()
+                .and_then(|v| v.try_into().ok())
+                .ok_or_else(|| invalid("QR device key"))?;
+            (Some(d), n)
+        } else {
+            (None, rest)
+        };
         let id = parse_id(hex_id)?;
         if id == self.inner.peer_id {
             return Err(invalid("cannot add yourself"));
@@ -775,7 +868,7 @@ impl OmcpNode {
         } else {
             name.chars().take(64).collect()
         };
-        Ok((id, name))
+        Ok((id, name, dev))
     }
 }
 
@@ -795,6 +888,7 @@ impl OmcpNode {
             Contact {
                 name: display_name,
                 verified,
+                device: ContactDevice::default(),
             },
         );
         st.persist_contact(&id)
@@ -980,6 +1074,8 @@ impl OmcpNode {
                 state: st::FILE_QUEUED,
                 done_bytes: 0,
                 local_path: None,
+                hash: Some(blake3::hash(&bytes).as_bytes().to_vec()),
+                locator: Some(tid.to_vec()),
             }),
         })?;
         let offer = FileOffer {
@@ -1166,7 +1262,10 @@ impl OmcpNode {
             let body: &[u8] = match &content {
                 AppContent::Text(t) => t.as_bytes(),
                 AppContent::Media { bytes, .. } => bytes,
-                AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => &[],
+                AppContent::Opened(_)
+                | AppContent::FileMeta(_)
+                | AppContent::FileChunk(_)
+                | AppContent::MediaControl(_) => &[],
             };
             st.burn_out.insert(envelope_id, h, body, now)?;
             st.burn_meta.insert(
@@ -1211,12 +1310,7 @@ impl OmcpNode {
     }
 
     fn info(&self, id: &[u8; 32], c: &Contact) -> ContactInfo {
-        ContactInfo {
-            contact_id: hex::encode(id),
-            display_name: c.name.clone(),
-            safety_number: safety::safety_number(&self.inner.peer_id, id),
-            verified: c.verified,
-        }
+        contact_info(&self.inner, id, c)
     }
 
     fn new_link(&self, role: Role, peer: Option<[u8; 32]>) -> Arc<MeshLink> {
@@ -1303,7 +1397,7 @@ impl MeshLink {
         let mut st = self.lock();
         let mut out = LinkOutput::default();
         if let Role::Initiator(init) = &mut st.role {
-            let m1 = init.write_message_1(b"omcp-ffi-v1")?;
+            let m1 = init.write_message_1(&self.node.handshake_payload()?)?;
             chunk_handshake(&m1, &mut out.outgoing)?;
         }
         Ok(out)
@@ -1353,7 +1447,13 @@ impl MeshLink {
                             out.file_failures.len(),
                         );
                         Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
+                        node.check_refetched(&mut out, from.1);
                         node.persist_file_events(&out, from, now_ms())?;
+                    }
+                    let replies = node.queues.get(&peer).is_some_and(|q| !q.is_empty());
+                    drop(node);
+                    if replies {
+                        self.flush_locked(&mut st, &mut out)?;
                     }
                 }
             }
@@ -1523,6 +1623,8 @@ impl MeshLink {
             (Some(_), AppContent::FileMeta(_) | AppContent::FileChunk(_)) => {
                 return Err(invalid("burn file"))
             }
+            (None, AppContent::MediaControl(c)) => node.on_media_control(peer, c, out)?,
+            (Some(_), AppContent::MediaControl(_)) => return Err(invalid("burn control")),
             (None, AppContent::Text(t)) => {
                 node.db().put_message(&received(&t, None, None))?;
                 rt.text = t;
@@ -1539,9 +1641,10 @@ impl MeshLink {
                 let (body, mime) = match &c {
                     AppContent::Text(t) => (t.as_bytes(), None),
                     AppContent::Media { mime, bytes } => (bytes.as_slice(), Some(mime.clone())),
-                    AppContent::Opened(_) | AppContent::FileMeta(_) | AppContent::FileChunk(_) => {
-                        unreachable!()
-                    }
+                    AppContent::Opened(_)
+                    | AppContent::FileMeta(_)
+                    | AppContent::FileChunk(_)
+                    | AppContent::MediaControl(_) => unreachable!(),
                 };
                 node.burn_in
                     .insert(env.envelope_id, h, body, env.created_ms)?;
@@ -1625,6 +1728,7 @@ impl MeshLink {
             return Ok(());
         };
         let mut batch: Vec<Queued> = Vec::new();
+        let from = out.file_progress.len();
         if let Some(f) = q.front_mut() {
             if f.link != Some(self.handle) {
                 f.link = Some(self.handle);
@@ -1656,7 +1760,6 @@ impl MeshLink {
             }
         }
         out.more_pending = node.files.out.get(&peer).is_some_and(|q| !q.is_empty());
-        let from = out.file_progress.len() - 1;
         node.persist_file_events(
             out,
             (from, out.files.len(), out.file_failures.len()),
@@ -1676,9 +1779,11 @@ impl MeshLink {
         out: &mut LinkOutput,
     ) -> Result<(), FfiError> {
         let role = std::mem::replace(&mut st.role, Role::Closed);
+        let peer_payload: Vec<u8>;
         let up = match role {
             Role::Initiator(mut init) => {
-                let (_payload, keys) = init.read_message_2(msg)?;
+                let (payload, keys) = init.read_message_2(msg)?;
+                peer_payload = payload;
                 Established {
                     link: LinkSession::initiator(&keys),
                     keys,
@@ -1689,13 +1794,13 @@ impl MeshLink {
                 }
             }
             Role::Responder(mut resp) => {
-                resp.read_message_1(msg)?;
+                peer_payload = resp.read_message_1(msg)?;
                 let rs = resp.remote_static().ok_or(FfiError::UnknownContact)?;
                 if !self.node.lock().contacts.contains_key(&rs) {
                     // Unknown initiator: refuse (beta requires mutual QR add).
                     return Err(FfiError::UnknownContact);
                 }
-                let (m2, keys) = resp.write_message_2(b"omcp-ffi-v1")?;
+                let (m2, keys) = resp.write_message_2(&self.node.handshake_payload()?)?;
                 chunk_handshake(&m2, &mut out.outgoing)?;
                 st.peer = Some(rs);
                 Established {
@@ -1714,9 +1819,18 @@ impl MeshLink {
                 });
             }
         };
+        if let Some(p) = st.peer {
+            // RS1: the contact's device decides about the restore notice.
+            self.node
+                .lock()
+                .apply_peer_cert(p, &peer_payload, now_ms(), out)?;
+        }
         st.role = Role::Up(Box::new(up));
         if let Some(p) = st.peer {
-            self.node.lock().links_up.insert(self.handle, p);
+            let mut node = self.node.lock();
+            node.links_up.insert(self.handle, p);
+            // CB3: ask the partner again for every missing-media placeholder.
+            node.request_missing_media(&p, out)?;
         }
         self.flush_locked(st, out)
     }

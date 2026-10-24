@@ -19,12 +19,12 @@
 //!   blobs stay `v:1`, older readers ignore it, and older blobs without it still
 //!   open. A blob with `v` greater than [`BACKUP_VERSION`] fails with
 //!   [`OmcpError::BackupTooNew`] so apps can say "Update Hopla to restore".
-//!   `history` (added with the encrypted local store) is the
-//!   [`crate::store::Store::export_history`] snapshot: chats, non-burn messages,
-//!   file metadata and the pending queue — never burn content (REQUIREMENTS B5).
-//!   It is optional and omitted when empty, so blobs stay `v: 1`: older apps
-//!   ignore the unknown field and restore identity + contacts as before, and
-//!   older blobs (no `history`) open unchanged.
+//!   `history` (legacy, **read-only** since v0.1.4) is the
+//!   [`crate::store::Store::export_history`] snapshot that pre-release builds of
+//!   the encrypted local store wrote here. Message history now lives in the
+//!   separate chat backup ([`crate::chat_backup`], key derived from the 24 words),
+//!   so current writers leave `history` out; blobs that still carry it keep
+//!   opening and apps import it with `restore_history`. Blobs stay `v: 1`.
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};

@@ -30,6 +30,8 @@
 pub mod backup;
 pub mod ble;
 pub mod burn;
+pub mod chat_backup;
+pub mod device;
 pub mod error;
 pub mod files;
 pub mod framing;
