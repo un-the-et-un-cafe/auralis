@@ -21,6 +21,9 @@ final class AppModel: ObservableObject {
         onboarded = store.onboarded && store.recoveryPhrase != nil
         repo.notifier = LocalNotifier()
         repo.fileSink = ReceivedFiles()
+        // Chat backup (CB1–CB5): HoplaKit.ChatBackupSync is ready; the CloudKit ChatBlobStore isn’t
+        // specified yet (record naming/zone, docs/CHAT_BACKUP.md gap 9), so it stays off on iOS.
+        repo.chatBackup = nil
         repo.genericBody = L("notif_new_message")
         // Flow steps may run off the main thread (cloud I/O); always publish on main.
         repo.onChange = { [weak self] in

@@ -216,6 +216,62 @@ final class RustBridgeTests: XCTestCase {
         f2.setRestorePassword("violet-orbit-71-tundra")
         XCTAssertTrue(f2.restoreFromCloud())
     }
+
+    /// CB1/CB4 (padded incremental blobs, restore chats) + RS1/RS2 (notice, verified cleared, old QR fails).
+    func testChatBackupRestoreNoticeAndReverify() throws {
+        let t = Int64(Date().timeIntervalSince1970 * 1000)
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let bOnA = try ra.addContact(qr: try cb.qrPayload(), action: .verifyAndChat)
+        let aOnB = try rb.addContact(qr: try ca.qrPayload(), action: .verifyAndChat)
+        let oldQr = try ca.qrPayload()
+        try ra.send(bOnA.id, text: "see you at the market")
+        var la = try ca.openInitiatorLink(bOnA.id)
+        var lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        la.close(); lb.close()
+
+        let cloud = InMemoryChatBlobStore()
+        XCTAssertEqual(try ChatBackupSync(core: ca, blobs: cloud, clock: { t }).runText(onWifi: true, force: true), 1)
+        XCTAssertFalse(cloud.blobs.isEmpty)
+        for b in cloud.blobs.values { XCTAssertEqual(b.count % 65536, 0) }
+
+        let idBlob = try ca.createBackup(password: "correct horse battery staple", deviceHint: "test", nowMs: t)
+        let restored = try ca.openBackup(idBlob, password: "correct horse battery staple")
+        let c2 = RustOmcpCore()
+        let r2 = MeshRepository(core: c2, store: InMemoryAppStore(), clock: { t + 1000 })
+        r2.chatBackup = ChatBackupSync(core: c2, blobs: cloud, clock: { t + 1000 })
+        try r2.restoreFromBackup(restored, name: "Ana", method: "icloud")
+        let res = try XCTUnwrap(try r2.restoreChats())
+        XCTAssertGreaterThanOrEqual(res.messages, 1)
+        XCTAssertEqual(r2.messages[bOnA.id]?.last(where: { $0.status != .system })?.text, "see you at the market")
+        XCTAssertNotNil(r2.restoredAtMs)
+
+        // RS1: Ben sees the notice on the next link. RS2: verified cleared, old QR fails.
+        var notices: [RestoreNoticeInfo] = []
+        la = try cb.openInitiatorLink(aOnB.id)
+        lb = try c2.openResponderLink()
+        var queue: [(toB: Bool, pdus: [Data])] = [(true, try la.start().outgoing)]
+        while !queue.isEmpty {
+            let (toB, pdus) = queue.removeFirst()
+            for p in pdus {
+                let out = try (toB ? lb : la).onPdu(p)
+                if !toB { notices += out.restoreNotices; rb.applyFileEvents(out) }
+                if !out.outgoing.isEmpty { queue.append((!toB, out.outgoing)) }
+            }
+        }
+        XCTAssertEqual(notices.count, 1)
+        let c = try XCTUnwrap(rb.contact(aOnB.id))
+        XCTAssertFalse(c.verified)
+        XCTAssertTrue(c.restoredUnverified)
+        XCTAssertEqual(rb.messages[aOnB.id]?.last?.status, .system)
+        XCTAssertThrowsError(try rb.addContact(qr: oldQr, action: .verifyAndChat)) { e in
+            XCTAssertEqual(e as? CoreError, .verificationFailed)
+        }
+        let re = try rb.addContact(qr: try c2.qrPayload(), action: .verifyAndChat)
+        XCTAssertTrue(re.verified)
+        XCTAssertFalse(re.restoredUnverified)
+    }
 }
 
 extension RustOmcpCore {
@@ -224,4 +280,5 @@ extension RustOmcpCore {
         _ = try load(phrase: try generateRecoveryPhrase(), displayName: name)
         return try qrPayload()
     }
+
 }

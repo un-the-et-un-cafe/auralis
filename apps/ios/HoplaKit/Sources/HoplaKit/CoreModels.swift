@@ -29,11 +29,20 @@ public struct Contact: Equatable, Identifiable, Codable, Sendable {
     /// 12 groups of 5 digits.
     public var safetyNumber: [String]
     public var verified: Bool
-    public init(id: String, displayName: String, safetyNumber: [String], verified: Bool) {
+    /// RS1: the "Restored" emphasis window (7 days) after the contact restored on a new device.
+    public var restoredBadge: Bool = false
+    public var restoredAtMs: Int64?
+    /// RS2: restored and not re-verified in person yet: "Restored, not verified" pill (§5.98).
+    public var restoredUnverified: Bool = false
+    public init(id: String, displayName: String, safetyNumber: [String], verified: Bool,
+                restoredBadge: Bool = false, restoredAtMs: Int64? = nil, restoredUnverified: Bool = false) {
         self.id = id
         self.displayName = displayName
         self.safetyNumber = safetyNumber
         self.verified = verified
+        self.restoredBadge = restoredBadge
+        self.restoredAtMs = restoredAtMs
+        self.restoredUnverified = restoredUnverified
     }
 
     /// Verified check badge only on verified contacts; unverified contacts show nothing.
@@ -211,9 +220,23 @@ public struct LinkResult: Sendable {
     public var fileFailures: [FileFailureInfo]
     /// More file chunks wait: call `flush()` again once the BLE write/notify queue is empty.
     public var morePending: Bool
+    /// RS1: contacts now on a new (restored) device; the core already stored the system notice.
+    public var restoreNotices: [RestoreNoticeInfo] = []
+    /// CB3: partners asking for media again (answer with `answerMediaRequest`).
+    public var mediaRequests: [MediaRequestInfo] = []
+    /// CB3: partners asking us to resend media they no longer have.
+    public var resendAsks: [MediaRequestInfo] = []
+    /// CB3: placeholder state changes (requested / unavailable).
+    public var mediaUpdates: [MediaUpdateInfo] = []
     public init(outgoing: [Data], received: [IncomingText], established: Bool, peerContactId: String?, flushed: Int,
                 opened: [OpenedInfo] = [], fileProgress: [FileProgressInfo] = [], files: [ReceivedFileInfo] = [],
-                fileFailures: [FileFailureInfo] = [], morePending: Bool = false) {
+                fileFailures: [FileFailureInfo] = [], morePending: Bool = false,
+                restoreNotices: [RestoreNoticeInfo] = [], mediaRequests: [MediaRequestInfo] = [],
+                resendAsks: [MediaRequestInfo] = [], mediaUpdates: [MediaUpdateInfo] = []) {
+        self.restoreNotices = restoreNotices
+        self.mediaRequests = mediaRequests
+        self.resendAsks = resendAsks
+        self.mediaUpdates = mediaUpdates
         self.outgoing = outgoing
         self.received = received
         self.established = established
@@ -326,7 +349,92 @@ public enum CoreError: Error, Equatable {
     case notLoaded
     /// The encrypted local store can't be opened (wrong/lost storage key, other identity, newer schema).
     case storageUnavailable(String)
+    /// RS2: the QR isn't the contact's current identity + device key (e.g. a pre-restore code).
+    case verificationFailed
     case other(String)
+}
+
+// MARK: encrypted chat backup + restore indicator (CB1–CB5, RS1–RS2)
+
+public struct RestoreNoticeInfo: Equatable, Sendable {
+    public var contactId: String
+    public var restoredAtMs: Int64?
+    public var msgId: String
+    public init(contactId: String, restoredAtMs: Int64?, msgId: String) {
+        self.contactId = contactId; self.restoredAtMs = restoredAtMs; self.msgId = msgId
+    }
+}
+
+public struct MediaRequestInfo: Equatable, Sendable {
+    public var contactId: String
+    public var msgId: String
+    public var hash: String
+    public var name: String
+    public var mime: String
+    public var localPath: String?
+    public init(contactId: String, msgId: String, hash: String, name: String, mime: String, localPath: String?) {
+        self.contactId = contactId; self.msgId = msgId; self.hash = hash; self.name = name; self.mime = mime; self.localPath = localPath
+    }
+}
+
+public struct MediaUpdateInfo: Equatable, Sendable {
+    public var contactId: String
+    public var msgId: String
+    public var state: FileAttachment.State
+    public init(contactId: String, msgId: String, state: FileAttachment.State) {
+        self.contactId = contactId; self.msgId = msgId; self.state = state
+    }
+}
+
+/// One encrypted, 64 KiB-padded chat-backup blob (kind 0 snapshot, 1 log, 2 media).
+public struct ChatBackupBlob: Equatable, Sendable {
+    public var name: String
+    public var kind: Int
+    public var seq: UInt64
+    public var blob: Data
+    public var deleteBelowSeq: UInt64?
+    public init(name: String, kind: Int, seq: UInt64, blob: Data, deleteBelowSeq: UInt64?) {
+        self.name = name; self.kind = kind; self.seq = seq; self.blob = blob; self.deleteBelowSeq = deleteBelowSeq
+    }
+}
+
+public struct ChatBackupSummary: Equatable, Sendable {
+    public var messages: Int
+    public var mediaPlaceholders: Int
+    public init(messages: Int, mediaPlaceholders: Int) { self.messages = messages; self.mediaPlaceholders = mediaPlaceholders }
+}
+
+/// Settings › Backup › "Also back up photos, videos and files" (CB5). Off by default; videos off.
+public struct MediaBackupPrefs: Equatable, Sendable {
+    public var enabled = false
+    public var photos = true
+    public var videos = false
+    public var voice = true
+    public var files = true
+    public var mobileData = false
+    public init(enabled: Bool = false, photos: Bool = true, videos: Bool = false, voice: Bool = true, files: Bool = true, mobileData: Bool = false) {
+        self.enabled = enabled; self.photos = photos; self.videos = videos; self.voice = voice; self.files = files; self.mobileData = mobileData
+    }
+}
+
+public struct MediaBackupItem: Equatable, Sendable {
+    public var msgId: String
+    public var hash: String
+    public var mime: String
+    public var localPath: String?
+    public var blobName: String
+    public init(msgId: String, hash: String, mime: String, localPath: String?, blobName: String) {
+        self.msgId = msgId; self.hash = hash; self.mime = mime; self.localPath = localPath; self.blobName = blobName
+    }
+}
+
+public struct DeviceKeyInfo: Equatable, Sendable {
+    public var deviceKeyHex: String
+    public var fingerprint: String
+    public var restoredAtMs: Int64?
+    public init(deviceKeyHex: String, fingerprint: String, restoredAtMs: Int64?) {
+        self.deviceKeyHex = deviceKeyHex; self.fingerprint = fingerprint; self.restoredAtMs = restoredAtMs
+    }
 }
 
 /// One BLE connection's secure session (Noise hybrid + M2 fragments).
@@ -361,6 +469,31 @@ public protocol OmcpCore: AnyObject {
     func setReceivedFilePath(_ transferId: String, path: String?) throws
     /// Import `RestoredBackup.history` into the local store.
     func restoreHistory(_ history: Data) throws
+
+    // Encrypted chat backup (CB1–CB5): Rust seals, pads (64 KiB) and plans; apps move blobs.
+    func chatBackupDue(nowMs: Int64, onWifi: Bool, allowMobile: Bool) -> Bool
+    func chatBackupNext(nowMs: Int64, forceSnapshot: Bool) throws -> ChatBackupBlob?
+    func chatBackupCommit(seq: UInt64) throws
+    func chatBackupRestore(_ blobs: [Data]) throws -> ChatBackupSummary
+    func mediaBackupSettings() -> MediaBackupPrefs
+    /// Returns media blob names to delete (when turned off).
+    func setMediaBackupSettings(_ p: MediaBackupPrefs) throws -> [String]
+    func mediaBackupDue(nowMs: Int64, onWifi: Bool) -> Bool
+    func mediaBackupTodo() -> [MediaBackupItem]
+    func sealMediaBackup(hash: String, bytes: Data) throws -> ChatBackupBlob
+    func mediaBackupCommit(hash: String, nowMs: Int64) throws
+    func mediaPlaceholders() -> [MediaBackupItem]
+    func restoreMediaFromBackup(msgId: String, blob: Data) throws -> Data
+    // Missing media re-fetch (CB3).
+    func requestMedia(_ msgId: String) throws
+    func askToResend(_ msgId: String) throws
+    func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws
+    // Restore indicator (RS1/RS2).
+    func markRestored(nowMs: Int64) throws -> DeviceKeyInfo?
+    func deviceInfo() -> DeviceKeyInfo?
+    /// Throws `CoreError.verificationFailed` on a stale or wrong code.
+    func verifyContactFromQr(_ payload: String) throws -> Contact
+
     func identity() -> Identity?
     func qrPayload() throws -> String
     func advertisement() throws -> Data
@@ -416,4 +549,28 @@ public extension OmcpCore {
     func storedMessages(_ contactId: String) -> [StoredMessageInfo] { [] }
     func setReceivedFilePath(_ transferId: String, path: String?) throws {}
     func restoreHistory(_ history: Data) throws {}
+
+    func chatBackupDue(nowMs: Int64, onWifi: Bool, allowMobile: Bool) -> Bool { false }
+    func chatBackupNext(nowMs: Int64, forceSnapshot: Bool) throws -> ChatBackupBlob? { nil }
+    func chatBackupCommit(seq: UInt64) throws {}
+    func chatBackupRestore(_ blobs: [Data]) throws -> ChatBackupSummary { ChatBackupSummary(messages: 0, mediaPlaceholders: 0) }
+    func mediaBackupSettings() -> MediaBackupPrefs { MediaBackupPrefs() }
+    func setMediaBackupSettings(_ p: MediaBackupPrefs) throws -> [String] { [] }
+    func mediaBackupDue(nowMs: Int64, onWifi: Bool) -> Bool { false }
+    func mediaBackupTodo() -> [MediaBackupItem] { [] }
+    func sealMediaBackup(hash: String, bytes: Data) throws -> ChatBackupBlob { throw CoreError.other("no media backup") }
+    func mediaBackupCommit(hash: String, nowMs: Int64) throws {}
+    func mediaPlaceholders() -> [MediaBackupItem] { [] }
+    func restoreMediaFromBackup(msgId: String, blob: Data) throws -> Data { throw CoreError.other("no media backup") }
+    func requestMedia(_ msgId: String) throws {}
+    func askToResend(_ msgId: String) throws {}
+    func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws {}
+    func markRestored(nowMs: Int64) throws -> DeviceKeyInfo? { nil }
+    func deviceInfo() -> DeviceKeyInfo? { nil }
+    func verifyContactFromQr(_ payload: String) throws -> Contact {
+        let id = try previewContact(payload).contact.id
+        try setVerified(id, true)
+        if let c = contacts().first(where: { $0.id == id }) { return c }
+        return try previewContact(payload).contact
+    }
 }

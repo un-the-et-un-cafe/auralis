@@ -71,6 +71,7 @@ struct QrScanView: View {
     @State private var preview: ContactPreview?
     @State private var payload = ""
     @State private var notOmcp = false
+    @State private var staleQr = false
     @State private var denied = false
     @State private var openChat: String?
 
@@ -88,6 +89,10 @@ struct QrScanView: View {
                     .frame(width: 240, height: 240).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel(L("viewfinder_a11y"))
                 Text(L("scan_hint")).foregroundStyle(.white).padding().background(.black.opacity(0.5), in: Capsule()).padding(.top, 24)
+            }
+            if staleQr {
+                Text(L("qr_stale")).font(.footnote).padding().background(Color.orange.opacity(0.9), in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(.white).padding()
+                    .onTapGesture { staleQr = false }
             }
             if notOmcp {
                 VStack(alignment: .leading) {
@@ -118,7 +123,13 @@ struct QrScanView: View {
     }
 
     private func add(_ action: ContactAddAction) {
-        guard let c = try? model.repo.addContact(qr: payload, action: action) else { return }
+        let c: Contact
+        do { c = try model.repo.addContact(qr: payload, action: action) } catch CoreError.verificationFailed {
+            // RS2: a pre-restore QR no longer verifies.
+            preview = nil
+            staleQr = true
+            return
+        } catch { return }
         preview = nil
         openChat = c.id
     }
