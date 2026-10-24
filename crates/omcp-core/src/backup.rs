@@ -12,8 +12,14 @@
 //!   created_at(u64 BE, ms)`.
 //! - Blob: CBOR map `{v:1, kdf, salt, nonce, ct, created_at, device_hint}`
 //!   where `kdf` is `{alg:"argon2id", m, t, p}` or `{alg:"platform-key"}`.
-//! - Plaintext (inside `ct`): CBOR `{entropy: bytes(32), contacts: [...]}` so
-//!   contacts and verification state restore together with the identity.
+//! - Plaintext (inside `ct`): CBOR `{entropy: bytes(32), contacts: [...],
+//!   history?: bytes}` so contacts and verification state restore together
+//!   with the identity. `history` (added with the encrypted local store) is the
+//!   [`crate::store::Store::export_history`] snapshot: chats, non-burn messages,
+//!   file metadata and the pending queue — never burn content (REQUIREMENTS B5).
+//!   It is optional and omitted when empty, so blobs stay `v: 1`: older apps
+//!   ignore the unknown field and restore identity + contacts as before, and
+//!   older blobs (no `history`) open unchanged.
 
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
@@ -46,6 +52,8 @@ pub struct BackupContact {
 pub struct BackupContents {
     pub entropy: Zeroizing<[u8; 32]>,
     pub contacts: Vec<BackupContact>,
+    /// Local-store history snapshot (CBOR, versioned inside); None in older blobs.
+    pub history: Option<Zeroizing<Vec<u8>>>,
 }
 
 /// How the backup key is derived.
@@ -84,6 +92,12 @@ struct Inner {
     #[serde(with = "serde_bytes_vec")]
     entropy: Vec<u8>,
     contacts: Vec<BackupContact>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "serde_opt_bytes"
+    )]
+    history: Option<Vec<u8>>,
 }
 
 /// Password policy verdict.
@@ -168,6 +182,7 @@ pub fn seal_backup(
         &Inner {
             entropy: contents.entropy.to_vec(),
             contacts: contents.contacts.clone(),
+            history: contents.history.as_ref().map(|h| h.to_vec()),
         },
         &mut inner,
     )
@@ -259,6 +274,7 @@ pub fn open_backup(blob: &[u8], secret: BackupSecret<'_>) -> Result<BackupConten
     Ok(BackupContents {
         entropy,
         contacts: i.contacts,
+        history: i.history.map(Zeroizing::new),
     })
 }
 
@@ -271,6 +287,24 @@ mod serde_bytes_vec {
         let v: ciborium::Value = Deserialize::deserialize(d)?;
         v.into_bytes()
             .map_err(|_| serde::de::Error::custom("expected bytes"))
+    }
+}
+
+mod serde_opt_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+    pub fn serialize<S: Serializer>(v: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(b) => s.serialize_some(&ciborium::Value::Bytes(b.clone())),
+            None => s.serialize_none(),
+        }
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let v: Option<ciborium::Value> = Deserialize::deserialize(d)?;
+        v.map(|v| {
+            v.into_bytes()
+                .map_err(|_| serde::de::Error::custom("expected bytes"))
+        })
+        .transpose()
     }
 }
 
@@ -301,6 +335,7 @@ mod tests {
                 name: "Alex".into(),
                 verified: true,
             }],
+            history: None,
         }
     }
 
@@ -360,6 +395,84 @@ mod tests {
         blob[n / 2] ^= 1;
         assert!(open_backup(&blob, BackupSecret::PlatformKey(&key)).is_err());
         assert!(open_backup(b"not cbor", BackupSecret::PlatformKey(&key)).is_err());
+    }
+
+    #[test]
+    fn history_roundtrip_and_backward_compatibility() {
+        let key = [4u8; 32];
+        let mut c = contents();
+        c.history = Some(Zeroizing::new(b"cbor history".to_vec()));
+        let blob = seal_backup(&c, BackupSecret::PlatformKey(&key), 1, "d").unwrap();
+        assert!(!contains(&blob, b"cbor history"));
+        assert_eq!(
+            open_backup(&blob, BackupSecret::PlatformKey(&key)).unwrap(),
+            c
+        );
+
+        // A blob written before `history` existed (old Inner shape) still opens.
+        #[derive(Serialize)]
+        struct OldInner {
+            #[serde(with = "serde_bytes_vec")]
+            entropy: Vec<u8>,
+            contacts: Vec<BackupContact>,
+        }
+        let mut inner = Vec::new();
+        ciborium::into_writer(
+            &OldInner {
+                entropy: vec![0x5a; 32],
+                contacts: contents().contacts,
+            },
+            &mut inner,
+        )
+        .unwrap();
+        let nonce = [1u8; 24];
+        let ct = XChaCha20Poly1305::new_from_slice(&key)
+            .unwrap()
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &inner,
+                    aad: &aad(7),
+                },
+            )
+            .unwrap();
+        let mut old = Vec::new();
+        ciborium::into_writer(
+            &Blob {
+                v: 1,
+                kdf: Kdf::PlatformKey,
+                salt: vec![0; 16],
+                nonce: nonce.to_vec(),
+                ct,
+                created_at: 7,
+                device_hint: "old".into(),
+            },
+            &mut old,
+        )
+        .unwrap();
+        assert_eq!(
+            open_backup(&old, BackupSecret::PlatformKey(&key)).unwrap(),
+            contents()
+        );
+
+        // And an old reader (no `history` field) ignores the new field.
+        #[derive(Deserialize)]
+        struct OldReader {
+            #[serde(with = "serde_bytes_vec")]
+            entropy: Vec<u8>,
+        }
+        let mut new_inner = Vec::new();
+        ciborium::into_writer(
+            &Inner {
+                entropy: vec![0x5a; 32],
+                contacts: vec![],
+                history: Some(b"h".to_vec()),
+            },
+            &mut new_inner,
+        )
+        .unwrap();
+        let r: OldReader = ciborium::from_reader(new_inner.as_slice()).unwrap();
+        assert_eq!(r.entropy, vec![0x5a; 32]);
     }
 
     #[test]

@@ -299,6 +299,28 @@ pub enum Opened {
     Placeholder,
 }
 
+/// Persistable copy of one live [`BurnStore`] entry (see [`crate::store`]).
+/// `key` is the per-message key; dropping the snapshot zeroizes it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BurnSnapshot {
+    pub msg_id: [u8; 16],
+    pub header: BurnHeader,
+    pub key: Zeroizing<[u8; 32]>,
+    pub sealed: Vec<u8>,
+    pub expires_at_ms: u64,
+    pub burn_at_ms: Option<u64>,
+    pub opened: bool,
+}
+
+impl std::fmt::Debug for BurnSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BurnSnapshot")
+            .field("msg_id", &self.msg_id)
+            .field("opened", &self.opened)
+            .finish_non_exhaustive()
+    }
+}
+
 struct Entry {
     header: BurnHeader,
     key: Zeroizing<[u8; 32]>,
@@ -435,6 +457,40 @@ impl BurnStore {
             e.sealed.zeroize();
             self.burned.insert(*msg_id);
         }
+    }
+
+    /// Copy of a live entry for the encrypted local store (None once burned).
+    pub fn snapshot(&self, msg_id: &[u8; 16]) -> Option<BurnSnapshot> {
+        self.live.get(msg_id).map(|e| BurnSnapshot {
+            msg_id: *msg_id,
+            header: e.header,
+            key: e.key.clone(),
+            sealed: e.sealed.clone(),
+            expires_at_ms: e.expires_at_ms,
+            burn_at_ms: e.burn_at_ms,
+            opened: e.opened,
+        })
+    }
+
+    /// Re-insert an entry loaded from the local store (after an app restart).
+    pub fn restore(&mut self, s: BurnSnapshot) {
+        self.burned.remove(&s.msg_id);
+        self.live.insert(
+            s.msg_id,
+            Entry {
+                header: s.header,
+                key: s.key,
+                sealed: s.sealed,
+                expires_at_ms: s.expires_at_ms,
+                burn_at_ms: s.burn_at_ms,
+                opened: s.opened,
+            },
+        );
+    }
+
+    /// Ids of all live entries.
+    pub fn live_ids(&self) -> Vec<[u8; 16]> {
+        self.live.keys().copied().collect()
     }
 
     pub fn is_burned(&self, msg_id: &[u8; 16]) -> bool {

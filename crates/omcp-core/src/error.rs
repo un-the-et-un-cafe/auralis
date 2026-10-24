@@ -84,6 +84,12 @@ pub enum OmcpError {
     #[error("sync: {0}")]
     Sync(&'static str),
 
+    #[error("local store error: {0}")]
+    Store(&'static str),
+
+    #[error("local store authentication failed (wrong storage key or tampered row)")]
+    StoreAuth,
+
     #[error("burn-after-read error: {0}")]
     Burn(&'static str),
 }
