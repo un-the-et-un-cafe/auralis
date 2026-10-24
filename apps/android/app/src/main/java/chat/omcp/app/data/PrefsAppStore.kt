@@ -57,6 +57,25 @@ class PrefsAppStore(context: Context) : AppStore {
         get() = prefs.getBoolean("notif_hide_lock", false)
         set(v) = prefs.edit().putBoolean("notif_hide_lock", v).apply()
 
+    override var burnChats: Map<String, Int>
+        get() = intMap("burn_chats")
+        set(v) = putIntMap("burn_chats", v)
+
+    override var burnUnreadTtl: Map<String, Int>
+        get() = intMap("burn_ttl")
+        set(v) = putIntMap("burn_ttl", v)
+
+    private fun intMap(k: String): Map<String, Int> {
+        val o = JSONObject(prefs.getString(k, "{}")!!)
+        return o.keys().asSequence().associateWith { o.getInt(it) }
+    }
+
+    private fun putIntMap(k: String, v: Map<String, Int>) {
+        val o = JSONObject()
+        v.forEach { (a, b) -> o.put(a, b) }
+        prefs.edit().putString(k, o.toString()).apply()
+    }
+
     override var gatewayEnabled: Boolean
         get() = prefs.getBoolean("gw_on", false)
         set(v) = prefs.edit().putBoolean("gw_on", v).apply()

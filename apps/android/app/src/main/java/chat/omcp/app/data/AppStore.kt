@@ -14,6 +14,10 @@ interface AppStore {
     var privateChats: Set<String>
     /** Hide notification on the lock screen (VISIBILITY_SECRET). Off by default. */
     var hideOnLockScreen: Boolean
+    /** Per-chat burn option: chatId -> -1 off, 0 on open, else timer seconds. */
+    var burnChats: Map<String, Int>
+    /** Per-chat unread TTL (seconds) for burn messages. */
+    var burnUnreadTtl: Map<String, Int>
     var gatewayEnabled: Boolean
     /** Off = Wi-Fi only (default). Metered cellular warns, never blocks. */
     var gatewayAllowMobile: Boolean
@@ -31,6 +35,8 @@ class InMemoryAppStore : AppStore {
     override var privateNotifications = false
     override var privateChats: Set<String> = emptySet()
     override var hideOnLockScreen = false
+    override var burnChats: Map<String, Int> = emptyMap()
+    override var burnUnreadTtl: Map<String, Int> = emptyMap()
     override var gatewayEnabled = false
     override var gatewayAllowMobile = false
     override var backupMethods: Set<String> = emptySet()

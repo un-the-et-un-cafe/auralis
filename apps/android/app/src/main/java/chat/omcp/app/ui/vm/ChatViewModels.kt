@@ -2,6 +2,7 @@ package chat.omcp.app.ui.vm
 
 import androidx.lifecycle.ViewModel
 import chat.omcp.app.core.PathKind
+import chat.omcp.app.burn.BurnSpec
 import chat.omcp.app.data.MeshRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,7 +39,14 @@ class ChatThreadViewModel(val repo: MeshRepository, val contactId: String) : Vie
         return if (repo.core.queuedFor(contactId) > 0 || s.nearbyPeers == 0) PathKind.Queued else s.aggregatePath
     }
 
-    fun send(text: String) = repo.send(contactId, text)
+    fun send(text: String, burnOnce: BurnSpec? = null) = repo.send(contactId, text, burnOnce)
+
+    /** Per-chat default (Chat info) so the composer can show the 🔥 state. */
+    fun chatBurn() = repo.chatBurn(contactId)
+
+    fun openBurn(id: String) = repo.openBurn(contactId, id)
+    fun closeBurn(id: String) = repo.closeBurn(contactId, id)
+    fun tickBurn() = repo.tickBurn()
 
     fun onFilePicked(name: String, size: Long, mime: String) {
         _file.value = FileConfirm(name, size, mime, repo.core.maxFileBytes(), path())

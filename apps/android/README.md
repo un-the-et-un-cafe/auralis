@@ -91,3 +91,18 @@ App icon is a **placeholder** (redesign pending).
 - Tests: `NotificationsTest` (N1–N3, policy level). N2 history/lock screen is covered by the policy plus the public version; it hasn't been checked on a device.
 - Not done yet: real FCM integration and gateway token registration; avatars in notifications; quiet hours, per-chat mute and per-community levels; call, mention and livestream notifications.
 - Deferred to iOS (M6): APNs content-free push, the Notification Service Extension that decrypts on-device, `hiddenPreviewsBodyPlaceholder`, and iOS N1–N3.
+
+## Burn after read (v0.1.3)
+- **Per-message**: long-press Send to toggle 🔥 for the next message. **Per-chat**: Security centre › Burn after read, with Off / On open / 10 s / 1 min / 1 h, plus an unread TTL of 1 h / 24 h / 7 d.
+- **Text**: shows blurred as "Tap to read" and opens in a full-screen viewer with a countdown ring. When the timer ends it's deleted. The sender deletes its copy once the `OPENED` receipt arrives and its timer ends.
+- **View-once image**: opens once. A second tap shows "🔥 Photo opened". Save, forward, quote and share are disabled (`ChatMessage.canShare`).
+- **FLAG_SECURE**: the viewer is a `Dialog` with `SecureFlagPolicy.SecureOn` (B3).
+- **Storage**: burnable content lives only in the in-memory `BurnVault`, with a separate AES-GCM key per item. Shredding zeroes the key and ciphertext. `ChatMessage.text` stays empty.
+- **Exclusions (B5)**: notifications always use the generic text. Backups exclude burn content: `allowBackup=false`, and the cloud backup holds only the phrase and contacts. There's no search index yet, so nothing is indexed. The honest-copy line is shown in the viewer and in chat info.
+- **Tests**: `BurnAfterReadTest` (B1, B2, B4, B5 at the logic level) plus Rust `omcp-core::burn` tests (header, single-use media key, OPENED, crypto-shredding, relay expiry).
+- **Stubs**:
+  - The burn header, OPENED receipt and media aren't carried over the FFI or mesh yet: `core.queueText` sends plain text, and `BurnControl` is a no-op.
+  - Media transfer itself is still queued-only, as before.
+  - View-once video playback is a placeholder (no Media3).
+  - The 256-member group cap isn't enforced in the UI, because there are no groups in the Android beta.
+- **Deferred to iOS (M6)**: screenshot and screen-recording detection, hiding content while recording, the "📸 Took a screenshot" notice to the sender (iOS B3), and iOS B1–B5.

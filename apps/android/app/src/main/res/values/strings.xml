@@ -132,4 +132,24 @@
     <string name="notif_private_chat_desc">Hide sender and content for this chat only.</string>
     <string name="notif_hide_lock">Hide on lock screen</string>
     <string name="notif_hide_lock_desc">Don’t show message notifications on the lock screen.</string>
+    <string name="burn_tap_to_read">Tap to read</string>
+    <string name="burn_reading">Opened · burning</string>
+    <string name="burn_sent">Burn after read</string>
+    <string name="burn_view_once_sent">View-once photo</string>
+    <string name="burn_view_once_tap">View once · tap to open</string>
+    <string name="burn_photo_opened">Photo opened</string>
+    <string name="burn_video_opened">Video opened</string>
+    <string name="burn_close">Close</string>
+    <string name="burn_media_unavailable">Preview unavailable</string>
+    <string name="burn_honest_copy">Burn after read can’t stop someone photographing the screen with another device.</string>
+    <string name="burn_chat_title">Burn after read</string>
+    <string name="burn_off">Off</string>
+    <string name="burn_on_open">On open</string>
+    <string name="burn_10s">10 s</string>
+    <string name="burn_1m">1 min</string>
+    <string name="burn_1h">1 h</string>
+    <string name="burn_unread_ttl">Delete unopened after</string>
+    <string name="burn_ttl_1h">1 h</string>
+    <string name="burn_ttl_24h">24 h</string>
+    <string name="burn_ttl_7d">7 days</string>
 </resources>

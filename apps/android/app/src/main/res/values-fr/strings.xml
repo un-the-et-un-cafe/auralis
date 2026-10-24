@@ -132,4 +132,24 @@
     <string name="notif_private_chat_desc">Masquer l’expéditeur et le contenu pour cette discussion uniquement.</string>
     <string name="notif_hide_lock">Masquer sur l’écran verrouillé</string>
     <string name="notif_hide_lock_desc">Ne pas afficher les notifications de messages sur l’écran verrouillé.</string>
+    <string name="burn_tap_to_read">Touchez pour lire</string>
+    <string name="burn_reading">Ouvert · en cours de suppression</string>
+    <string name="burn_sent">Effacer après lecture</string>
+    <string name="burn_view_once_sent">Photo à vue unique</string>
+    <string name="burn_view_once_tap">Vue unique · touchez pour ouvrir</string>
+    <string name="burn_photo_opened">Photo ouverte</string>
+    <string name="burn_video_opened">Vidéo ouverte</string>
+    <string name="burn_close">Fermer</string>
+    <string name="burn_media_unavailable">Aperçu indisponible</string>
+    <string name="burn_honest_copy">L’effacement après lecture ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil.</string>
+    <string name="burn_chat_title">Effacer après lecture</string>
+    <string name="burn_off">Désactivé</string>
+    <string name="burn_on_open">À l’ouverture</string>
+    <string name="burn_10s">10 s</string>
+    <string name="burn_1m">1 min</string>
+    <string name="burn_1h">1 h</string>
+    <string name="burn_unread_ttl">Supprimer si non ouvert après</string>
+    <string name="burn_ttl_1h">1 h</string>
+    <string name="burn_ttl_24h">24 h</string>
+    <string name="burn_ttl_7d">7 jours</string>
 </resources>

@@ -35,8 +35,10 @@ object NotificationPolicy {
         text: String,
         appName: String,
         genericBody: String,
+        burn: Boolean = false,
     ): NotificationContent {
-        val private = isPrivate(store, chatId)
+        // Burnable content never appears in notification previews (REQUIREMENTS v0.1.3, B5).
+        val private = burn || isPrivate(store, chatId)
         val vis = if (store.hideOnLockScreen) LockVisibility.SECRET else LockVisibility.PRIVATE
         return if (private) {
             NotificationContent(appName, genericBody, false, true, vis, appName, genericBody)

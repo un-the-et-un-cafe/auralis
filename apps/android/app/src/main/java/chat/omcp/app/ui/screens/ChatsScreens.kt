@@ -42,6 +42,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.burn.BurnSpec
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import chat.omcp.app.core.PathKind
 import chat.omcp.app.data.BackupGate
 import chat.omcp.app.data.ChatMessage
@@ -101,7 +107,7 @@ fun ChatsListScreen(
         ChatRowModel(
             id = c.id,
             title = c.displayName,
-            preview = last?.let { it.file?.name ?: it.text } ?: "",
+            preview = last?.let { if (it.burn != null) "🔥" else it.file?.name ?: it.text } ?: "",
             time = last?.let { time(it.timeMs) } ?: "",
             initials = c.displayName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString(""),
             verified = c.verified,
@@ -159,7 +165,7 @@ fun ChatsListScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatThreadScreen(
     vm: ChatThreadViewModel,
@@ -172,6 +178,18 @@ fun ChatThreadScreen(
     val contact = vm.contact()
     val c = LocalOmcpColors.current
     var draft by remember { mutableStateOf("") }
+    // Per-message 🔥 (long-press Send). Falls back to the chat's Burn-after-read default.
+    var burnNext by remember { mutableStateOf(false) }
+    var opened by remember { mutableStateOf<OpenedBurn?>(null) }
+    LaunchedEffect(vm.contactId) {
+        while (true) { vm.tickBurn(); delay(250) }
+    }
+    opened?.let { o ->
+        val live = msgs.firstOrNull { it.id == o.msg.id } ?: o.msg
+        BurnViewer(OpenedBurn(live, o.body), now = System::currentTimeMillis) {
+            vm.closeBurn(o.msg.id); o.body.fill(0); opened = null
+        }
+    }
     val path = remember(status, msgs) { vm.path() }
     val ctx = LocalContext.current
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -268,8 +286,22 @@ fun ChatThreadScreen(
                     ),
                     shape = RoundedCornerShape(10.dp),
                 )
-                IconButton(onClick = { vm.send(draft); draft = "" }, enabled = draft.isNotBlank()) {
-                    Icon(Icons.Default.Send, contentDescription = "Send")
+                val burnOn = burnNext || vm.chatBurn() != null
+                Box(
+                    Modifier
+                        .size(48.dp)
+                        .combinedClickable(
+                                                        onClick = {
+                                if (draft.isNotBlank()) {
+                                    vm.send(draft, if (burnNext) vm.chatBurn() ?: BurnSpec.onOpen() else null)
+                                    draft = ""; burnNext = false
+                                }
+                            },
+                            onLongClick = { burnNext = !burnNext },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (burnOn) Text("🔥") else Icon(Icons.Default.Send, contentDescription = "Send")
                 }
             }
         },
@@ -293,7 +325,9 @@ fun ChatThreadScreen(
             ) {
                 items(msgs, key = { it.id }) { m ->
                     val f = m.file
-                    if (f != null) {
+                    if (m.burn != null) {
+                        BurnBubble(m) { vm.openBurn(m.id)?.let { body -> opened = OpenedBurn(vm.messages.value[vm.contactId]!!.first { it.id == m.id }, body) } }
+                    } else if (f != null) {
                         FileBubble(m.mine, f)
                     } else {
                         val meta = time(m.timeMs) + " · " + when (m.status) {

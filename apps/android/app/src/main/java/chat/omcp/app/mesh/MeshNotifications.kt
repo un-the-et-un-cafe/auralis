@@ -34,6 +34,7 @@ object MeshNotifications {
         val c = NotificationPolicy.content(
             repo.appStore, msg.contactId, sender, msg.text,
             ctx.getString(R.string.app_name), ctx.getString(R.string.notif_new_message),
+            burn = repo.messages.value[msg.contactId]?.lastOrNull { it.id == msg.envelopeId }?.burn != null,
         )
         val public = NotificationCompat.Builder(ctx, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_mesh)

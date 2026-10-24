@@ -51,6 +51,9 @@ fun SecurityCentreScreen(
     onBack: () -> Unit,
     privateNotifications: Boolean = false,
     onSetPrivateNotifications: (Boolean) -> Unit = {},
+    burnOption: Int = -1,
+    burnUnreadTtl: Int = chat.omcp.app.burn.BurnSpec.UNREAD_7D,
+    onSetBurn: (option: Int, unreadTtl: Int) -> Unit = { _, _ -> },
 ) {
     val c = LocalOmcpColors.current
     Scaffold(
@@ -151,6 +154,41 @@ fun SecurityCentreScreen(
                     }
                     Switch(checked = priv, enabled = contact != null, onCheckedChange = { priv = it; onSetPrivateNotifications(it) })
                 }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                var opt by remember { mutableStateOf(burnOption) }
+                var ttl by remember { mutableStateOf(burnUnreadTtl) }
+                Text(stringResource(R.string.burn_chat_title), style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(-1 to R.string.burn_off, 0 to R.string.burn_on_open, 10 to R.string.burn_10s, 60 to R.string.burn_1m, 3600 to R.string.burn_1h)
+                        .forEach { (v, label) ->
+                            androidx.compose.material3.FilterChip(
+                                selected = opt == v, enabled = contact != null,
+                                onClick = { opt = v; onSetBurn(v, ttl) },
+                                label = { Text(stringResource(label)) },
+                            )
+                        }
+                }
+                Text(stringResource(R.string.burn_unread_ttl), color = c.ink2, style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(3600 to R.string.burn_ttl_1h, 86400 to R.string.burn_ttl_24h, 604800 to R.string.burn_ttl_7d)
+                        .forEach { (v, label) ->
+                            androidx.compose.material3.FilterChip(
+                                selected = ttl == v, enabled = contact != null,
+                                onClick = { ttl = v; onSetBurn(opt, v) },
+                                label = { Text(stringResource(label)) },
+                            )
+                        }
+                }
+                Text(stringResource(R.string.burn_honest_copy), color = c.ink3, style = MaterialTheme.typography.bodySmall)
             }
 
             Button(
