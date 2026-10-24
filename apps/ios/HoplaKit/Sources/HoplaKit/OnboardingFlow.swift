@@ -35,6 +35,11 @@ public struct OnboardingState: Equatable {
     public var restoreLockMs: Int64 = 0
     public var restorePhrase = ""
 
+    public init(iCloudAvailable: Bool = false, driveAvailable: Bool = false) {
+        self.iCloudAvailable = iCloudAvailable
+        self.driveAvailable = driveAvailable
+    }
+
     public var anyBackupDone: Bool { iCloudDone || driveDone || writtenDone }
     public var quizOk: Bool { quiz.count == 3 && quiz.allSatisfy(\.ok) }
 }
