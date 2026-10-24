@@ -1,96 +1,149 @@
-# Open Mesh Chat Protocol (OMCP)
+<div align="center">
 
-**OMCP is an open protocol** for secure chat and data sharing on a Bluetooth Low Energy mesh, with optional Internet bridging. Compatible clients can interoperate without depending on a single vendor app or cloud.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="design/brand/hopla-v2/readme-header-dark.svg">
+  <img alt="Hopla" src="design/brand/hopla-v2/readme-header-light.svg" width="640">
+</picture>
 
-This repository holds the **protocol specification**, a **shared reference core**, and a **reference mobile application**. The community is encouraged to build their own clients, gateways, and tools against the same wire format.
+# Open Mesh Chat Protocol
+
+**An open protocol for private messaging that keeps working when the Internet doesn't.**
+
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](./LICENSE)
+[![Spec: v0.1 draft](https://img.shields.io/badge/spec-v0.1%20draft-orange.svg)](./PROTOCOL.md)
+[![CI](https://github.com/un-the-et-un-cafe/open-mesh-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/un-the-et-un-cafe/open-mesh-chat/actions)
+
+[Specification](./PROTOCOL.md) · [Reference app](#reference-app-hopla) · [Build your own client](#build-your-own-client) · [Roadmap](#roadmap) · [Contributing](#contributing)
+
+</div>
+
+---
+
+## About
+
+**OMCP (Open Mesh Chat Protocol)** lets phones talk to each other directly over Bluetooth. Every device relays messages for the others, so a crowd of phones becomes its own network. When any one device has Internet access, it can carry encrypted traffic out for everyone nearby. It never sees what's inside.
+
+OMCP is a **protocol**, not a single app. This repository contains:
+
+- **the open specification**, which is the source of truth for anyone building a compatible client
+- **`omcp-core`**, a reference library in Rust
+- **Hopla**, the reference app for Android and iOS, which shows the protocol in action
+
+Anyone can build their own app, gateway, bot or desktop client on OMCP. Any app that follows the spec can talk to every other OMCP app.
+
+### Why it matters
+
+- **Outages, protests, disasters, festivals, remote areas:** messages still reach people nearby with no cell network or Wi-Fi.
+- **No central server holds your conversations:** there is no company in the middle that could read, sell or lose them.
+- **Security that holds up long term:** the encryption is designed to stay safe against future quantum computers, not just today's attacks.
+
+---
+
+## Highlights
 
 | | |
 | --- | --- |
-| **Status** | Draft v0.1 — not production-ready |
-| **Licence** | [MIT](./LICENSE) |
-| **Spec** | [PROTOCOL.md](./PROTOCOL.md) |
-| **Reference apps** | Android 12+ / iOS 17+ (see [apps/REQUIREMENTS.md](./apps/REQUIREMENTS.md)) |
+| 📡 **Mesh first** | Peer-to-peer over Bluetooth Low Energy, with no Internet needed |
+| 🌉 **Every peer can be a gateway** | Online devices relay encrypted envelopes for offline neighbours |
+| 🔐 **End-to-end encrypted by default** | Noise handshake, MLS for groups, sealed sender addressing |
+| 🛡️ **Post-quantum hybrid** | X25519 + ML-KEM-768 key exchange (suite `OMCP-2026-A`) |
+| 📦 **Store and forward** | Messages wait on nearby peers until the recipient shows up |
+| 🧩 **Open and extensible** | Versioned wire format, crypto agility and a public extension process |
+| 👥 **Communities and live** *(v0.2)* | Channels, roles, and end-to-end encrypted livestreams over Wi-Fi or Internet |
 
 ---
 
-## What OMCP is
+## How it works
 
-- A **mesh-first** messaging protocol: peers exchange end-to-end encrypted messages over BLE without requiring the public Internet.
-- An **optional gateway role**: any peer with Internet access may forward *opaque* encrypted envelopes for neighbours — never plaintext.
-- **Outage-resilient**: local chat and store-and-forward continue when the WAN is down.
-- **Cryptographically modern**: Noise hybrid (X25519 + ML-KEM-768), MLS for groups, HPKE sealed addressing (see suite `OMCP-2026-A` / §21).
-
-## What OMCP is not
-
-- Not a closed, app-store-only product.
-- Not a requirement to use this repository’s UI.
-- Not a cryptocurrency, token, or investment scheme.
-- Not a claim of “unbreakable” security — properties are stated in the threat model ([PROTOCOL.md](./PROTOCOL.md) §4).
-
----
-
-## Protocol vs software in this repo
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  PROTOCOL.md          Normative wire format & security  │  ← implementers
-├─────────────────────────────────────────────────────────┤
-│  crates/omcp-core     Reference Rust library            │  ← optional reuse
-├─────────────────────────────────────────────────────────┤
-│  apps/ (Android/iOS)  Reference clients                 │  ← one of many UIs
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    A[📱 Peer A<br/>offline] <-- BLE mesh --> B[📱 Peer B<br/>gateway]
+    B <-- BLE mesh --> C[📱 Peer C<br/>offline]
+    B -. encrypted envelopes .-> I((Internet))
+    I -.-> R[🌍 Remote peers]
 ```
 
-1. **Protocol** — [PROTOCOL.md](./PROTOCOL.md) is the source of truth. Independent implementations that pass the stated acceptance criteria are first-class OMCP peers.
-2. **Reference core** — `omcp-core` is a convenience implementation of framing, handshake, crypto helpers, an in-process BLE loopback chat path (M2), experimental MLS groups + file chunks (M3), and an experimental gateway role + in-memory rendezvous reference (M4). You may use it, fork it, or replace it. It does **not** claim production BLE hardware readiness or production MLS/PQ maturity.
-3. **Reference app** — The Android and iOS clients in this project demonstrate the protocol (mesh chat, gateway toggle, communities/livestream *targets* per §20). They are **examples**, not the exclusive interface to the network.
-
-Third parties may ship their own apps, bots, gateways, and desktop clients under any licence compatible with the MIT protocol text and their own code, so long as they do not misrepresent unofficial software as the sole “official” OMCP client.
-
----
-
-## Quick links
-
-| Document | Purpose |
-| --- | --- |
-| [PROTOCOL.md](./PROTOCOL.md) | Full specification (identity, crypto, BLE, gateways, wire pins §21) |
-| [apps/REQUIREMENTS.md](./apps/REQUIREMENTS.md) | Reference app MVP checklist |
-| [extensions/mls-pq.md](./extensions/mls-pq.md) | MLS post-quantum extension (provisional M3 wire + mix) |
-| [design/](./design/) | Reference UI design pack (when present) |
+1. Phones find each other over Bluetooth and set up encrypted sessions.
+2. Messages hop from phone to phone until they reach the recipient.
+3. If a phone along the way has Internet, it forwards the **still-encrypted** envelope to recipients farther away.
+4. When the Internet drops, the local mesh keeps working.
 
 ---
 
-## Roadmap (milestones)
+## Reference app: Hopla
 
-| Milestone | Focus |
-| --- | --- |
-| **M0** | Spec + CI skeleton |
-| **M1** | `omcp-core` Noise hybrid + envelope framing ([PR #1](https://github.com/un-the-et-un-cafe/open-mesh-chat/pull/1)) |
-| **M2** | BLE transport loopback + two-device text chat (in-process GATT pipe in `omcp-core`; not production phone BLE) |
-| **M3** | MLS groups + file chunks (OpenMLS + chunk crypto in `omcp-core`; **not production-ready**, PQ extension provisional — see [extensions/mls-pq.md](./extensions/mls-pq.md)) |
-| **M4** | Gateway role + optional rendezvous (`omcp-core::gateway` / `rendezvous`: opaque forwarding, 500 MB/day cap, Wi-Fi-only default, sealed-sender blinded labels, in-memory `/v1/enqueue`+`/v1/fetch` reference with Ed25519 short-lived tokens; **experimental, not production-ready** — no real TLS/QUIC transport) |
-| **M5** | Android beta “Hopla” (`apps/android` + `crates/omcp-ffi` UniFFI bridge): onboarding with encrypted recovery backup, QR contact add + safety numbers, real BLE GATT transport, 1:1 text end-to-end. **Experimental, not production-ready, untested on real hardware**; Google Drive backup is a stub (no OAuth client), files/groups not wired over BLE yet |
-| **M6** | iOS reference beta |
-| **M7** | External crypto review |
+The Android (12+) and iOS (17+) apps in this project are the **reference implementation** of OMCP. They show what the protocol can do, and they're meant to be a polished app people want to use.
 
-Communities and livestreams are specified as a **v0.2 product layer** (§20); the mesh MVP remains 1:1 and small groups.
+> Hopla is **one** OMCP client, not the only one. Other apps that follow the spec are full members of the network.
+
+Product requirements: [`apps/REQUIREMENTS.md`](./apps/REQUIREMENTS.md). UI design pack: [`design/`](./design/).
 
 ---
 
-## Contributing
+## Build your own client
 
-- Protocol changes that affect the wire format need a clear PR against `PROTOCOL.md`, test vectors where applicable, and a version note in §19 / §21.
-- Client and UI work should track the reference design pack and `apps/REQUIREMENTS.md`, but alternate designs are welcome in other repositories.
-- Please open issues for interop bugs and proposed extensions (`extensions/`).
+You don't need our code or our app to join the network. To build a compatible client:
+
+1. Implement the wire format and crypto suite in [`PROTOCOL.md`](./PROTOCOL.md). The normative pins are in §21.
+2. Use `omcp-core` (Rust) if you like, or write your own implementation in any language.
+3. Pass the acceptance scenarios in §13.6, and the test vectors as they're published.
+4. Advertise your supported features in the `Hello` handshake. Peers negotiate the rest.
+
+Ideas for the community: desktop clients, dedicated gateway nodes (Raspberry Pi), emergency-response tools, bots, and bridges to other open protocols.
+
+---
+
+## Repository layout
+
+```
+.
+├── PROTOCOL.md          # The OMCP specification (normative)
+├── extensions/          # Protocol extensions (e.g. MLS post-quantum)
+├── crates/omcp-core/    # Reference Rust library
+├── apps/                # Reference Android & iOS apps
+├── design/              # Reference UI and brand assets
+└── .github/workflows/   # CI
+```
+
+---
+
+## Roadmap
+
+| Milestone | Scope | Status |
+| --- | --- | --- |
+| **M0** | Specification and CI skeleton | ✅ Done |
+| **M1** | `omcp-core`: Noise hybrid handshake and envelope framing | 🚧 [In review](https://github.com/un-the-et-un-cafe/open-mesh-chat/pull/1) |
+| **M2** | BLE transport and two-device text chat | ⏳ Planned |
+| **M3** | MLS groups and chunked file transfer | ⏳ Planned |
+| **M4** | Gateway role and optional rendezvous | ⏳ Planned |
+| **M5** | Android reference beta “Hopla” (`apps/android` + `crates/omcp-ffi`; experimental, untested on real hardware) | 🚧 In progress |
+| **M6** | iOS reference beta | ⏳ Planned |
+| **M7** | Independent cryptography review | ⏳ Planned |
+
+**v0.2:** communities, channels, livestreams, stories, polls. **v0.3:** usernames, bots, and an optional Tor transport.
 
 ---
 
 ## Security
 
-Report vulnerabilities privately to the maintainers before public disclosure. Do not file exploit details in public issues until a fix or coordinated disclosure plan exists.
+OMCP is a **draft and has not been audited**. Don't rely on it for life-critical communication yet.
+
+Please report vulnerabilities privately through [GitHub Security Advisories](https://github.com/un-the-et-un-cafe/open-mesh-chat/security/advisories/new) rather than public issues. The threat model is in [`PROTOCOL.md` §4](./PROTOCOL.md).
+
+---
+
+## Contributing
+
+Contributions are welcome:
+
+- **Protocol changes:** open a PR against `PROTOCOL.md` with your reasoning, the impact on the wire format, and test vectors.
+- **Extensions:** add a proposal under `extensions/` (see §16).
+- **Code and design:** open an issue first for anything large.
+
+Please be respectful. This project exists to protect people who may be in vulnerable situations.
 
 ---
 
 ## Licence
 
-[MIT](./LICENSE) © OMCP contributors.
+[MIT](./LICENSE) © OMCP contributors
