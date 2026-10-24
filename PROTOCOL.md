@@ -289,8 +289,8 @@ EnvelopeV1 {
 5. **Auth:** No unsigned identity claims. Capability statements are signed.
 6. **Replay:** `envelope_id` + timestamp window (±10 minutes skewed tolerance with logical clocks) + AEAD.
 7. **Padding:** Optional traffic padding profiles (`off`, `low`, `medium`) to mitigate size side channels on gateways.
-8. **Screenshots / notifications:** OS notification content MUST show generic “New OMCP message” unless user opts into revealing previews (off by default).
-9. **Backups:** Encrypted backups only; recovery key is 24-word BIP-39-like phrase or platform secure recovery; cloud backup is optional and E2EE.
+8. **Screenshots / notifications:** Clients SHOULD show sender and preview by default and MUST offer a "Private notifications" mode that shows only a generic "New message" (no sender, no content). Payloads are decrypted on-device only; gateways and push relays never see plaintext.
+9. **Backups:** Encrypted backups only; recovery key is 24-word BIP-39-like phrase or platform secure recovery; cloud backup is optional and E2EE (client-side encrypted before upload; see apps/REQUIREMENTS.md "Onboarding & recovery backup").
 
 ---
 
@@ -586,3 +586,45 @@ Within each Noise handshake message that carries ML-KEM material:
 Rationale: MixHash MUST bind `ek`/`ct` before AEAD seal so an adversary cannot strip or reorder PQ material without failing authentication. Implementations MUST NOT place `ek`/`ct` after the sealed payload.
 
 This matches commit `9e90d33` on PR #1.
+
+## 22. Scalable sync and data efficiency (v0.2, normative unless marked)
+
+**Goal:** a device's sync traffic grows with **its own conversations**, not with the size of the network. Targets: ≤ 5 MB/day of background mesh traffic for a typical user (50 contacts, 5 groups) in a 10 000-node mesh; ≤ 2 % of bandwidth spent on sync metadata; and no device stores or forwards more than its configured budget.
+
+### 22.1 Stop flooding: interest-based routing
+- **Mailbox tags.** Every 1:1 chat and MLS group derives a rotating 8-byte tag per epoch (6 h): `tag = BLAKE2b-64(exporter_secret, "OMCP-tag" || epoch)`. Envelopes carry the tag (this replaces the sealed address for routing purposes), and only members can compute it, so outsiders can't link tags across epochs.
+- **Interest digests.** Each node advertises a compact **cuckoo filter** of the tags it wants (its own plus, optionally, *carry* tags for nearby friends) to its 1-hop neighbours. The filter is padded with decoy entries to hide the real count.
+- **Forwarding rule.** A node forwards an envelope only to neighbours whose digest matches the tag, or, if nothing matches, to at most **k = 2** neighbours chosen by spray-and-wait (binary spray with L = 8 copies total). This replaces epidemic flooding from §8.3 once the node sees more than 32 peers. Small meshes (≤ 32) may keep flooding.
+- **Adaptive TTL**: `ttl_hops = clamp(ceil(log2(estimated_mesh_size)) + 2, 3, 12)`, where the mesh size is estimated with HyperLogLog over the peer IDs seen.
+
+### 22.2 Sync without resending: set reconciliation
+- When two peers meet, they reconcile **only the tags both care about** using **range-based set reconciliation** (Negentropy-style) over `(timestamp, envelope_id)`. The cost is O(d · log n), where d is the number of envelopes that differ. If they already agree, the exchange is about 100 bytes.
+- **Fingerprints**: 16-byte XOR+SHA-256 hashes of each range. This uses up to 3 round trips on BLE and 1 over the Internet.
+- **Watermarks**: each chat keeps a per-member, signed `high-water mark` (Lamport clock). A returning device asks "everything after X" instead of re-listing history.
+
+### 22.3 Carry less
+- **Media is lazy and content-addressed.** Messages carry only a 32-byte hash, a key and a blurhash (≤ 40 B). Blobs are chunked (64 KiB, BLAKE3 tree) and fetched on demand from the nearest holder, with chunks resumed and de-duplicated. Relays never fetch media they weren't asked for.
+- **Compression** (MAY): the inner payload is compressed with zstd using the static, public OMCP dictionary *before* encryption. To limit length leaks (CRIME/BREACH-style), the following are **MUST** requirements:
+  - **Padding is mandatory** for every compressed or uncompressed ciphertext, using buckets of 256 B / 1 KiB / 4 KiB / 16 KiB, and above that the next multiple of 16 KiB.
+  - **Never compress secrets together with attacker-influenced content** in one compression context. Key material, tokens, recovery data and control messages are never compressed. Quoted or forwarded third-party text is compressed in a separate frame from the user's own text, or not at all.
+  - Dictionaries are static and public; adaptive or shared dictionaries trained on user data MUST NOT be used.
+  - Senders MUST disable compression for burn-after-read and Nearby messages.
+- **Delta updates**: edits, reactions and read receipts are small ops (≤ 64 B) referencing the message ID. Receipts and typing indicators are **batched** (one per 5 s per chat) and never relayed more than 2 hops.
+- **Group fan-out**: one MLS ciphertext per message for the whole group, never one per member. In communities > 256 members, posts propagate along a **tree** (Plumtree: eager push to 3 peers, lazy hashes to the rest).
+
+### 22.4 Budgets and fairness (client, SHOULD)
+- A per-device **relay budget**: default 50 MB of storage and 20 MB a day of forwarding on battery and cellular, and 500 MB and unlimited on Wi-Fi with charging. When it's full, envelopes are evicted by `(priority flag, expires_at, hop count)`.
+- **Store-and-forward expiry**: default 72 h, with a maximum of 7 days. Burn envelopes use their own `expires_at`.
+- **Metered awareness**: gateways sync over the Internet only on unmetered links unless the user allows mobile data. On cellular, only pending outbound messages and the envelopes this device is a member of are synced.
+- **Rate limiting**: each neighbour gets a token bucket (default 64 envelopes/s) so a single noisy peer can't flood the mesh.
+
+### 22.5 Internet offload
+- When any gateway is reachable, peers prefer the **gateway rendezvous mailbox** (indexed by tag) over multi-hop BLE relaying: one upload and one download, instead of N hops. BLE gossip stays the fallback when the Internet is down.
+
+### 22.6 Acceptance tests
+- SY1: a simulation (ns-3 or similar) with 10 000 nodes and 1 % of nodes active: the median per-node sync traffic is ≤ 5 MB a day, and it grows by less than 1.5× from 1 000 to 10 000 nodes.
+- SY2: two peers that are already in sync exchange ≤ 256 bytes on reconnect.
+- SY3: a peer offline for 7 days catches up on only its own chats; traffic is ≤ 1.2× the size of the missed payloads.
+- SY4: delivery rate ≥ 98 % within 10 min for a 6-hop path at 30 % churn (no worse than flooding).
+- SY5: no relay ever exceeds its configured budget; eviction order follows §22.4.
+- SY6: tags from different epochs can't be linked by a non-member (a statistical test over 10⁶ tags).
