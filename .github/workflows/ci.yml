@@ -31,24 +31,120 @@ jobs:
       - name: Cargo test
         run: cargo test --workspace
 
-  # M5 — enable when JDK + SDK image is ready (Pipely). Still skipped.
+  # M5 Android beta: Rust .so via cargo-ndk + UniFFI bindings, then Gradle.
   android:
     name: android (stub)
     runs-on: ubuntu-latest
-    if: false
+    env:
+      NDK_VERSION: 27.2.12479018
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "Android CI reserved for M5 — apps/android shell present; enable assembleDebug when SDK available"
+
+      - name: Install stable Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin/cargo-ndk
+            target
+          key: android-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+          restore-keys: android-cargo-${{ runner.os }}-
+
+      - name: Install cargo-ndk
+        run: command -v cargo-ndk || cargo install cargo-ndk --locked
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          # The legacy 'tools' package (the action's default) no longer exists
+          # in cmdline-tools 16+, which made sdkmanager exit 1.
+          packages: platform-tools
+
+      - name: Install NDK + platform
+        run: sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build omcp-ffi (.so + Kotlin bindings)
+        working-directory: apps/android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+        run: ./scripts/build-rust.sh
+
+      - name: Gradle assembleDebug + unit tests
+        working-directory: apps/android
+        run: ./gradlew assembleDebug testDebugUnitTest --console=plain
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hopla-debug-apk
+          path: apps/android/app/build/outputs/apk/debug/*.apk
+          retention-days: 7
 
   # M6 — needs macOS runner; still skipped.
   ios:
-    name: ios (stub)
+    name: ios
     runs-on: macos-latest
-    if: false
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/ios
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "iOS CI reserved for M6 — apps/ios shell present; enable xcodebuild when macOS pool ready"
+
+      - name: Install stable Rust + iOS targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ios-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
+
+      - name: HoplaKit (SwiftPM) tests
+        working-directory: apps/ios/HoplaKit
+        run: swift test
+
+      - name: Strings EN/FR parity
+        run: python3 scripts/strings.py --check
+
+      - name: Build omcp-ffi xcframework + Swift bindings
+        run: ./scripts/build-rust.sh
+
+      - name: XcodeGen
+        run: |
+          command -v xcodegen || brew install xcodegen
+          xcodegen generate
+
+      - name: Pick simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: xcodebuild build + test (simulator)
+        run: |
+          xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            CODE_SIGNING_ALLOWED=NO build test

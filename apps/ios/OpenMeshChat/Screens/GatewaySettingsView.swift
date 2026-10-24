@@ -1,3 +1,5 @@
+import HoplaKit
+import Network
 import SwiftUI
 
 /// Product / design: 500 MB/day, Wi‑Fi-only default, warn (not hard-block) on metered cellular.
@@ -5,15 +7,26 @@ import SwiftUI
 /// iOS BLE pause callout lives here (You → Gateway), next to the Android companion recommendation —
 /// not on the Chats/thread path banner.
 struct GatewaySettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @Environment(\.omcpColors) private var c
-    @State private var gatewayOn = false
-    @State private var allowMobile = false
+    @StateObject private var net = NetworkWatcher()
+    private var gatewayOn: Binding<Bool> {
+        Binding(get: { model.store.gatewayEnabled }, set: { model.store.gatewayEnabled = $0; model.touch() })
+    }
+    private var allowMobile: Binding<Bool> {
+        Binding(get: { model.store.gatewayAllowMobile }, set: { model.store.gatewayAllowMobile = $0; model.touch() })
+    }
     @State private var storeForward = false
     @State private var showDisclosure = false
     @State private var showMeteredWarn = false
 
-    private let dailyCapMB = 500
-    private let usedMB = 0 // real metering not wired yet; Designy lock-in: 0 used
+    /// Cap and Wi-Fi/metered decision come from the Rust core policy.
+    private var gw: GatewayUIState {
+        _ = model.revision
+        return GatewayPolicy.state(store: model.store, core: model.core, network: net.type, metered: net.metered)
+    }
+    private var dailyCapMB: Int { Int(gw.dailyCapBytes / 1_000_000) }
+    private var usedMB: Int { Int(gw.usedBytes / 1_000_000) } // Designy lock-in: 0 until real metering
 
     var body: some View {
         ScrollView {
@@ -32,7 +45,7 @@ struct GatewaySettingsView: View {
                     toggleRow(
                         title: String(localized: "gateway_act_as"),
                         desc: String(localized: "gateway_act_as_desc"),
-                        isOn: $gatewayOn
+                        isOn: gatewayOn
                     ) { newValue in
                         if newValue { showDisclosure = true; return false }
                         return true
@@ -40,7 +53,7 @@ struct GatewaySettingsView: View {
                     toggleRow(
                         title: String(localized: "gateway_mobile_data"),
                         desc: String(localized: "gateway_mobile_data_desc"),
-                        isOn: $allowMobile
+                        isOn: allowMobile
                     ) { newValue in
                         if newValue { showMeteredWarn = true; return false }
                         return true
@@ -49,8 +62,12 @@ struct GatewaySettingsView: View {
                     Text("\(usedMB) MB used of \(dailyCapMB) MB today")
                         .font(.caption)
                         .foregroundStyle(c.ink2)
-                    ProgressView(value: Double(usedMB), total: Double(dailyCapMB))
+                    ProgressView(value: Double(usedMB), total: Double(max(dailyCapMB, 1)))
                         .tint(c.brand)
+                    if gatewayOn.wrappedValue {
+                        Text(L(gw.decision.bridge ? "gateway_bridging" : "gateway_not_bridging")).font(.caption)
+                        if gw.decision.meteredWarning { Text(L("gateway_metered_warn")).font(.caption).foregroundStyle(c.warn) }
+                    }
                 }
 
                 card {
@@ -99,13 +116,13 @@ struct GatewaySettingsView: View {
         .background(c.bg)
         .navigationTitle(String(localized: "gateway_title"))
         .alert("Help nearby peers reach the Internet", isPresented: $showDisclosure) {
-            Button("Enable gateway") { gatewayOn = true }
+            Button("Enable gateway") { gatewayOn.wrappedValue = true }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("When on, your phone forwards only encrypted OMCP envelopes. You never see message content. Uses battery and may use mobile data.")
         }
         .alert("Metered cellular", isPresented: $showMeteredWarn) {
-            Button("Continue") { allowMobile = true }
+            Button("Continue") { allowMobile.wrappedValue = true }
             Button("Keep Wi‑Fi only", role: .cancel) {}
         } message: {
             Text(String(localized: "gateway_metered_warn"))
@@ -139,10 +156,28 @@ struct GatewaySettingsView: View {
         }
     }
 
-    private func legend(_ kind: OmcpCoreStub.PathKind, _ label: String, _ meaning: String) -> some View {
+    private func legend(_ kind: PathKind, _ label: String, _ meaning: String) -> some View {
         HStack(spacing: 10) {
             PathChip(kind: kind, label: label)
             Text(meaning).font(.caption).foregroundStyle(c.ink2)
         }
     }
+}
+
+/// Current network for the core gateway policy.
+final class NetworkWatcher: ObservableObject {
+    @Published var type: NetworkType = .offline
+    @Published var metered = false
+    private let monitor = NWPathMonitor()
+    init() {
+        monitor.pathUpdateHandler = { [weak self] p in
+            let t: NetworkType = p.status != .satisfied ? .offline : (p.usesInterfaceType(.cellular) ? .cellular : .wifi)
+            DispatchQueue.main.async {
+                self?.type = t
+                self?.metered = p.isExpensive || p.isConstrained
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "omcp.net"))
+    }
+    deinit { monitor.cancel() }
 }

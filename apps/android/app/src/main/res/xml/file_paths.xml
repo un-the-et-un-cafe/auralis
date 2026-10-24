@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Received files only (app-private, verified by Rust before saving). -->
+<paths>
+    <files-path name="received" path="received/" />
+</paths>

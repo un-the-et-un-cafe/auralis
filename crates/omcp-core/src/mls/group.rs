@@ -277,6 +277,28 @@ impl OmcpMlsMember {
         mix_exporter(&mls_exporter, kem_shared_secrets)
     }
 
+    /// Tag secret for a §22 mailbox tag: `MLS-Exporter("OMCP-tag", tag_epoch, 32)`
+    /// (§22.7(5)); 1:1 chats are 2-member groups. Context = `tag_epoch` as u64-be.
+    ///
+    /// TODO(§22.7(5)): the MLS exporter also changes with the *MLS* epoch, so
+    /// members must be at the same MLS epoch to agree; receivers should also
+    /// try the previous MLS epoch's exporter during a commit race. The
+    /// OMCP-MLS-PQ hybrid mix is not applied here (spec says plain exporter).
+    pub fn tag_exporter(&self, tag_epoch: u64) -> Result<[u8; 32]> {
+        let group = self.group_ref()?;
+        let out = group
+            .export_secret(
+                self.provider.crypto(),
+                crate::sync::tag::TAG_EXPORTER_LABEL,
+                &tag_epoch.to_be_bytes(),
+                32,
+            )
+            .map_err(|_| OmcpError::Mls("export_secret"))?;
+        let mut s = [0u8; 32];
+        s.copy_from_slice(&out);
+        Ok(s)
+    }
+
     /// Build PQ encapsulations to `others` for the current epoch.
     ///
     /// Returns `(extension_bytes, kem_shared_secrets, hybrid_exporter)`.
@@ -299,9 +321,48 @@ impl OmcpMlsMember {
     }
 }
 
+impl crate::sync::tag::TagSecretSource for OmcpMlsMember {
+    fn tag_secret(&self, tag_epoch: u64) -> Result<[u8; 32]> {
+        self.tag_exporter(tag_epoch)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_to_one_chat_tags_from_mls_exporter() {
+        use crate::sync::tag::{chat_subtag, chat_tag, rendezvous_label, TagSecretSource};
+        let mut alice = OmcpMlsMember::generate(b"alice".to_vec()).unwrap();
+        let mut bob = OmcpMlsMember::generate(b"bob".to_vec()).unwrap();
+        let mut eve = OmcpMlsMember::generate(b"eve".to_vec()).unwrap();
+        alice.create_group().unwrap();
+        let (_c, w) = alice
+            .add_members(&[bob.take_key_package().unwrap()])
+            .unwrap();
+        bob.join_from_welcome(&w).unwrap();
+        assert_eq!(alice.member_count().unwrap(), 2);
+        let (ta, tb) = (chat_tag(&alice, 77).unwrap(), chat_tag(&bob, 77).unwrap());
+        assert_eq!(ta, tb);
+        assert_ne!(ta, chat_tag(&alice, 78).unwrap());
+        eve.create_group().unwrap();
+        assert_ne!(ta, chat_tag(&eve, 77).unwrap());
+        let bob_leaf = bob.own_leaf_index().unwrap();
+        assert_eq!(
+            chat_subtag(&alice, bob_leaf, 77).unwrap(),
+            chat_subtag(&bob, bob_leaf, 77).unwrap()
+        );
+        assert_ne!(
+            chat_subtag(&alice, alice.own_leaf_index().unwrap(), 77).unwrap(),
+            chat_subtag(&bob, bob_leaf, 77).unwrap()
+        );
+        let sa = alice.tag_secret(77).unwrap();
+        assert_eq!(
+            rendezvous_label(&sa, 77).unwrap(),
+            rendezvous_label(&bob.tag_secret(77).unwrap(), 77).unwrap()
+        );
+    }
 
     #[test]
     fn create_add_remove_encrypt_three_members() {

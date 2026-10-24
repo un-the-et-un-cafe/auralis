@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Open Mesh Chat</string>
+	<string>Hopla</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen_Generation</key>
@@ -29,15 +29,33 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>OMCP uses Bluetooth Low Energy so you can chat with nearby peers over the mesh.</string>
+	<string>Hopla uses Bluetooth so you can chat with people nearby, even without Internet.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>OMCP uses Bluetooth so nearby peers can discover and message you on the mesh.</string>
+	<string>Hopla uses Bluetooth so people nearby can find and message you.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is used for future LAN livestream relay (v0.2).</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Hopla uses the camera to scan contact QR codes.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Hopla asks for Face ID before showing your recovery phrase.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
 		<string>bluetooth-peripheral</string>
+		<string>remote-notification</string>
+	</array>
+	<key>GOOGLE_OAUTH_CLIENT_ID</key>
+	<string>$(GOOGLE_OAUTH_CLIENT_ID)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Google OAuth redirect (Drive backup)</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(GOOGLE_OAUTH_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
 	</array>
 	<key>MinimumOSVersion</key>
 	<string>17.0</string>

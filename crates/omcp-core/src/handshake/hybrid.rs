@@ -82,6 +82,36 @@ impl StaticIdentity {
         })
     }
 
+    /// Deterministically derive a static identity from a 32-byte master seed
+    /// (e.g. recovery-phrase entropy, see [`crate::recovery`]).
+    ///
+    /// HKDF-SHA-384(salt = "OMCP-Identity-Seed-v1", ikm = seed) expands to
+    /// 32 bytes X25519 secret (info "x25519") and the 64-byte FIPS 203 seed
+    /// `d || z` (info "mlkem768").
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self> {
+        let hk = Hkdf::<Sha384>::new(Some(b"OMCP-Identity-Seed-v1"), seed);
+        let mut dh_bytes = [0u8; 32];
+        hk.expand(b"x25519", &mut dh_bytes)
+            .map_err(|_| OmcpError::Crypto("hkdf"))?;
+        let mut kem_seed = [0u8; 64];
+        hk.expand(b"mlkem768", &mut kem_seed)
+            .map_err(|_| OmcpError::Crypto("hkdf"))?;
+        let dh = StaticSecret::from(dh_bytes);
+        dh_bytes.zeroize();
+        let dh_public = X25519Public::from(&dh).to_bytes();
+        let kem_dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(kem_seed.into());
+        kem_seed.zeroize();
+        let ek_encoded = kem_dk.encapsulation_key().to_bytes();
+        let mut kem_ek_bytes = [0u8; MLKEM768_EK_LEN];
+        kem_ek_bytes.copy_from_slice(ek_encoded.as_slice());
+        Ok(Self {
+            dh,
+            kem_dk,
+            kem_ek_bytes,
+            dh_public,
+        })
+    }
+
     /// X25519 static public key bytes.
     pub fn dh_public(&self) -> [u8; DHLEN] {
         self.dh_public
@@ -321,6 +351,11 @@ impl HybridResponder {
         self.e = Some(StaticSecret::from(random_32()?));
         self.msg1_ok = true;
         Ok(payload)
+    }
+
+    /// Initiator static X25519 public key learned from message 1 (None before).
+    pub fn remote_static(&self) -> Option<[u8; DHLEN]> {
+        self.rs.map(|k| k.to_bytes())
     }
 
     /// Write message 2 (ML-KEM CT + payload) and derive session keys.
