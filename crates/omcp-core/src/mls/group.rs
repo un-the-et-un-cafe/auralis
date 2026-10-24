@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn one_to_one_chat_tags_from_mls_exporter() {
-        use crate::sync::tag::{chat_tag, rendezvous_label, TagSecretSource};
+        use crate::sync::tag::{chat_subtag, chat_tag, rendezvous_label, TagSecretSource};
         let mut alice = OmcpMlsMember::generate(b"alice".to_vec()).unwrap();
         let mut bob = OmcpMlsMember::generate(b"bob".to_vec()).unwrap();
         let mut eve = OmcpMlsMember::generate(b"eve".to_vec()).unwrap();
@@ -348,6 +348,15 @@ mod tests {
         assert_ne!(ta, chat_tag(&alice, 78).unwrap());
         eve.create_group().unwrap();
         assert_ne!(ta, chat_tag(&eve, 77).unwrap());
+        let bob_leaf = bob.own_leaf_index().unwrap();
+        assert_eq!(
+            chat_subtag(&alice, bob_leaf, 77).unwrap(),
+            chat_subtag(&bob, bob_leaf, 77).unwrap()
+        );
+        assert_ne!(
+            chat_subtag(&alice, alice.own_leaf_index().unwrap(), 77).unwrap(),
+            chat_subtag(&bob, bob_leaf, 77).unwrap()
+        );
         let sa = alice.tag_secret(77).unwrap();
         assert_eq!(
             rendezvous_label(&sa, 77).unwrap(),

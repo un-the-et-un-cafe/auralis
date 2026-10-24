@@ -1,14 +1,15 @@
 //! Interest-based forwarding (PROTOCOL §22.1, §22.7(1)) and per-neighbour rate
 //! limiting (§22.4).
 //!
-//! Forwarding order above 32 peers: (a) every neighbour that *wants* the tag;
-//! else (b) the neighbour advertising the lowest *carry distance* for it;
-//! else (c) binary spray-and-wait (k = 2, L = 8).
+//! Forwarding order above 32 peers (§22.7(9)): (a) every neighbour that
+//! *wants* a route tag (its own sub-tag); else (b) the neighbour advertising
+//! the lowest *carry distance*; else (c) a scoped flood within `ttl_hops`.
 
 use std::collections::HashMap;
 
 use super::cuckoo::CuckooFilter;
 use super::tag::{carry_tag, MailboxTag, MAX_CARRY_DISTANCE};
+#[cfg(test)]
 use super::SplitMix64;
 
 /// Carry tags live at most this long after the last delivery/forward.
@@ -101,10 +102,6 @@ impl CarryTable {
 
 /// Above this many visible peers, epidemic flooding (§8.3) is replaced.
 pub const FLOOD_MAX_PEERS: usize = 32;
-/// Spray-and-wait: total copies L.
-pub const SPRAY_COPIES: u8 = 8;
-/// Spray-and-wait: at most k neighbours per hop when nothing matches.
-pub const SPRAY_FANOUT: usize = 2;
 /// Default per-neighbour token bucket rate (envelopes/s).
 pub const DEFAULT_NEIGHBOUR_RATE: u32 = 64;
 
@@ -163,37 +160,41 @@ pub fn adaptive_ttl(estimated_mesh_size: f64) -> u8 {
 /// What a node does with one envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardPlan {
-    /// Small mesh: flood to everyone except the sender.
+    /// Small mesh (≤ 32 peers): flood to everyone except the sender.
     Flood(Vec<usize>),
-    /// Interest match: hand a copy to each matching neighbour.
+    /// (a) Hand a copy to each neighbour that wants one of the route tags.
     Interest(Vec<usize>),
-    /// No wanter: hand a copy to the neighbour with the lowest carry distance.
+    /// (b) Hand a copy to the neighbour with the lowest carry distance.
     Carry(usize),
-    /// No match: spray `(neighbour, copies)`; caller keeps the remainder.
-    Spray { targets: Vec<(usize, u8)>, keep: u8 },
-    /// Wait phase (1 copy left, no match): hold until a matching neighbour appears.
-    Wait,
+    /// (c) Scoped flood within the remaining `ttl_hops` (cold start /
+    /// missing carry state; replaces spray-and-wait, §22.7(9)).
+    ScopedFlood(Vec<usize>),
+    /// TTL exhausted or no candidate: keep (store-and-forward).
+    Hold,
 }
 
-/// Decide forwarding for an envelope with `tag`, holding `copies` spray
-/// tokens, given neighbour digests (`None` = digest unknown). `visible_peers`
+/// Decide forwarding for an envelope routed on `tags` (the recipients'
+/// sub-tags, or the chat tag for groups > 8) with `ttl_hops` remaining,
+/// given candidate neighbour digests (`None` = unknown). `visible_peers`
 /// selects flood vs interest mode; `from` is excluded.
 pub fn plan_forward(
-    tag: &MailboxTag,
-    copies: u8,
+    tags: &[MailboxTag],
+    ttl_hops: u8,
     neighbours: &[Option<&CuckooFilter>],
     from: Option<usize>,
     visible_peers: usize,
-    rng: &mut SplitMix64,
 ) -> ForwardPlan {
     let cands: Vec<usize> = (0..neighbours.len()).filter(|i| Some(*i) != from).collect();
+    if cands.is_empty() || ttl_hops == 0 {
+        return ForwardPlan::Hold;
+    }
     if visible_peers <= FLOOD_MAX_PEERS {
         return ForwardPlan::Flood(cands);
     }
     let matching: Vec<usize> = cands
         .iter()
         .copied()
-        .filter(|i| neighbours[*i].is_some_and(|f| f.contains(tag)))
+        .filter(|i| neighbours[*i].is_some_and(|f| tags.iter().any(|t| f.contains(t))))
         .collect();
     if !matching.is_empty() {
         return ForwardPlan::Interest(matching);
@@ -201,32 +202,19 @@ pub fn plan_forward(
     let best = cands
         .iter()
         .filter_map(|i| {
-            neighbours[*i]
-                .and_then(|f| neighbour_distance(f, tag))
+            let f = neighbours[*i]?;
+            tags.iter()
+                .filter_map(|t| neighbour_distance(f, t))
+                .min()
                 .map(|d| (d, *i))
         })
         .min();
-    if let Some((_, i)) = best {
-        return ForwardPlan::Carry(i);
+    if let Some((d, i)) = best {
+        if d < ttl_hops {
+            return ForwardPlan::Carry(i);
+        }
     }
-    if copies <= 1 || cands.is_empty() {
-        return ForwardPlan::Wait;
-    }
-    // Binary spray: give away half, split over at most k = 2 neighbours.
-    let give = copies / 2;
-    let mut pool = cands;
-    let k = SPRAY_FANOUT.min(pool.len()).min(give as usize);
-    let mut targets = Vec::with_capacity(k);
-    for j in 0..k {
-        let pick = rng.below(pool.len() as u64) as usize;
-        let n = pool.swap_remove(pick);
-        let share = give / k as u8 + u8::from((j as u8) < give % k as u8);
-        targets.push((n, share));
-    }
-    ForwardPlan::Spray {
-        targets,
-        keep: copies - give,
-    }
+    ForwardPlan::ScopedFlood(cands)
 }
 
 /// Per-neighbour token bucket (§22.4).
@@ -293,81 +281,54 @@ mod tests {
     }
 
     #[test]
-    fn plan_modes() {
-        let mut rng = SplitMix64(9);
-        let tag = [1u8; 8];
-        let f = CuckooFilter::build_digest(&[tag], 16, &mut rng).unwrap();
-        let g = CuckooFilter::build_digest(&[[2u8; 8]], 16, &mut rng).unwrap();
-        let ns = [Some(&g), Some(&f), None, Some(&g)];
-        assert_eq!(
-            plan_forward(&tag, 8, &ns, Some(0), 10, &mut rng),
-            ForwardPlan::Flood(vec![1, 2, 3])
-        );
-        assert_eq!(
-            plan_forward(&tag, 8, &ns, None, 100, &mut rng),
-            ForwardPlan::Interest(vec![1])
-        );
-        let ns2 = [Some(&g), None, Some(&g)];
-        match plan_forward(&tag, 8, &ns2, None, 100, &mut rng) {
-            ForwardPlan::Spray { targets, keep } => {
-                assert_eq!(targets.len(), 2);
-                assert_eq!(targets.iter().map(|t| t.1).sum::<u8>() + keep, 8);
-                assert_eq!(keep, 4);
-            }
-            p => panic!("{p:?}"),
-        }
-        assert_eq!(
-            plan_forward(&tag, 1, &ns2, None, 100, &mut rng),
-            ForwardPlan::Wait
-        );
-        match plan_forward(&tag, 2, &ns2, None, 100, &mut rng) {
-            ForwardPlan::Spray { targets, keep } => {
-                assert_eq!(targets.len(), 1);
-                assert_eq!(keep, 1);
-            }
-            p => panic!("{p:?}"),
-        }
-    }
-
-    #[test]
-    fn carry_order_and_table() {
+    fn plan_order_want_carry_scoped_flood() {
         let mut rng = SplitMix64(5);
         let tag = [7u8; 8];
         let far = CuckooFilter::build_digest(&[carry_tag(&tag, 3)], 16, &mut rng).unwrap();
         let near = CuckooFilter::build_digest(&[carry_tag(&tag, 1)], 16, &mut rng).unwrap();
         let want = CuckooFilter::build_digest(&[tag], 16, &mut rng).unwrap();
         let none = CuckooFilter::build_digest(&[[1; 8]], 16, &mut rng).unwrap();
+        let t = [[9u8; 8], tag];
         assert_eq!(
-            plan_forward(
-                &tag,
-                8,
-                &[Some(&far), Some(&near), Some(&none)],
-                None,
-                99,
-                &mut rng
-            ),
+            plan_forward(&t, 9, &[Some(&far), Some(&near), Some(&none)], None, 99),
             ForwardPlan::Carry(1)
         );
         assert_eq!(
-            plan_forward(&tag, 8, &[Some(&far), Some(&want)], None, 99, &mut rng),
+            plan_forward(&t, 9, &[Some(&far), Some(&want)], None, 99),
             ForwardPlan::Interest(vec![1])
         );
-        let mut t = CarryTable::default();
-        t.update_from_neighbours(&[&near], 0);
-        assert!(t.advertised().is_empty()); // no activity, no carry
-        t.note_activity(tag, 0);
-        t.update_from_neighbours(&[&far, &near], 0);
-        assert_eq!(t.distance(&tag), Some(2));
-        assert_eq!(t.advertised(), vec![carry_tag(&tag, 2)]);
-        t.update_from_neighbours(&[&want], 10);
-        assert_eq!(t.distance(&tag), Some(1));
-        t.expire(CARRY_TTL_MS);
-        assert!(t.is_empty());
+        assert_eq!(
+            plan_forward(&t, 9, &[Some(&none), None, Some(&none)], Some(0), 99),
+            ForwardPlan::ScopedFlood(vec![1, 2])
+        );
+        assert_eq!(
+            plan_forward(&t, 3, &[Some(&far)], None, 99),
+            ForwardPlan::ScopedFlood(vec![0])
+        );
+        assert_eq!(
+            plan_forward(&t, 0, &[Some(&want)], None, 99),
+            ForwardPlan::Hold
+        );
+        assert_eq!(
+            plan_forward(&t, 5, &[Some(&none), Some(&none)], Some(0), 10),
+            ForwardPlan::Flood(vec![1])
+        );
+        let mut c = CarryTable::default();
+        c.update_from_neighbours(&[&near], 0);
+        assert!(c.advertised().is_empty()); // no activity, no carry
+        c.note_activity(tag, 0);
+        c.update_from_neighbours(&[&far, &near], 0);
+        assert_eq!(c.distance(&tag), Some(2));
+        assert_eq!(c.advertised(), vec![carry_tag(&tag, 2)]);
+        c.update_from_neighbours(&[&want], 10);
+        assert_eq!(c.distance(&tag), Some(1));
+        c.expire(CARRY_TTL_MS);
+        assert!(c.is_empty());
         for i in 0..100u64 {
-            t.note_activity(i.to_be_bytes(), i);
+            c.note_activity(i.to_be_bytes(), i);
         }
-        assert_eq!(t.len(), MAX_CARRY_ENTRIES);
-        assert_eq!(t.distance(&0u64.to_be_bytes()), None);
+        assert_eq!(c.len(), MAX_CARRY_ENTRIES);
+        assert_eq!(c.distance(&0u64.to_be_bytes()), None);
     }
 
     #[test]

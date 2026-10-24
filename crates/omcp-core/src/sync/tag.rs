@@ -20,8 +20,14 @@ pub const TAG_EPOCH_MS: u64 = 6 * 60 * 60 * 1000;
 
 /// `header_aad` TLV type for the routing tag (ASCII 'T').
 pub const AAD_TLV_TAG: u8 = 0x54;
+/// `header_aad` TLV type for recipient sub-tags (8·n bytes, §22.7(9)).
+pub const AAD_TLV_SUBTAGS: u8 = 0x56;
+/// Chats with at most this many members route on per-recipient sub-tags;
+/// larger groups use the chat tag + Plumtree.
+pub const SUBTAG_MAX_MEMBERS: usize = 8;
 
 const LABEL: &[u8] = b"OMCP-tag";
+const SUB_LABEL: &[u8] = b"OMCP-sub";
 /// MLS exporter label for tag secrets (§22.7(5)).
 pub const TAG_EXPORTER_LABEL: &str = "OMCP-tag";
 
@@ -45,6 +51,27 @@ pub fn mailbox_tag(exporter_secret: &[u8], epoch: u64) -> Result<MailboxTag> {
     Ok(t)
 }
 
+/// Per-recipient sub-tag (§22.7(9)):
+/// `BLAKE2b-64(key = exporter_secret, "OMCP-sub" || leaf_index_u32_be || epoch_u64_be)`.
+pub fn subtag(exporter_secret: &[u8], leaf_index: u32, epoch: u64) -> Result<MailboxTag> {
+    if exporter_secret.len() < 16 {
+        return Err(OmcpError::Sync("exporter secret too short"));
+    }
+    let mut mac = <Blake2bMac<U8> as Mac>::new_from_slice(exporter_secret)
+        .map_err(|_| OmcpError::Sync("exporter secret too long"))?;
+    mac.update(SUB_LABEL);
+    mac.update(&leaf_index.to_be_bytes());
+    mac.update(&epoch.to_be_bytes());
+    let mut t = [0u8; 8];
+    t.copy_from_slice(&mac.finalize().into_bytes());
+    Ok(t)
+}
+
+/// Does a chat of `members` route on sub-tags (else chat tag + Plumtree)?
+pub fn uses_subtags(members: usize) -> bool {
+    members <= SUBTAG_MAX_MEMBERS
+}
+
 /// Tags a receiver should accept at `now_ms`: current and previous epoch
 /// (clock skew / in-flight envelopes).
 pub fn accepted_tags(exporter_secret: &[u8], now_ms: u64) -> Result<[MailboxTag; 2]> {
@@ -62,7 +89,9 @@ pub enum TlvClass {
     Core,
     /// `0x54`: mailbox tag (len 8).
     MailboxTag,
-    /// `0x55`–`0x7F`: unassigned (extension process §16).
+    /// `0x56`: recipient sub-tags (8·n).
+    RecipientSubtags,
+    /// `0x55`, `0x57`–`0x7F`: unassigned (extension process §16).
     Unassigned,
     /// `0x80`–`0xFF`: experimental / private use.
     Experimental,
@@ -74,7 +103,8 @@ pub fn tlv_class(t: u8) -> TlvClass {
     match t {
         0x01..=0x3F => TlvClass::Core,
         AAD_TLV_TAG => TlvClass::MailboxTag,
-        0x55..=0x7F => TlvClass::Unassigned,
+        AAD_TLV_SUBTAGS => TlvClass::RecipientSubtags,
+        0x55 | 0x57..=0x7F => TlvClass::Unassigned,
         0x80..=0xFF => TlvClass::Experimental,
         _ => TlvClass::Invalid,
     }
@@ -87,14 +117,46 @@ pub fn put_tag_in_aad(aad: &mut Vec<u8>, tag: &MailboxTag) {
     aad.extend_from_slice(tag);
 }
 
+/// Append recipient sub-tags (1..=8) as TLV `0x56`.
+pub fn put_subtags_in_aad(aad: &mut Vec<u8>, subtags: &[MailboxTag]) -> Result<()> {
+    if subtags.is_empty() || subtags.len() > SUBTAG_MAX_MEMBERS {
+        return Err(OmcpError::Sync("subtag count"));
+    }
+    aad.push(AAD_TLV_SUBTAGS);
+    aad.push((8 * subtags.len()) as u8);
+    for t in subtags {
+        aad.extend_from_slice(t);
+    }
+    Ok(())
+}
+
+/// Routing fields found in `header_aad`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutingAad {
+    pub tag: Option<MailboxTag>,
+    pub subtags: Vec<MailboxTag>,
+}
+
+impl RoutingAad {
+    /// Tags to route on: sub-tags if present, else the chat tag.
+    pub fn route_tags(&self) -> Vec<MailboxTag> {
+        if self.subtags.is_empty() {
+            self.tag.into_iter().collect()
+        } else {
+            self.subtags.clone()
+        }
+    }
+}
+
 /// Parse a `header_aad` of `type u8 | len u8 | value` items per the §21.8
-/// registry and return the mailbox tag, if any. Rejects: truncated items,
-/// types outside the registry, a `0x54` item whose length is not 8, and
-/// duplicate `0x54` items. Core, unassigned and experimental types are
-/// skipped (forward compatibility).
-pub fn tag_from_aad(aad: &[u8]) -> Result<Option<MailboxTag>> {
+/// registry. Rejects truncated items, types outside the registry, a `0x54`
+/// whose length is not 8, a `0x56` whose length is not a non-zero multiple of
+/// 8 up to 64, and duplicates of either. Core, unassigned and experimental
+/// types are skipped (forward compatibility).
+pub fn parse_routing_aad(aad: &[u8]) -> Result<RoutingAad> {
     let mut i = 0;
-    let mut found = None;
+    let mut out = RoutingAad::default();
+    let mut seen_sub = false;
     while i < aad.len() {
         if i + 2 > aad.len() {
             return Err(OmcpError::Sync("aad tlv truncated"));
@@ -109,18 +171,31 @@ pub fn tag_from_aad(aad: &[u8]) -> Result<Option<MailboxTag>> {
                 if l != 8 {
                     return Err(OmcpError::Sync("tag tlv length"));
                 }
-                if found.is_some() {
+                if out.tag.is_some() {
                     return Err(OmcpError::Sync("duplicate tag tlv"));
                 }
-                let mut tag = [0u8; 8];
-                tag.copy_from_slice(v);
-                found = Some(tag);
+                out.tag = Some(v.try_into().expect("8"));
+            }
+            TlvClass::RecipientSubtags => {
+                if l == 0 || l % 8 != 0 || l > 8 * SUBTAG_MAX_MEMBERS {
+                    return Err(OmcpError::Sync("subtag tlv length"));
+                }
+                if seen_sub {
+                    return Err(OmcpError::Sync("duplicate subtag tlv"));
+                }
+                seen_sub = true;
+                out.subtags = v.chunks(8).map(|c| c.try_into().expect("8")).collect();
             }
             _ => {}
         }
         i += 2 + l;
     }
-    Ok(found)
+    Ok(out)
+}
+
+/// The chat tag in `header_aad`, if any (see [`parse_routing_aad`]).
+pub fn tag_from_aad(aad: &[u8]) -> Result<Option<MailboxTag>> {
+    Ok(parse_routing_aad(aad)?.tag)
 }
 
 /// 32-byte gateway rendezvous label (§22.7(3)):
@@ -157,6 +232,15 @@ pub fn carry_tag(tag: &MailboxTag, d: u8) -> MailboxTag {
 /// Implemented by [`crate::mls::OmcpMlsMember`].
 pub trait TagSecretSource {
     fn tag_secret(&self, tag_epoch: u64) -> Result<[u8; 32]>;
+}
+
+/// Sub-tag of member `leaf_index` at `tag_epoch` from the chat's secret source.
+pub fn chat_subtag<S: TagSecretSource + ?Sized>(
+    src: &S,
+    leaf_index: u32,
+    tag_epoch: u64,
+) -> Result<MailboxTag> {
+    subtag(&src.tag_secret(tag_epoch)?, leaf_index, tag_epoch)
 }
 
 /// Tag for a chat at `tag_epoch` from its secret source.
@@ -208,6 +292,8 @@ mod tests {
         assert_eq!(tlv_class(0x01), TlvClass::Core);
         assert_eq!(tlv_class(0x54), TlvClass::MailboxTag);
         assert_eq!(tlv_class(0x60), TlvClass::Unassigned);
+        assert_eq!(tlv_class(0x55), TlvClass::Unassigned);
+        assert_eq!(tlv_class(0x56), TlvClass::RecipientSubtags);
         assert_eq!(tlv_class(0x90), TlvClass::Experimental);
         assert_eq!(tlv_class(0x00), TlvClass::Invalid);
         assert_eq!(tlv_class(0x40), TlvClass::Invalid);
@@ -218,6 +304,29 @@ mod tests {
         put_tag_in_aad(&mut aad, &[4; 8]);
         assert!(tag_from_aad(&aad).is_err());
         assert!(tag_from_aad(&[0x45, 0]).is_err());
+    }
+
+    #[test]
+    fn subtags_and_tlv_0x56() {
+        let s = [3u8; 32];
+        let a = subtag(&s, 0, 9).unwrap();
+        assert_ne!(a, subtag(&s, 1, 9).unwrap());
+        assert_ne!(a, subtag(&s, 0, 10).unwrap());
+        assert_ne!(a, mailbox_tag(&s, 9).unwrap());
+        assert!(uses_subtags(8) && !uses_subtags(9));
+        let mut aad = vec![];
+        put_tag_in_aad(&mut aad, &[1; 8]);
+        put_subtags_in_aad(&mut aad, &[a, [2; 8]]).unwrap();
+        let r = parse_routing_aad(&aad).unwrap();
+        assert_eq!(r.tag, Some([1; 8]));
+        assert_eq!(r.route_tags(), vec![a, [2; 8]]);
+        assert!(put_subtags_in_aad(&mut vec![], &[[0; 8]; 9]).is_err());
+        assert!(parse_routing_aad(&[0x56, 7, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        let mut dup = aad.clone();
+        put_subtags_in_aad(&mut dup, &[a]).unwrap();
+        assert!(parse_routing_aad(&dup).is_err());
+        let only_tag = parse_routing_aad(&aad[..10]).unwrap();
+        assert_eq!(only_tag.route_tags(), vec![[1; 8]]);
     }
 
     #[test]
