@@ -1,8 +1,9 @@
 import SwiftUI
+import HoplaKit
 
 struct PathChip: View {
     @Environment(\.omcpColors) private var c
-    let kind: OmcpCoreStub.PathKind
+    let kind: PathKind
     let label: String
     var micro: Bool = false
 
@@ -32,7 +33,7 @@ struct PathChip: View {
 
 struct PathBanner: View {
     @Environment(\.omcpColors) private var c
-    let kind: OmcpCoreStub.PathKind
+    let kind: PathKind
     let text: String
 
     private var pair: (Color, Color) {

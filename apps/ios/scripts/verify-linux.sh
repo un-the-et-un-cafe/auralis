@@ -9,6 +9,7 @@ IOS="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="$(cd "$IOS/../.." && pwd)"
 WORK="${OMCP_VERIFY_DIR:-$ROOT/target/ios-linux-verify}"
 
+python3 "$IOS/scripts/strings.py" --check
 (cd "$IOS/HoplaKit" && swift test)
 
 cd "$ROOT"
@@ -44,5 +45,5 @@ SWIFT
 (cd "$P" && swift test)
 
 # Syntax-only parse of everything (catches typos in UIKit/SwiftUI/CoreBluetooth files).
-find "$IOS" -name '*.swift' -not -path '*/.build/*' -print0 | xargs -0 -n1 swiftc -parse
+find "$IOS" -name '*.swift' -not -path '*/.build/*' -not -path '*/Generated/*' -not -path '*/build/*' -print0 | xargs -0 -n1 swiftc -parse
 echo "verify-linux: OK"
