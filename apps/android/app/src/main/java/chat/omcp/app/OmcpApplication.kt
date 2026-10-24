@@ -35,6 +35,20 @@ class OmcpApplication : Application() {
     /** Restore-from-backup job state (§5.86); the job itself runs in [chat.omcp.app.restore.RestoreWorker]. */
     val restore by lazy { chat.omcp.app.restore.RestoreCoordinator(repository) }
 
+    /** Encrypted chat backup blobs, next to the identity backup in appDataFolder. */
+    val chatBlobs: chat.omcp.app.backup.ChatBlobStore by lazy {
+        if (BuildConfig.SIMULATED_DRIVE_BACKUP) {
+            chat.omcp.app.backup.InMemoryChatBlobStore()
+        } else {
+            val tokens = chat.omcp.app.backup.GoogleDriveTokenProvider(this, driveConsent)
+            chat.omcp.app.backup.DriveChatBlobStore(BuildConfig.GOOGLE_OAUTH_CLIENT_ID) { interactive ->
+                chat.omcp.app.backup.DriveAppDataClient(
+                    chat.omcp.app.backup.UrlConnectionTransport(), { tokens.token(interactive) }, tokens::invalidate,
+                )
+            }
+        }
+    }
+
     val receivedFiles by lazy { chat.omcp.app.files.ReceivedFiles(this) }
 
     override fun onCreate() {
@@ -43,6 +57,10 @@ class OmcpApplication : Application() {
         // Encrypted local store (Rust core); its key is sealed with the Android Keystore.
         repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this), getDatabasePath("omcp-store.db").apply { parentFile?.mkdirs() }.path)
         repository.fileSink = receivedFiles
+        repository.chatBackup = chat.omcp.app.backup.ChatBackupSync(
+            repository.core, chatBlobs, { p -> runCatching { java.io.File(p).readBytes() }.getOrNull() },
+        )
+        runCatching { chat.omcp.app.backup.ChatBackupWorker.schedule(this) }
         runCatching { repository.restore() }
     }
 }

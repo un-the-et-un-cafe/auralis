@@ -35,6 +35,10 @@ data class ChatRowModel(
     val unread: Int = 0,
     val path: PathKind? = null,
     val isGroup: Boolean = false,
+    /** RS2: restored on a new device and not re-verified yet (§5.98). */
+    val restoredUnverified: Boolean = false,
+    /** Waiting missing-media count (§5.93 clock pill). */
+    val waitingMedia: Int = 0,
 )
 
 @Composable
@@ -67,6 +71,8 @@ fun ChatRow(
                 Text(model.title, style = MaterialTheme.typography.titleMedium)
                 if (model.verified) {
                     VerifiedBadge()
+                } else if (model.restoredUnverified) {
+                    RestoredPill(compact = true)
                 }
             }
             Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1)

@@ -356,7 +356,7 @@ class OnboardingViewModel(
             _state.update { it.copy(error = "These words don’t form a valid 24-word phrase. Check the order.") }
             return false
         }
-        repo.saveIdentity(p, name())
+        repo.restoreFromPhrase(p, name())
         repo.markBackupMethod(BACKUP_WRITTEN)
         _state.update { it.copy(step = OnboardingStep.Done, restorePhrase = "", error = null) }
         return true

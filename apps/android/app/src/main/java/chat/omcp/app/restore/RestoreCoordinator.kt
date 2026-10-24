@@ -58,6 +58,8 @@ class RestoreCoordinator(private val repo: MeshRepository) {
             onStage(RestoreStage.Contacts); emit(RestoreProgress.Running(RestoreStage.Contacts, 2f / 3))
             val name = p.restored.displayName?.takeIf { it.isNotBlank() } ?: p.fallbackName
             repo.restoreFromBackup(p.restored, name)
+            // Chats come from the separate chat backup; a failure here never undoes the identity restore.
+            runCatching { repo.restoreChats() }
             pending = null
             RestoreProgress.Done(
                 p.restored.displayName?.takeIf { it.isNotBlank() },

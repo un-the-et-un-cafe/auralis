@@ -13,7 +13,43 @@ data class Contact(
     /** 12 groups of 5 digits. */
     val safetyNumber: List<String>,
     val verified: Boolean,
+    /** "Restored" badge: the contact restored Hopla on a new device in the last 7 days (RS1). */
+    val restoredBadge: Boolean = false,
+    val restoredAtMs: Long? = null,
+    /** "Restored, not verified" until re-verified by QR in person (RS2, design §5.98). */
+    val restoredUnverified: Boolean = false,
 )
+
+/** RS1: the contact is on a new (restored) device; a system notice was added to the chat. */
+data class RestoreNoticeInfo(val contactId: String, val restoredAtMs: Long?, val msgId: String)
+
+/** A partner asks for a media item again ([localPath] = our copy, if any). */
+data class MediaRequestInfo(val contactId: String, val msgId: String, val hash: String, val name: String, val mime: String, val localPath: String?)
+
+/** Placeholder state change; [state] = a `FileAttachment.State` name. */
+data class MediaUpdateInfo(val contactId: String, val msgId: String, val state: String)
+
+/** One encrypted, 64 KiB-padded chat-backup blob (kind 0 snapshot, 1 log, 2 media). */
+class ChatBackupBlobInfo(val name: String, val kind: Int, val seq: Long, val blob: ByteArray, val deleteBelowSeq: Long?)
+
+data class ChatBackupSummaryInfo(val messages: Int, val mediaPlaceholders: Int)
+
+/** Settings › Backup › "Also back up photos, videos and files" (CB5). Off by default. */
+data class MediaBackupPrefs(
+    val enabled: Boolean = false,
+    val photos: Boolean = true,
+    val videos: Boolean = false,
+    val voice: Boolean = true,
+    val files: Boolean = true,
+    val mobileData: Boolean = false,
+)
+
+data class MediaBackupItemInfo(val msgId: String, val hash: String, val mime: String, val localPath: String?, val blobName: String)
+
+data class DeviceKeyInfo(val deviceKeyHex: String, val fingerprint: String, val restoredAtMs: Long?)
+
+/** QR verification failed: not the contact's current identity + device key (e.g. a pre-restore QR). */
+class VerificationFailedException : Exception("safety numbers don't match")
 
 data class ContactPreview(val contact: Contact, val alreadyKnown: Boolean, val mismatchWith: Contact?)
 
@@ -63,6 +99,10 @@ data class LinkResult(
     val fileFailures: List<FileFailureInfo> = emptyList(),
     /** More file chunks wait: call [CoreLink.flush] again once the GATT queue is empty. */
     val morePending: Boolean = false,
+    val restoreNotices: List<RestoreNoticeInfo> = emptyList(),
+    val mediaRequests: List<MediaRequestInfo> = emptyList(),
+    val resendAsks: List<MediaRequestInfo> = emptyList(),
+    val mediaUpdates: List<MediaUpdateInfo> = emptyList(),
 )
 
 enum class NetworkType { Offline, Wifi, Cellular }
@@ -206,6 +246,40 @@ interface OmcpCore {
     fun openBackup(blob: ByteArray, password: String): RestoredBackup
     /** The loaded identity's phrase (gate behind device auth in UI). */
     fun recoveryPhrase(): String
+
+    // ---- encrypted chat backup (CB1–CB5) and restore indicator (RS1–RS2) ----
+
+    fun chatBackupDue(nowMs: Long, onWifi: Boolean, allowMobile: Boolean): Boolean = false
+    /** Next upload (null = nothing changed); call [chatBackupCommit] after it uploaded. */
+    fun chatBackupNext(nowMs: Long, forceSnapshot: Boolean): ChatBackupBlobInfo? = null
+    fun chatBackupCommit(seq: Long) {}
+    /** Restore text from every downloaded chat blob; media become placeholders. */
+    fun chatBackupRestore(blobs: List<ByteArray>): ChatBackupSummaryInfo = ChatBackupSummaryInfo(0, 0)
+    fun mediaBackupSettings(): MediaBackupPrefs = MediaBackupPrefs()
+    /** Returns media blob names to delete when media backup was turned off (after confirmation). */
+    fun setMediaBackupSettings(p: MediaBackupPrefs): List<String> = emptyList()
+    fun mediaBackupDue(nowMs: Long, onWifi: Boolean): Boolean = false
+    fun mediaBackupTodo(): List<MediaBackupItemInfo> = emptyList()
+    fun sealMediaBackup(hash: String, bytes: ByteArray): ChatBackupBlobInfo = throw UnsupportedOperationException("no media backup")
+    fun mediaBackupCommit(hash: String, nowMs: Long) {}
+    fun mediaPlaceholders(): List<MediaBackupItemInfo> = emptyList()
+    /** Decrypts a media blob for a placeholder and verifies its hash (throws otherwise). */
+    fun restoreMediaFromBackup(msgId: String, blob: ByteArray): ByteArray = throw UnsupportedOperationException("no media backup")
+    /** Tap on a placeholder: request it again from the partner. */
+    fun requestMedia(msgId: String) {}
+    /** User-confirmed "Ask to resend". */
+    fun askToResend(msgId: String) {}
+    /** Answer a partner's [MediaRequestInfo] with our copy, or null = we no longer have it. */
+    fun answerMediaRequest(contactId: String, msgId: String, bytes: ByteArray?) {}
+    /** After restoring on a new install: new device key stamped `restored_at` (RS1). */
+    fun markRestored(nowMs: Long): DeviceKeyInfo? = null
+    fun deviceInfo(): DeviceKeyInfo? = null
+    /** Verify in person by QR (RS2). Throws [VerificationFailedException] on a stale or wrong code. */
+    fun verifyContactFromQr(payload: String): Contact {
+        val id = previewContact(payload).contact.id
+        setVerified(id, true)
+        return contacts().first { it.id == id }
+    }
 
     /** Core file cap (decimal bytes, 50 MB). UI must read this, not hard-code. */
     fun maxFileBytes(): Long

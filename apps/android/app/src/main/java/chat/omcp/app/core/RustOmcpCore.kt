@@ -141,6 +141,41 @@ class RustOmcpCore : OmcpCore {
 
     override fun recoveryPhrase(): String = n().recoveryPhrase()
 
+    override fun chatBackupDue(nowMs: Long, onWifi: Boolean, allowMobile: Boolean) =
+        n().chatBackupDue(nowMs.toULong(), onWifi, allowMobile)
+    override fun chatBackupNext(nowMs: Long, forceSnapshot: Boolean) =
+        n().chatBackupNext(nowMs.toULong(), forceSnapshot)?.toApp()
+    override fun chatBackupCommit(seq: Long) = n().chatBackupCommit(seq.toULong())
+    override fun chatBackupRestore(blobs: List<ByteArray>): ChatBackupSummaryInfo = try {
+        n().chatBackupRestore(blobs).let { ChatBackupSummaryInfo(it.messages.toInt(), it.mediaPlaceholders.toInt()) }
+    } catch (e: FfiException.WrongBackupPassword) {
+        throw WrongBackupPasswordException()
+    }
+    override fun mediaBackupSettings() = n().mediaBackupSettings().let {
+        MediaBackupPrefs(it.enabled, it.photos, it.videos, it.voice, it.files, it.mobileData)
+    }
+    override fun setMediaBackupSettings(p: MediaBackupPrefs): List<String> =
+        n().setMediaBackupSettings(chat.omcp.ffi.MediaBackupSettings(p.enabled, p.photos, p.videos, p.voice, p.files, p.mobileData))
+    override fun mediaBackupDue(nowMs: Long, onWifi: Boolean) = n().mediaBackupDue(nowMs.toULong(), onWifi)
+    override fun mediaBackupTodo() = n().mediaBackupTodo().map { it.toApp() }
+    override fun sealMediaBackup(hash: String, bytes: ByteArray) = n().sealMediaBackup(hash, bytes).toApp()
+    override fun mediaBackupCommit(hash: String, nowMs: Long) = n().mediaBackupCommit(hash, nowMs.toULong())
+    override fun mediaPlaceholders() = n().mediaPlaceholders().map { it.toApp() }
+    override fun restoreMediaFromBackup(msgId: String, blob: ByteArray): ByteArray = n().restoreMediaFromBackup(msgId, blob)
+    override fun requestMedia(msgId: String) = n().requestMedia(msgId)
+    override fun askToResend(msgId: String) = n().askToResend(msgId)
+    override fun answerMediaRequest(contactId: String, msgId: String, bytes: ByteArray?) =
+        n().answerMediaRequest(contactId, msgId, bytes)
+    override fun markRestored(nowMs: Long) = n().markRestored(nowMs.toULong()).toApp()
+    override fun deviceInfo() = node?.deviceInfo()?.toApp()
+    override fun verifyContactFromQr(payload: String): Contact = try {
+        n().verifyContactFromQr(payload).toContact()
+    } catch (e: FfiException.VerificationFailed) {
+        throw VerificationFailedException()
+    } catch (e: FfiException) {
+        throw IllegalArgumentException(e.message, e)
+    }
+
     override fun maxFileBytes() = chat.omcp.ffi.maxFileBytes().toLong()
     override fun gatewayDailyCapBytes() = chat.omcp.ffi.defaultGatewayDailyCapBytes().toLong()
 
@@ -177,6 +212,7 @@ private fun chat.omcp.ffi.StoredMessage.toApp() = StoredMessageInfo(
         chat.omcp.ffi.MessageStatus.QUEUED -> "Queued"
         chat.omcp.ffi.MessageStatus.SENT -> "Sent"
         chat.omcp.ffi.MessageStatus.RECEIVED -> "Received"
+        chat.omcp.ffi.MessageStatus.SYSTEM -> "System"
     },
     mime = mime,
     burn = burn?.toApp(),
@@ -199,13 +235,35 @@ private fun chat.omcp.ffi.StoredMessage.toApp() = StoredMessageInfo(
                 chat.omcp.ffi.StoredFileState.RECEIVED -> "Received"
                 chat.omcp.ffi.StoredFileState.FAILED -> "Failed"
                 chat.omcp.ffi.StoredFileState.INTEGRITY_FAILED -> "IntegrityFailed"
+                chat.omcp.ffi.StoredFileState.MISSING -> "Missing"
+                chat.omcp.ffi.StoredFileState.REQUESTED -> "Requested"
+                chat.omcp.ffi.StoredFileState.UNAVAILABLE -> "Unavailable"
             },
             it.doneBytes.toLong(), it.localPath,
         )
     },
 )
 
-private fun ContactInfo.toContact() = Contact(contactId, displayName, safetyNumber, verified)
+private fun ContactInfo.toContact() =
+    Contact(contactId, displayName, safetyNumber, verified, restoredBadge, restoredAtMs?.toLong(), restoredUnverified)
+
+private fun chat.omcp.ffi.ChatBackupBlob.toApp() =
+    ChatBackupBlobInfo(name, kind.toInt(), seq.toLong(), blob, deleteBelowSeq?.toLong())
+
+private fun chat.omcp.ffi.MediaBackupItem.toApp() = MediaBackupItemInfo(msgIdHex, hashHex, mime, localPath, blobName)
+
+private fun chat.omcp.ffi.DeviceInfo.toApp() = DeviceKeyInfo(deviceKeyHex, fingerprint, restoredAtMs?.toLong())
+
+private fun chat.omcp.ffi.MediaRequestEvent.toApp() = MediaRequestInfo(contactId, msgIdHex, hashHex, name, mime, localPath)
+
+private fun chat.omcp.ffi.StoredFileState.label() = when (this) {
+    chat.omcp.ffi.StoredFileState.MISSING -> "Missing"
+    chat.omcp.ffi.StoredFileState.REQUESTED -> "Requested"
+    chat.omcp.ffi.StoredFileState.UNAVAILABLE -> "Unavailable"
+    chat.omcp.ffi.StoredFileState.RECEIVED -> "Received"
+    chat.omcp.ffi.StoredFileState.RECEIVING -> "Receiving"
+    else -> "Failed"
+}
 
 private fun LinkOutput.toResult() = LinkResult(
     outgoing = outgoing,
@@ -222,6 +280,10 @@ private fun LinkOutput.toResult() = LinkResult(
     files = files.map { ReceivedFileInfo(it.transferIdHex, it.contactId, it.name, it.mime, it.bytes) },
     fileFailures = fileFailures.map { FileFailureInfo(it.transferIdHex, it.contactId, it.reason) },
     morePending = morePending,
+    restoreNotices = restoreNotices.map { RestoreNoticeInfo(it.contactId, it.restoredAtMs?.toLong(), it.msgIdHex) },
+    mediaRequests = mediaRequests.map { it.toApp() },
+    resendAsks = resendAsks.map { it.toApp() },
+    mediaUpdates = mediaUpdates.map { MediaUpdateInfo(it.contactId, it.msgIdHex, it.state.label()) },
 )
 
 private class RustLink(private val link: MeshLink) : CoreLink {
