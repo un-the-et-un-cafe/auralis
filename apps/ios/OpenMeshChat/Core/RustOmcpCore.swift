@@ -25,6 +25,9 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         case .FileTooLarge(let size, let max): return CoreError.fileTooLarge(size: size, max: max)
         case .UnknownContact: return CoreError.invalid("unknown contact")
         case .Protocol(let msg), .State(let msg): return CoreError.other(msg)
+        case .Storage(let msg): return CoreError.storageUnavailable(msg)
+        case .BackupTooNew(let v): return CoreError.other("backup format \(v) is newer than this app")
+        case .VerificationFailed: return CoreError.verificationFailed
         }
     }
 
@@ -33,7 +36,41 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     }
 
     static func contact(_ c: ContactInfo) -> Contact {
-        Contact(id: c.contactId, displayName: c.displayName, safetyNumber: c.safetyNumber, verified: c.verified)
+        Contact(id: c.contactId, displayName: c.displayName, safetyNumber: c.safetyNumber, verified: c.verified,
+                restoredBadge: c.restoredBadge, restoredAtMs: c.restoredAtMs.map(Int64.init),
+                restoredUnverified: c.restoredUnverified)
+    }
+
+    static func fileState(_ s: StoredFileState) -> FileAttachment.State {
+        switch s {
+        case .queued: return .queued
+        case .sending: return .sending
+        case .receiving: return .receiving
+        case .paused: return .paused
+        case .sent: return .sent
+        case .received: return .received
+        case .failed: return .failed
+        case .integrityFailed: return .integrityFailed
+        case .missing: return .missing
+        case .requested: return .requested
+        case .unavailable: return .unavailable
+        }
+    }
+
+    static func blob(_ b: OmcpFFI.ChatBackupBlob) -> HoplaKit.ChatBackupBlob {
+        HoplaKit.ChatBackupBlob(name: b.name, kind: Int(b.kind), seq: b.seq, blob: b.blob, deleteBelowSeq: b.deleteBelowSeq)
+    }
+
+    static func item(_ i: OmcpFFI.MediaBackupItem) -> HoplaKit.MediaBackupItem {
+        HoplaKit.MediaBackupItem(msgId: i.msgIdHex, hash: i.hashHex, mime: i.mime, localPath: i.localPath, blobName: i.blobName)
+    }
+
+    static func request(_ r: MediaRequestEvent) -> MediaRequestInfo {
+        MediaRequestInfo(contactId: r.contactId, msgId: r.msgIdHex, hash: r.hashHex, name: r.name, mime: r.mime, localPath: r.localPath, note: r.note)
+    }
+
+    static func device(_ d: DeviceInfo) -> DeviceKeyInfo {
+        DeviceKeyInfo(deviceKeyHex: d.deviceKeyHex, fingerprint: d.fingerprint, restoredAtMs: d.restoredAtMs.map(Int64.init))
     }
 
     static func spec(_ s: HoplaKit.BurnSpec) -> OmcpFFI.BurnSpec {
@@ -64,7 +101,13 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
                 ReceivedFileInfo(transferId: $0.transferIdHex, contactId: $0.contactId, name: $0.name, mime: $0.mime, bytes: $0.bytes)
             },
             fileFailures: o.fileFailures.map { FileFailureInfo(transferId: $0.transferIdHex, contactId: $0.contactId, reason: $0.reason) },
-            morePending: o.morePending)
+            morePending: o.morePending,
+            restoreNotices: o.restoreNotices.map {
+                RestoreNoticeInfo(contactId: $0.contactId, restoredAtMs: $0.restoredAtMs.map(Int64.init), msgId: $0.msgIdHex)
+            },
+            mediaRequests: o.mediaRequests.map(request),
+            resendAsks: o.resendAsks.map(request),
+            mediaUpdates: o.mediaUpdates.map { MediaUpdateInfo(contactId: $0.contactId, msgId: $0.msgIdHex, state: fileState($0.state)) })
     }
 
     public func generateRecoveryPhrase() throws -> String { try call { try OmcpFFI.generateRecoveryPhrase() } }
@@ -76,6 +119,110 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         self.node = node
         let i = node.identity()
         return Identity(peerIdHex: i.peerIdHex, displayName: i.displayName)
+    }
+
+    @discardableResult
+    public func open(phrase: String, displayName: String, dbPath: String, storageKey: Data) throws -> Identity {
+        let node = try call {
+            try OmcpNode.open(phrase: phrase, displayName: displayName, dbPath: dbPath, storageKey: storageKey)
+        }
+        self.node = node
+        let i = node.identity()
+        return Identity(peerIdHex: i.peerIdHex, displayName: i.displayName)
+    }
+
+    public func generateStorageKey() throws -> Data { try call { try OmcpFFI.generateStorageKey() } }
+
+    public func storedMessages(_ contactId: String) -> [StoredMessageInfo] {
+        ((try? node?.storedMessages(contactId: contactId)) ?? []).map(Self.stored)
+    }
+
+    public func setReceivedFilePath(_ transferId: String, path: String?) throws {
+        try call { try n().setReceivedFilePath(transferIdHex: transferId, localPath: path) }
+    }
+
+    public func restoreHistory(_ history: Data) throws { try call { try n().restoreHistory(history: history) } }
+
+    // MARK: chat backup, missing media, restore indicator
+
+    public func chatBackupDue(nowMs: Int64, onWifi: Bool, allowMobile: Bool) -> Bool {
+        (try? node?.chatBackupDue(nowMs: UInt64(nowMs), onWifi: onWifi, allowMobile: allowMobile)) ?? false
+    }
+    public func chatBackupNext(nowMs: Int64, forceSnapshot: Bool) throws -> HoplaKit.ChatBackupBlob? {
+        try call { try n().chatBackupNext(nowMs: UInt64(nowMs), forceSnapshot: forceSnapshot) }.map(Self.blob)
+    }
+    public func chatBackupCommit(seq: UInt64) throws { try call { try n().chatBackupCommit(seq: seq) } }
+    public func chatBackupRestore(_ blobs: [Data]) throws -> HoplaKit.ChatBackupSummary {
+        let s = try call { try n().chatBackupRestore(blobs: blobs) }
+        return HoplaKit.ChatBackupSummary(messages: Int(s.messages), mediaPlaceholders: Int(s.mediaPlaceholders))
+    }
+    public func mediaBackupSettings() -> MediaBackupPrefs {
+        guard let s = try? node?.mediaBackupSettings() else { return MediaBackupPrefs() }
+        return MediaBackupPrefs(enabled: s.enabled, photos: s.photos, videos: s.videos, voice: s.voice, files: s.files, mobileData: s.mobileData)
+    }
+    public func setMediaBackupSettings(_ p: MediaBackupPrefs) throws -> [String] {
+        try call { try n().setMediaBackupSettings(s: MediaBackupSettings(enabled: p.enabled, photos: p.photos, videos: p.videos,
+                                                                          voice: p.voice, files: p.files, mobileData: p.mobileData)) }
+    }
+    public func mediaBackupDue(nowMs: Int64, onWifi: Bool) -> Bool {
+        (try? node?.mediaBackupDue(nowMs: UInt64(nowMs), onWifi: onWifi)) ?? false
+    }
+    public func mediaBackupTodo() -> [HoplaKit.MediaBackupItem] { ((try? node?.mediaBackupTodo()) ?? []).map(Self.item) }
+    public func sealMediaBackup(hash: String, bytes: Data) throws -> HoplaKit.ChatBackupBlob {
+        Self.blob(try call { try n().sealMediaBackup(hashHex: hash, bytes: bytes) })
+    }
+    public func mediaBackupCommit(hash: String, nowMs: Int64) throws {
+        try call { try n().mediaBackupCommit(hashHex: hash, nowMs: UInt64(nowMs)) }
+    }
+    public func mediaPlaceholders() -> [HoplaKit.MediaBackupItem] { ((try? node?.mediaPlaceholders()) ?? []).map(Self.item) }
+    public func restoreMediaFromBackup(msgId: String, blob: Data) throws -> Data {
+        try call { try n().restoreMediaFromBackup(msgIdHex: msgId, blob: blob) }
+    }
+    public func requestMedia(_ msgId: String) throws { try call { try n().requestMedia(msgIdHex: msgId) } }
+    public func askToResend(_ msgId: String, note: String?) throws { try call { try n().askToResend(msgIdHex: msgId, note: note) } }
+    public func keptMediaSettings() -> KeptMediaPrefs {
+        (try? node?.keptMediaSettings()).flatMap { $0 }.map { KeptMediaPrefs(maxDays: Int($0.maxDays), maxBytes: Int64($0.maxBytes)) } ?? KeptMediaPrefs()
+    }
+    public func setKeptMediaSettings(_ p: KeptMediaPrefs, nowMs: Int64) throws -> Int {
+        Int(try call { try n().setKeptMediaSettings(s: OmcpFFI.KeptMediaSettings(maxDays: UInt32(p.maxDays), maxBytes: UInt64(p.maxBytes)), nowMs: UInt64(nowMs)) })
+    }
+    public func keptMediaUsage() -> HoplaKit.KeptMediaUsage {
+        (try? node?.keptMediaUsage()).flatMap { $0 }.map { HoplaKit.KeptMediaUsage(count: Int($0.count), bytes: Int64($0.bytes)) } ?? HoplaKit.KeptMediaUsage(count: 0, bytes: 0)
+    }
+    public func evictKeptMedia(nowMs: Int64) -> Int { Int((try? node?.evictKeptMedia(nowMs: UInt64(nowMs))).flatMap { $0 } ?? 0) }
+    public func answerMediaRequest(contactId: String, msgId: String, bytes: Data?) throws {
+        try call { try n().answerMediaRequest(contactId: contactId, msgIdHex: msgId, bytes: bytes) }
+    }
+    public func markRestored(nowMs: Int64) throws -> DeviceKeyInfo? {
+        Self.device(try call { try n().markRestored(nowMs: UInt64(nowMs)) })
+    }
+    public func deviceInfo() -> DeviceKeyInfo? { (try? node?.deviceInfo()).flatMap { $0 }.map(Self.device) }
+    public func verifyContactFromQr(_ payload: String) throws -> Contact {
+        Self.contact(try call { try n().verifyContactFromQr(payload: payload) })
+    }
+
+    static func stored(_ m: OmcpFFI.StoredMessage) -> StoredMessageInfo {
+        let status: ChatMessage.Status
+        switch m.status {
+        case .queued: status = .queued
+        case .sent: status = .sent
+        case .received: status = .received
+        case .system: status = .system
+        }
+        let burnState: ChatMessage.BurnState
+        switch m.burnState {
+        case .none: burnState = .none
+        case .unopened: burnState = .unopened
+        case .open: burnState = .open
+        case .opened: burnState = .opened
+        }
+        let file = m.file.map { f -> StoredFileInfo in
+            let st = fileState(f.state)
+            return StoredFileInfo(name: f.name, mime: f.mime, size: f.size, state: st, doneBytes: f.doneBytes, localPath: f.localPath)
+        }
+        return StoredMessageInfo(id: m.idHex, contactId: m.contactId, text: m.text, mine: m.mine, timeMs: Int64(m.timeMs),
+                                 status: status, mime: m.mime, burn: m.burn.map(spec), burnState: burnState,
+                                 burnAtMs: m.burnAtMs.map(Int64.init), file: file)
     }
 
     public func identity() -> Identity? {
@@ -96,7 +243,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     }
 
     public func restoreContact(_ c: Contact) throws {
-        try call { try n().restoreContact(contactId: c.id, displayName: c.displayName, verified: c.verified) }
+        try call { try n().restoreContactWithKey(contactId: c.id, displayName: c.displayName, verified: c.verified, dhHex: c.dhHex) }
     }
 
     public func contacts() -> [Contact] { (node?.contacts() ?? []).map(Self.contact) }
@@ -177,8 +324,8 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
 
     private static func restored(_ r: OmcpFFI.RestoredBackup) -> HoplaKit.RestoredBackup {
         HoplaKit.RestoredBackup(phrase: r.phrase, contacts: r.contacts.map {
-            Contact(id: $0.contactId, displayName: $0.displayName, safetyNumber: [], verified: $0.verified)
-        })
+            Contact(id: $0.contactId, displayName: $0.displayName, safetyNumber: [], verified: $0.verified, dhHex: $0.dhHex)
+        }, history: r.history)
     }
 
     public func openBackup(_ blob: Data, password: String) throws -> HoplaKit.RestoredBackup {

@@ -16,7 +16,8 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * SharedPreferences-backed store. The recovery phrase is sealed with an
  * AES-256-GCM key held in the Android Keystore (StrongBox when available).
- * TODO(M5+): Room for messages; encrypted backup (PROTOCOL §13.6 #5).
+ * The local message store's key ([storageKey]) is sealed the same way; the store
+ * itself (messages, chats, queue, burn state) is the Rust core's encrypted SQLite file.
  */
 class PrefsAppStore(context: Context) : AppStore {
     private val prefs = context.getSharedPreferences("omcp", Context.MODE_PRIVATE)
@@ -25,6 +26,14 @@ class PrefsAppStore(context: Context) : AppStore {
         get() = prefs.getString(K_PHRASE, null)?.let { runCatching { open(it) }.getOrNull() }
         set(v) {
             prefs.edit().apply { if (v == null) remove(K_PHRASE) else putString(K_PHRASE, seal(v)) }.apply()
+        }
+
+    override var storageKey: ByteArray?
+        get() = prefs.getString(K_STORAGE_KEY, null)?.let { s -> runCatching { Base64.decode(open(s), Base64.NO_WRAP) }.getOrNull() }
+        set(v) {
+            prefs.edit().apply {
+                if (v == null) remove(K_STORAGE_KEY) else putString(K_STORAGE_KEY, seal(Base64.encodeToString(v, Base64.NO_WRAP)))
+            }.commit()
         }
 
     override var displayName: String?
@@ -103,6 +112,19 @@ class PrefsAppStore(context: Context) : AppStore {
         get() = prefs.getLong("backup_deadline", 0)
         set(v) = prefs.edit().putLong("backup_deadline", v).apply()
 
+    // commit(): the lockout must survive the process being killed right after a wrong try.
+    override var restoreFailures: Int
+        get() = prefs.getInt("restore_failures", 0)
+        set(v) { prefs.edit().putInt("restore_failures", v).commit() }
+
+    override var restoreRound: Int
+        get() = prefs.getInt("restore_round", 0)
+        set(v) { prefs.edit().putInt("restore_round", v).commit() }
+
+    override var restoreLockedUntilMs: Long
+        get() = prefs.getLong("restore_locked_until", 0)
+        set(v) { prefs.edit().putLong("restore_locked_until", v).commit() }
+
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }
@@ -136,6 +158,7 @@ class PrefsAppStore(context: Context) : AppStore {
 
     private companion object {
         const val K_PHRASE = "phrase_sealed"
+        const val K_STORAGE_KEY = "storage_key_sealed"
         const val ALIAS = "omcp-identity-wrap"
     }
 }

@@ -12,6 +12,8 @@ data class ContactAddState(
     val scannedPayload: String? = null,
     /** Last scan was not an OMCP identity code (never open scanned URLs). */
     val notOmcp: Boolean = false,
+    /** RS2: the scanned code is not the contact's current device (e.g. a pre-restore QR). */
+    val qrStale: Boolean = false,
 )
 
 /** Scan → preview with safety number → Verify & chat / Chat without verifying (§5.20–§5.22). */
@@ -38,7 +40,12 @@ class ContactAddViewModel(private val repo: MeshRepository) : ViewModel() {
         val s = _state.value
         val payload = s.scannedPayload ?: return null
         if (s.preview?.mismatchWith != null) return null
-        val c = repo.addContact(payload, verified)
+        val c = try {
+            repo.addContact(payload, verified)
+        } catch (e: chat.omcp.app.core.VerificationFailedException) {
+            _state.value = ContactAddState(qrStale = true)
+            return null
+        }
         _state.value = ContactAddState()
         return c.id
     }

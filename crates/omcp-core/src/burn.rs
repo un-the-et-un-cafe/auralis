@@ -33,6 +33,12 @@ pub const INNER_TAG_NONE: u8 = 0x00;
 pub const INNER_TAG_BURN: u8 = 0x01;
 /// Control message type for `OPENED` (PROTOCOL §19.1).
 pub const CONTROL_OPENED: u8 = 0x30;
+/// Control: re-request a media item by locator + hash (PROTOCOL §7.1, v0.1.4).
+pub const CONTROL_MEDIA_REQUEST: u8 = 0x31;
+/// Control: "I no longer have this media item".
+pub const CONTROL_MEDIA_UNAVAILABLE: u8 = 0x32;
+/// Control: user-confirmed "Ask to resend" for a media item the partner lacks.
+pub const CONTROL_MEDIA_RESEND_ASK: u8 = 0x33;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BurnMode {
@@ -159,6 +165,72 @@ pub enum AppContent {
     FileMeta(Vec<u8>),
     /// File chunk body (opaque to this layer).
     FileChunk(Vec<u8>),
+    /// Media re-fetch controls (`0x31`/`0x32`/`0x33`), never with a burn header.
+    MediaControl(MediaControl),
+}
+
+/// Media re-fetch control. Wire: `type u8 | locator 16 | content_hash 32`, and for
+/// `0x33` (Ask to resend, v0.1.4b) an optional trailing UTF-8 note of at most
+/// [`MediaControl::MAX_NOTE`] bytes, so the request and its note are ONE message.
+/// Carries nothing else beyond what the original file offer already told the partner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaControl {
+    pub kind: u8,
+    pub locator: [u8; 16],
+    pub hash: [u8; 32],
+    /// Only on `CONTROL_MEDIA_RESEND_ASK`.
+    pub note: Option<String>,
+}
+
+impl MediaControl {
+    pub const WIRE_LEN: usize = 49;
+    pub const MAX_NOTE: usize = 280;
+    pub fn new(kind: u8, locator: [u8; 16], hash: [u8; 32]) -> Self {
+        Self {
+            kind,
+            locator,
+            hash,
+            note: None,
+        }
+    }
+    pub fn encode(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(Self::WIRE_LEN);
+        b.push(self.kind);
+        b.extend_from_slice(&self.locator);
+        b.extend_from_slice(&self.hash);
+        if self.kind == CONTROL_MEDIA_RESEND_ASK {
+            if let Some(n) = self.note.as_deref().filter(|n| !n.is_empty()) {
+                b.extend_from_slice(n.as_bytes());
+            }
+        }
+        b
+    }
+    pub fn decode(b: &[u8]) -> Result<Self> {
+        let ok_len = match b.first() {
+            Some(&CONTROL_MEDIA_RESEND_ASK) => {
+                (Self::WIRE_LEN..=Self::WIRE_LEN + Self::MAX_NOTE).contains(&b.len())
+            }
+            Some(&(CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE)) => b.len() == Self::WIRE_LEN,
+            _ => false,
+        };
+        if !ok_len {
+            return Err(OmcpError::Burn("media control"));
+        }
+        let note = if b.len() > Self::WIRE_LEN {
+            Some(
+                String::from_utf8(b[Self::WIRE_LEN..].to_vec())
+                    .map_err(|_| OmcpError::Burn("note utf8"))?,
+            )
+        } else {
+            None
+        };
+        Ok(Self {
+            kind: b[0],
+            locator: b[1..17].try_into().expect("len"),
+            hash: b[17..49].try_into().expect("len"),
+            note,
+        })
+    }
 }
 
 /// `InnerV1` plaintext for an application message: `tag [| burn] | inner_ct u8 | body`.
@@ -182,6 +254,12 @@ pub fn encode_app(burn: Option<&BurnHeader>, content: &AppContent) -> Result<Vec
                 return Err(OmcpError::Burn("control messages can't burn"));
             }
             body.extend_from_slice(&r.encode());
+        }
+        AppContent::MediaControl(c) => {
+            if burn.is_some() {
+                return Err(OmcpError::Burn("control messages can't burn"));
+            }
+            body.extend_from_slice(&c.encode());
         }
         AppContent::FileMeta(b) | AppContent::FileChunk(b) => {
             if burn.is_some() {
@@ -219,6 +297,11 @@ pub fn decode_app(p: &[u8]) -> Result<(Option<BurnHeader>, AppContent)> {
         INNER_CT_FILE_META if burn.is_none() => AppContent::FileMeta(rest.to_vec()),
         INNER_CT_FILE_CHUNK if burn.is_none() => AppContent::FileChunk(rest.to_vec()),
         CONTROL_OPENED if burn.is_none() => AppContent::Opened(OpenedReceipt::decode(body)?),
+        CONTROL_MEDIA_REQUEST | CONTROL_MEDIA_UNAVAILABLE | CONTROL_MEDIA_RESEND_ASK
+            if burn.is_none() =>
+        {
+            AppContent::MediaControl(MediaControl::decode(body)?)
+        }
         _ => return Err(OmcpError::Burn("inner content type")),
     };
     Ok((burn, c))
@@ -297,6 +380,28 @@ pub enum Opened {
     },
     /// Already opened or burned: show the "🔥 opened" placeholder.
     Placeholder,
+}
+
+/// Persistable copy of one live [`BurnStore`] entry (see [`crate::store`]).
+/// `key` is the per-message key; dropping the snapshot zeroizes it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BurnSnapshot {
+    pub msg_id: [u8; 16],
+    pub header: BurnHeader,
+    pub key: Zeroizing<[u8; 32]>,
+    pub sealed: Vec<u8>,
+    pub expires_at_ms: u64,
+    pub burn_at_ms: Option<u64>,
+    pub opened: bool,
+}
+
+impl std::fmt::Debug for BurnSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BurnSnapshot")
+            .field("msg_id", &self.msg_id)
+            .field("opened", &self.opened)
+            .finish_non_exhaustive()
+    }
 }
 
 struct Entry {
@@ -435,6 +540,40 @@ impl BurnStore {
             e.sealed.zeroize();
             self.burned.insert(*msg_id);
         }
+    }
+
+    /// Copy of a live entry for the encrypted local store (None once burned).
+    pub fn snapshot(&self, msg_id: &[u8; 16]) -> Option<BurnSnapshot> {
+        self.live.get(msg_id).map(|e| BurnSnapshot {
+            msg_id: *msg_id,
+            header: e.header,
+            key: e.key.clone(),
+            sealed: e.sealed.clone(),
+            expires_at_ms: e.expires_at_ms,
+            burn_at_ms: e.burn_at_ms,
+            opened: e.opened,
+        })
+    }
+
+    /// Re-insert an entry loaded from the local store (after an app restart).
+    pub fn restore(&mut self, s: BurnSnapshot) {
+        self.burned.remove(&s.msg_id);
+        self.live.insert(
+            s.msg_id,
+            Entry {
+                header: s.header,
+                key: s.key,
+                sealed: s.sealed,
+                expires_at_ms: s.expires_at_ms,
+                burn_at_ms: s.burn_at_ms,
+                opened: s.opened,
+            },
+        );
+    }
+
+    /// Ids of all live entries.
+    pub fn live_ids(&self) -> Vec<[u8; 16]> {
+        self.live.keys().copied().collect()
     }
 
     pub fn is_burned(&self, msg_id: &[u8; 16]) -> bool {

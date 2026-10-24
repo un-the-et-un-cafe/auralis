@@ -24,7 +24,16 @@ data class FileAttachment(
     /** Received files: where the verified plaintext was saved (app-private storage). */
     val localPath: String? = null,
 ) {
-    enum class State { Queued, Sending, Receiving, Paused, Sent, Received, Failed, IntegrityFailed }
+    enum class State {
+        Queued, Sending, Receiving, Paused, Sent, Received, Failed, IntegrityFailed,
+        /** Restored from the chat backup without its bytes: missing-media placeholder (§5.92). */
+        Missing,
+        /** Re-requested from the partner. */
+        Requested,
+        /** The partner no longer has it: "Ask to resend". */
+        Unavailable,
+    }
+    val isPlaceholder get() = state == State.Missing || state == State.Requested || state == State.Unavailable
     val fraction: Float get() = if (sizeBytes <= 0) (if (state == State.Received || state == State.Sent) 1f else 0f) else doneBytes.toFloat() / sizeBytes
 }
 
@@ -47,7 +56,14 @@ data class ChatMessage(
     /** When the opened content is deleted (timer); null = on close. */
     val burnAtMs: Long? = null,
 ) {
-    enum class Status { Queued, Sent, Received }
+    enum class Status {
+        Queued, Sent, Received,
+        /** In-chat system notice; [text] = `restored:<ms>` (RS1, design §5.95). */
+        System,
+    }
+
+    /** RS1 notice: when the contact restored (0 = unknown). */
+    val restoredAtMs: Long? get() = if (status == Status.System && text.startsWith("restored:")) text.removePrefix("restored:").toLongOrNull() else null
     enum class BurnState { None, Unopened, Open, Opened }
 
     val isViewOnceMedia get() = burn != null && file != null && (file.mime.startsWith("image/") || file.mime.startsWith("video/"))
@@ -69,11 +85,16 @@ fun interface MeshKick {
 
 /**
  * Single source of truth for identity, contacts, messages and path status.
- * Messages are in-memory for the beta (TODO: Room persistence).
+ *
+ * With [dbPath] set, the Rust core keeps contacts, verification state, chats, messages,
+ * file metadata, the outbound queue and burn state in its encrypted local store at that
+ * path (key: [AppStore.storageKey], Keystore-sealed) and they are reloaded on [restore].
+ * Without it (tests, previews) everything is in memory.
  */
 class MeshRepository(
     val core: OmcpCore,
     private val store: AppStore,
+    private val dbPath: String? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
@@ -89,20 +110,34 @@ class MeshRepository(
 
     @Volatile var kick: MeshKick? = null
     @Volatile var fileSink: FileSink? = null
+    /** Encrypted chat backup (Drive appDataFolder); null when not configured. */
+    @Volatile var chatBackup: chat.omcp.app.backup.ChatBackupSync? = null
+
+    /** Partners asking us to resend media we no longer have (shown as a prompt). */
+    private val _resendAsks = MutableStateFlow<List<chat.omcp.app.core.MediaRequestInfo>>(emptyList())
+    val resendAsks: StateFlow<List<chat.omcp.app.core.MediaRequestInfo>> = _resendAsks.asStateFlow()
+
+    /** Set after a restore on this phone: banner "You restored this account…" (§5.95/§5.98). */
+    private val _restoredAtMs = MutableStateFlow<Long?>(null)
+    val restoredAtMs: StateFlow<Long?> = _restoredAtMs.asStateFlow()
 
     /** Load an existing identity from the store; returns true if onboarded. */
     fun restore(): Boolean {
         val phrase = store.recoveryPhrase ?: return false
-        core.load(phrase, store.displayName ?: "Me")
+        loadCore(phrase, store.displayName ?: "Me")
         store.contacts.forEach { core.restoreContact(it) }
+        // Contacts used to live in plain SharedPreferences: once in the encrypted store, drop them.
+        if (dbPath != null && store.contacts.isNotEmpty()) store.contacts = emptyList()
+        loadMessages()
         refresh()
+        _restoredAtMs.value = runCatching { core.deviceInfo()?.restoredAtMs }.getOrNull()
         _onboarded.value = true
         return true
     }
 
     /** Create or restore identity from [phrase] and persist it (sealed). */
     fun saveIdentity(phrase: String, name: String) {
-        core.load(phrase, name)
+        loadCore(phrase, name)
         store.recoveryPhrase = phrase
         store.displayName = name
         refresh()
@@ -110,10 +145,126 @@ class MeshRepository(
 
     /** Restore identity + contacts + verification state from a decrypted backup (O3). */
     fun restoreFromBackup(r: chat.omcp.app.core.RestoredBackup, name: String) {
-        saveIdentity(r.phrase, name)
+        saveIdentity(r.phrase, r.displayName?.takeIf { it.isNotBlank() } ?: name)
         r.contacts.forEach { core.restoreContact(it) }
+        // Legacy blobs only: history now lives in the separate chat backup.
+        r.history?.let { core.restoreHistory(it) }
+        markRestored()
         store.backupMethods = store.backupMethods + BACKUP_DRIVE
         persistContacts()
+        loadMessages()
+    }
+
+    /** 24-word restore on a new install (no cloud blob): identity + new device key (RS1). */
+    fun restoreFromPhrase(phrase: String, name: String) {
+        saveIdentity(phrase, name)
+        markRestored()
+        refresh()
+    }
+
+    /** RS1: this install gets a new device key stamped `restored_at`; contacts are told on the next link. */
+    private fun markRestored() {
+        _restoredAtMs.value = runCatching { core.markRestored(clock())?.restoredAtMs }.getOrNull()
+    }
+
+    /**
+     * Restore chat text (and backed-up media) from the encrypted chat backup. Blocking (network):
+     * call from the restore job. Media not in the backup stay placeholders that refill from partners.
+     */
+    fun restoreChats(): chat.omcp.app.backup.ChatRestoreResult? {
+        val sync = chatBackup ?: return null
+        val sink = fileSink
+        val r = sync.restore { msgId, mime, bytes ->
+            sink?.save(chat.omcp.app.core.ReceivedFileInfo(msgId, "", "media", mime, bytes))
+        }
+        loadMessages()
+        refresh()
+        return r
+    }
+
+
+    // ---- missing media (CB3) and restore notices (RS1) ----
+
+    /** From the link: a contact is on a new device; the core already stored the system notice. */
+    fun onRestoreNotice(n: chat.omcp.app.core.RestoreNoticeInfo) {
+        append(ChatMessage(n.msgId, n.contactId, "restored:${n.restoredAtMs ?: 0}", false, clock(), ChatMessage.Status.System))
+        refresh()
+    }
+
+    /** From the link: the partner asks for media again; answer with our saved copy (or "no longer have it"). */
+    fun onMediaRequest(r: chat.omcp.app.core.MediaRequestInfo) {
+        val bytes = r.localPath?.let { p -> runCatching { java.io.File(p).readBytes() }.getOrNull() }
+        runCatching { core.answerMediaRequest(r.contactId, r.msgId, bytes) }
+        kick?.kick(r.contactId)
+    }
+
+    fun onResendAsk(r: chat.omcp.app.core.MediaRequestInfo) {
+        _resendAsks.update { list -> list.filterNot { it.msgId == r.msgId } + r }
+    }
+
+    fun dismissResendAsk(msgId: String) = _resendAsks.update { list -> list.filterNot { it.msgId == msgId } }
+
+    fun onMediaUpdate(u: chat.omcp.app.core.MediaUpdateInfo) {
+        val m = find(u.contactId, u.msgId) ?: return
+        val f = m.file ?: return
+        if (!f.isPlaceholder) return
+        replace(m.copy(file = f.copy(state = FileAttachment.State.valueOf(u.state))))
+    }
+
+    /** Tap on a placeholder: request again now (a no-op while already requested). */
+    fun requestMedia(contactId: String, msgId: String) {
+        val m = find(contactId, msgId) ?: return
+        val f = m.file ?: return
+        if (f.state != FileAttachment.State.Missing) return
+        runCatching { core.requestMedia(msgId) }
+        replace(m.copy(file = f.copy(state = FileAttachment.State.Requested)))
+        kick?.kick(contactId)
+    }
+
+    /** "Ask to resend", after the confirm sheet: ONE request carrying the optional note. */
+    fun askToResend(contactId: String, msgId: String, note: String?) {
+        runCatching { core.askToResend(msgId, note?.trim()?.takeIf { it.isNotEmpty() }) }
+        kick?.kick(contactId)
+    }
+
+    /** How many media placeholders wait in a chat (chat banner, §5.92). */
+    fun waitingMedia(contactId: String): Int =
+        _messages.value[contactId].orEmpty().count { it.file?.isPlaceholder == true }
+
+    private fun loadCore(phrase: String, name: String) {
+        val path = dbPath ?: run {
+            core.load(phrase, name)
+            return
+        }
+        val key = store.storageKey ?: core.generateStorageKey().also { store.storageKey = it }
+        try {
+            core.open(phrase, name, path, key)
+        } catch (e: chat.omcp.app.core.StorageUnavailableException) {
+            // Unreadable with this key (Keystore reset, other identity, newer app): its data is
+            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
+            java.io.File(path).renameTo(java.io.File("$path.unreadable-${clock()}"))
+            java.io.File("$path-journal").delete()
+            core.open(phrase, name, path, key)
+        }
+        // Keep sent media: age limit is applied on start too (size limit on every insert).
+        runCatching { core.evictKeptMedia(clock()) }
+    }
+
+    /** Reload chats from the core's encrypted store (after a restart or a restore). */
+    private fun loadMessages() {
+        _messages.value = core.contacts()
+            .associate { c -> c.id to core.storedMessages(c.id).map(::toChatMessage) }
+            .filterValues { it.isNotEmpty() }
+    }
+
+    private fun toChatMessage(m: chat.omcp.app.core.StoredMessageInfo): ChatMessage {
+        val file = m.file?.let {
+            FileAttachment(it.name, it.size, it.mime, FileAttachment.State.valueOf(it.state), it.doneBytes, it.localPath)
+        } ?: m.mime?.let { FileAttachment(if (it.startsWith("video/")) "video" else "photo", 0, it, FileAttachment.State.Received) }
+        return ChatMessage(
+            m.id, m.contactId, m.text, m.mine, m.timeMs, ChatMessage.Status.valueOf(m.status), file,
+            burn = m.burn, burnState = ChatMessage.BurnState.valueOf(m.burnState), burnAtMs = m.burnAtMs,
+        )
     }
 
     /** Backup requirement (REQUIREMENTS "Onboarding & recovery backup", O6). */
@@ -137,9 +288,17 @@ class MeshRepository(
         _onboarded.value = true
     }
 
+    /** Throws [chat.omcp.app.core.VerificationFailedException] when re-verifying with a stale QR (RS2). */
     fun addContact(qr: String, verified: Boolean): Contact {
+        val known = runCatching { core.previewContact(qr).alreadyKnown }.getOrDefault(false)
+        if (known && verified) {
+            // Re-verify an existing contact in person: must be identity + *current* device key.
+            val c = core.verifyContactFromQr(qr)
+            persistContacts()
+            return c
+        }
         val c = core.addContactFromQr(qr)
-        if (verified) core.setVerified(c.id, true)
+        if (verified) core.verifyContactFromQr(qr)
         persistContacts()
         return core.contacts().first { it.id == c.id }
     }
@@ -235,6 +394,7 @@ class MeshRepository(
     /** From the link: a file arrived and its BLAKE3 hash matched (checked in Rust). */
     fun onFileReceived(r: chat.omcp.app.core.ReceivedFileInfo) {
         val path = fileSink?.save(r)
+        if (fileSink != null) runCatching { core.setReceivedFilePath(r.transferId, path) }
         val f = FileAttachment(
             r.name, r.bytes.size.toLong(), r.mime,
             if (path != null || fileSink == null) FileAttachment.State.Received else FileAttachment.State.Failed,
@@ -359,7 +519,8 @@ class MeshRepository(
     fun contact(id: String) = _contacts.value.firstOrNull { it.id == id }
 
     private fun persistContacts() {
-        store.contacts = core.contacts()
+        // With a local store the Rust core persists contacts (encrypted); prefs only without one.
+        if (dbPath == null) store.contacts = core.contacts()
         refresh()
     }
 

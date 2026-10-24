@@ -56,6 +56,13 @@ struct VerifiedBadge: View {
         if contact.showsVerifiedBadge {
             Image(systemName: "checkmark.seal.fill").foregroundStyle(c.ok).font(.caption)
                 .accessibilityLabel(L("verified_contact"))
+        } else if contact.restoredUnverified {
+            // RS2 (§5.98): neutral pill with a sync glyph until re-verified in person.
+            Label(L("restored_pill"), systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption2).foregroundStyle(c.ink2)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(c.surface2).clipShape(Capsule())
+                .overlay(Capsule().stroke(c.line))
         }
     }
 }
@@ -67,6 +74,7 @@ struct ChatRowView: View {
 
     private var preview: String {
         guard let last else { return "" }
+        if last.status == .system { return contact.restoredUnverified ? L("restored_preview", contact.displayName) : "" }
         if last.burn != nil { return L("burn_preview") }
         if let f = last.file { return f.name }
         return last.text
@@ -105,6 +113,7 @@ struct ChatThreadView: View {
         let queued = model.core.queuedFor(contactId)
         VStack(spacing: 0) {
             PathBanner(kind: queued > 0 ? .queued : .mesh, text: L(queued > 0 ? "path_queued" : "path_mesh"))
+            restoreBanners(contact: contact, msgs: msgs)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     ForEach(msgs) { m in bubble(m) }
@@ -196,7 +205,83 @@ struct ChatThreadView: View {
         viewing = nil
     }
 
+    @State private var hideSelfBanner = false
+    @State private var hideMediaBanner = false
+    @State private var resendFor: ChatMessage?
+    @State private var resendText = ""
+    @State private var resendSent: Set<String> = []
+
+    @ViewBuilder private func restoreBanners(contact: Contact?, msgs: [ChatMessage]) -> some View {
+        let peer = contact?.displayName ?? ""
+        if model.repo.restoredAtMs != nil && !hideSelfBanner {
+            Text(L("restored_self_banner")).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(c.surface2).onTapGesture { hideSelfBanner = true }
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+        let waiting = msgs.filter { $0.file?.isPlaceholder == true }.count
+        if waiting > 0 && !hideMediaBanner {
+            Text(L("media_banner", waiting, peer)).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(c.surface2).onTapGesture { hideMediaBanner = true }
+        }
+        ForEach(model.repo.resendAsks.filter { $0.contactId == contactId }, id: \.msgId) { a in
+            Text(a.note.map { L("media_resend_asked_note", peer, a.name, $0) } ?? L("media_resend_asked", peer, a.name)).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(c.surface2).onTapGesture { model.repo.dismissResendAsk(a.msgId) }
+        }
+    }
+
+    /// RS1 notice (§5.95/§5.98): centred, neutral; tap → Security centre to verify by QR.
+    @ViewBuilder private func systemNotice(_ m: ChatMessage, peer: String) -> some View {
+        if let at = m.restoredAtMs {
+            let date = Date(timeIntervalSince1970: Double(at > 0 ? at : m.timeMs) / 1000).formatted(date: .abbreviated, time: .omitted)
+            NavigationLink { ChatInfoView(contactId: contactId) } label: {
+                VStack(spacing: 2) {
+                    Text(L("restored_notice", peer, date)).font(.caption).foregroundStyle(c.ink2)
+                    Text(L("restored_notice_link")).font(.caption.bold()).foregroundStyle(c.brand)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8).background(c.surface2).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    /// Missing-media placeholder (§5.92): no red, "NOT RESTORED YET", Request again / Ask to resend.
+    @ViewBuilder private func placeholder(_ m: ChatMessage, _ f: FileAttachment, peer: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L("media_not_restored")).font(.caption2.bold()).foregroundStyle(c.ink2)
+            Text(f.name).font(.subheadline.bold())
+            Text(m.id.isEmpty ? "" : (resendSent.contains(m.id) ? L("media_request_sent", peer)
+                 : f.state == .requested ? L("media_requested")
+                 : f.state == .unavailable ? L("media_gone", peer) : L("media_waiting", peer)))
+                .font(.caption).foregroundStyle(c.ink2)
+            if !resendSent.contains(m.id) {
+                if f.state == .missing {
+                    Button(L("media_request_again")) { model.repo.requestMedia(contactId, msgId: m.id) }.font(.caption.bold())
+                } else if f.state == .unavailable {
+                    Button(L("media_ask_resend")) { resendText = ""; resendFor = m }.font(.caption.bold())
+                }
+            }
+        }
+        .padding(12).background(c.surface2).clipShape(RoundedRectangle(cornerRadius: 14))
+        .alert(L("media_resend_title", peer), isPresented: Binding(get: { resendFor?.id == m.id }, set: { if !$0 { resendFor = nil } })) {
+            TextField(L("media_resend_label"), text: $resendText)
+            Button(L("media_resend_send")) {
+                try? model.repo.askToResend(contactId, msgId: m.id, note: resendText)
+                resendSent.insert(m.id); resendFor = nil
+            }
+            Button(L("cancel_action"), role: .cancel) { resendFor = nil }
+        } message: { Text(L("media_resend_note")) }
+    }
+
     @ViewBuilder private func bubble(_ m: ChatMessage) -> some View {
+        let peer = model.repo.contact(contactId)?.displayName ?? ""
+        if m.status == .system { systemNotice(m, peer: peer) }
+        else if let f = m.file, f.isPlaceholder {
+            placeholder(m, f, peer: peer).frame(maxWidth: .infinity, alignment: m.mine ? .trailing : .leading)
+        }
+        else { regularBubble(m) }
+    }
+
+    @ViewBuilder private func regularBubble(_ m: ChatMessage) -> some View {
         VStack(alignment: m.mine ? .trailing : .leading, spacing: 4) {
             Group {
                 if m.burn != nil { burnBubble(m) }
@@ -261,6 +346,7 @@ struct FileBubble: View {
         case .received: return L("file_state_received", total)
         case .failed: return L("file_state_failed")
         case .integrityFailed: return L("file_state_integrity", peerName)
+        case .missing, .requested, .unavailable: return L("media_waiting", peerName)
         }
     }
 

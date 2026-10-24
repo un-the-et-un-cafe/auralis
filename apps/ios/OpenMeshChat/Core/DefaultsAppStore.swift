@@ -7,6 +7,7 @@ import Security
 final class DefaultsAppStore: AppStore {
     private let d: UserDefaults
     private let phraseAccount = "omcp.recoveryPhrase"
+    private let storageKeyAccount = "omcp.storageKey"
     init(_ d: UserDefaults = .standard) { self.d = d }
 
     var recoveryPhrase: String? {
@@ -14,6 +15,17 @@ final class DefaultsAppStore: AppStore {
         set {
             if let v = newValue { Keychain.write(Data(v.utf8), account: phraseAccount, synchronizable: false) } else {
                 Keychain.delete(account: phraseAccount, synchronizable: false)
+            }
+        }
+    }
+
+    /// Local-store key: Keychain, AfterFirstUnlockThisDeviceOnly (BLE background needs it
+    /// after first unlock), never synced and never in device backups.
+    var storageKey: Data? {
+        get { Keychain.read(account: storageKeyAccount) }
+        set {
+            if let v = newValue { Keychain.write(v, account: storageKeyAccount, synchronizable: false) } else {
+                Keychain.delete(account: storageKeyAccount, synchronizable: false)
             }
         }
     }

@@ -194,13 +194,19 @@ fn backup_roundtrip_restores_identity_contacts_and_verification() {
     ));
     let r = open_backup_with_password(blob, pw).unwrap();
     assert_eq!(r.phrase, phrase);
+    assert_eq!(r.display_name.as_deref(), Some("Alice"));
     let a2 = OmcpNode::from_phrase(r.phrase, "Alice".into()).unwrap();
     assert_eq!(a2.identity().peer_id_hex, a.identity().peer_id_hex);
     for k in r.contacts {
         a2.restore_contact(k.contact_id, k.display_name, k.verified)
             .unwrap();
     }
-    assert_eq!(a2.contacts(), a.contacts());
+    let key = |v: Vec<ContactInfo>| {
+        v.into_iter()
+            .map(|c| (c.contact_id, c.display_name, c.verified))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(key(a2.contacts()), key(a.contacts()));
 }
 
 // ---- burn after read end to end (PROTOCOL §19.1) ----
@@ -481,4 +487,1099 @@ fn interrupted_file_transfer_completes_on_reconnect() {
     assert!(fails.is_empty());
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].bytes, data);
+}
+
+// ---- encrypted local store: survives a restart ----
+
+const SKEY: [u8; 32] = [0x5c; 32];
+
+fn open_node(phrase: &str, name: &str, dir: &std::path::Path) -> Arc<OmcpNode> {
+    OmcpNode::open(
+        phrase.into(),
+        name.into(),
+        dir.join("omcp.db").to_string_lossy().into_owned(),
+        SKEY.to_vec(),
+    )
+    .unwrap()
+}
+
+fn disk_bytes(dir: &std::path::Path) -> Vec<u8> {
+    let mut all = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap() {
+        all.extend(std::fs::read(e.unwrap().path()).unwrap());
+    }
+    all
+}
+
+fn has(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn contacts_chats_messages_and_queue_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let pa = generate_recovery_phrase().unwrap();
+    let b = node("Bob");
+    let bob_id;
+    {
+        let a = open_node(&pa, "Alice", dir.path());
+        b.add_contact_from_qr(a.qr_payload()).unwrap();
+        let cb = a.add_contact_from_qr(b.qr_payload()).unwrap();
+        bob_id = cb.contact_id.clone();
+        a.set_verified(bob_id.clone(), true).unwrap();
+        // One message exchanged now, one left in the offline queue.
+        let la = a.open_initiator_link(bob_id.clone()).unwrap();
+        let lb = b.open_responder_link().unwrap();
+        pump(&la, &lb, la.start().unwrap());
+        let got = pump(
+            &lb,
+            &la,
+            lb.send_text("hello Alice, from Bob".into()).unwrap(),
+        );
+        assert_eq!(got[0].text, "hello Alice, from Bob");
+        la.shutdown();
+        a.queue_text(bob_id.clone(), "queued while offline".into())
+            .unwrap();
+        assert_eq!(a.queued_for(bob_id.clone()), 1);
+    }
+    let raw = disk_bytes(dir.path());
+    assert!(!has(&raw, b"queued while offline"));
+    assert!(!has(&raw, b"hello Alice"));
+    assert!(!has(&raw, b"Bob"));
+
+    // "Restart": a fresh node over the same file and key.
+    let a = open_node(&pa, "Alice", dir.path());
+    let c = a.contacts();
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].display_name, "Bob");
+    assert!(c[0].verified);
+    assert_eq!(a.chats().unwrap()[0].contact_id, bob_id);
+    let ms = a.stored_messages(bob_id.clone()).unwrap();
+    let texts: Vec<_> = ms
+        .iter()
+        .map(|m| (m.text.as_str(), m.mine, m.status))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            ("hello Alice, from Bob", false, MessageStatus::Received),
+            ("queued while offline", true, MessageStatus::Queued),
+        ]
+    );
+    assert_eq!(a.queued_for(bob_id.clone()), 1);
+
+    // The restored queue is delivered on the next link and marked sent.
+    let la = a.open_initiator_link(bob_id.clone()).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let got = pump(&la, &lb, la.start().unwrap());
+    assert_eq!(got[0].text, "queued while offline");
+    assert_eq!(a.queued_for(bob_id.clone()), 0);
+    assert_eq!(
+        a.stored_messages(bob_id.clone()).unwrap()[1].status,
+        MessageStatus::Sent
+    );
+    drop((la, lb, a));
+    let a = open_node(&pa, "Alice", dir.path());
+    assert_eq!(a.queued_for(bob_id), 0);
+}
+
+#[test]
+fn wrong_storage_key_and_other_identity_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let pa = generate_recovery_phrase().unwrap();
+    drop(open_node(&pa, "A", dir.path()));
+    let path = dir.path().join("omcp.db").to_string_lossy().into_owned();
+    assert!(matches!(
+        OmcpNode::open(pa.clone(), "A".into(), path.clone(), vec![1; 32]),
+        Err(FfiError::Storage { .. })
+    ));
+    assert!(matches!(
+        OmcpNode::open(pa, "A".into(), path.clone(), vec![1; 31]),
+        Err(FfiError::Invalid { .. })
+    ));
+    let other = generate_recovery_phrase().unwrap();
+    assert!(matches!(
+        OmcpNode::open(other, "B".into(), path, SKEY.to_vec()),
+        Err(FfiError::Storage { .. })
+    ));
+    assert_eq!(storage_schema_version(), 2);
+    assert_eq!(generate_storage_key().unwrap().len(), 32);
+}
+
+/// PROTOCOL §19.1 / REQUIREMENTS B1: an unopened burn message survives a
+/// restart (and opens exactly once); once burned, neither it nor its key can be
+/// recovered from disk, and it doesn't come back after another restart.
+#[test]
+fn burn_survives_restart_until_burned_then_is_unrecoverable() {
+    const SECRET: &str = "burn me: the spare key is under the blue flowerpot";
+    let dir = tempfile::tempdir().unwrap();
+    let pb = generate_recovery_phrase().unwrap();
+    let a = node("Alice");
+    let (alice_id, msg_id);
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        alice_id = b.add_contact_from_qr(a.qr_payload()).unwrap().contact_id;
+        let cb = a.add_contact_from_qr(b.qr_payload()).unwrap();
+        msg_id = a
+            .queue_message(
+                cb.contact_id.clone(),
+                SECRET.into(),
+                Some(spec(BurnMode::Timer, 10, core_burn::UNREAD_TTL_7D)),
+            )
+            .unwrap();
+        let la = a.open_initiator_link(cb.contact_id).unwrap();
+        let lb = b.open_responder_link().unwrap();
+        let (got, _) = pump_all(&la, &lb, la.start().unwrap());
+        assert_eq!(got[0].text, "");
+        assert!(got[0].burn.is_some());
+        lb.shutdown();
+    }
+    assert!(!has(&disk_bytes(dir.path()), SECRET.as_bytes()));
+
+    let t0 = now_ms();
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        assert!(b.burn_is_live(msg_id.clone()));
+        let m = &b.stored_messages(alice_id.clone()).unwrap()[0];
+        assert_eq!(
+            (m.text.as_str(), m.burn_state),
+            ("", StoredBurnState::Unopened)
+        );
+        let c = b.open_burn(msg_id.clone(), t0).unwrap().unwrap();
+        assert_eq!(c.text, SECRET);
+        assert_eq!(c.burn_at_ms, Some(t0 + 10_000));
+    }
+    // Restart while open: content is never handed out a second time.
+    {
+        let b = open_node(&pb, "Bob", dir.path());
+        assert_eq!(b.open_burn(msg_id.clone(), t0 + 1).unwrap(), None);
+        assert_eq!(
+            b.stored_messages(alice_id.clone()).unwrap()[0].burn_state,
+            StoredBurnState::Open
+        );
+        // Control messages (the OPENED receipt) aren't user-visible queue items.
+        assert_eq!(b.path_status().queued_count, 0);
+        assert_eq!(b.tick_burn(t0 + 10_000), vec![msg_id.clone()]);
+        assert!(!b.burn_is_live(msg_id.clone()));
+        assert!(b.stored_messages(alice_id.clone()).unwrap().is_empty());
+    }
+    let b = open_node(&pb, "Bob", dir.path());
+    assert!(!b.burn_is_live(msg_id.clone()));
+    assert_eq!(b.open_burn(msg_id.clone(), t0 + 20_000).unwrap(), None);
+    assert!(b.stored_messages(alice_id).unwrap().is_empty());
+    drop(b);
+    assert!(!has(&disk_bytes(dir.path()), SECRET.as_bytes()));
+}
+
+#[test]
+fn identity_backup_no_longer_carries_history() {
+    // v0.1.4: history moved to the chat backup (see `chatbackup` tests); the
+    // Argon2id identity backup is identity + contacts + name only.
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    pump(
+        &la,
+        &lb,
+        la.send_text("not in the identity backup".into()).unwrap(),
+    );
+    let key = generate_backup_key().unwrap();
+    let blob = a
+        .create_backup_with_key(key.clone(), "d".into(), 1)
+        .unwrap();
+    let r = open_backup_with_key(blob, key).unwrap();
+    assert!(r.history.is_none());
+    // Old blobs that still carry `history` keep restoring through `restore_history`.
+    let legacy = a.inner.lock().db().export_history().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = open_node(&r.phrase, "Alice", dir.path());
+    for k in &r.contacts {
+        a2.restore_contact(k.contact_id.clone(), k.display_name.clone(), k.verified)
+            .unwrap();
+    }
+    a2.restore_history(legacy.to_vec()).unwrap();
+    let bob = a.contacts()[0].contact_id.clone();
+    assert_eq!(
+        a2.stored_messages(bob).unwrap()[0].text,
+        "not in the identity backup"
+    );
+    drop(b);
+}
+
+#[test]
+fn outgoing_file_and_received_file_reference_survive_restart() {
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let (pa, pb) = (
+        generate_recovery_phrase().unwrap(),
+        generate_recovery_phrase().unwrap(),
+    );
+    let data: Vec<u8> = (0..(2 * FILE_CHUNK_BYTES + 7)).map(|i| i as u8).collect();
+    let (bob, alice, tid);
+    {
+        let a = open_node(&pa, "Alice", dir_a.path());
+        let b = open_node(&pb, "Bob", dir_b.path());
+        alice = b.add_contact_from_qr(a.qr_payload()).unwrap().contact_id;
+        bob = a.add_contact_from_qr(b.qr_payload()).unwrap().contact_id;
+        tid = a
+            .queue_file(
+                bob.clone(),
+                "notes.txt".into(),
+                "text/plain".into(),
+                data.clone(),
+            )
+            .unwrap()
+            .transfer_id_hex;
+    }
+    // Restart before anything was sent: the transfer is still queued.
+    let a = open_node(&pa, "Alice", dir_a.path());
+    let b = open_node(&pb, "Bob", dir_b.path());
+    assert_eq!(a.files_pending_for(bob.clone()), 1);
+    let m = &a.stored_messages(bob.clone()).unwrap()[0];
+    assert_eq!(m.file.as_ref().unwrap().state, StoredFileState::Queued);
+    let la = a.open_initiator_link(bob.clone()).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    pump(&la, &lb, la.start().unwrap());
+    let (files, fails, _) = pump_files(&la, &lb);
+    assert!(fails.is_empty());
+    assert_eq!(files[0].bytes, data);
+    assert_eq!(a.files_pending_for(bob.clone()), 0);
+    b.set_received_file_path(tid.clone(), Some("/app/files/notes.txt".into()))
+        .unwrap();
+    drop((la, lb, a, b));
+
+    let a = open_node(&pa, "Alice", dir_a.path());
+    let b = open_node(&pb, "Bob", dir_b.path());
+    assert_eq!(a.files_pending_for(bob.clone()), 0);
+    let sent = a.stored_messages(bob).unwrap()[0].file.clone().unwrap();
+    assert_eq!(sent.state, StoredFileState::Sent);
+    let got = b.stored_messages(alice).unwrap()[0].file.clone().unwrap();
+    assert_eq!(got.state, StoredFileState::Received);
+    assert_eq!(got.local_path.as_deref(), Some("/app/files/notes.txt"));
+    assert_eq!(
+        (got.name.as_str(), got.size),
+        ("notes.txt", data.len() as u64)
+    );
+}
+
+// ---- chat backup, media re-fetch, restore indicator (CB1–CB5, RS1–RS2) ----
+
+/// Pump in both directions until quiet, collecting every output.
+fn pump_out(la: &MeshLink, lb: &MeshLink, out: LinkOutput) -> Vec<LinkOutput> {
+    let mut outs = Vec::new();
+    let mut queue = vec![(false, out.outgoing.clone())];
+    outs.push(out);
+    while let Some((back, pdus)) = queue.pop() {
+        for p in pdus {
+            let dst = if back { la } else { lb };
+            let o = dst.on_pdu(p).unwrap();
+            if !o.outgoing.is_empty() {
+                queue.push((!back, o.outgoing.clone()));
+            }
+            outs.push(o);
+        }
+    }
+    outs
+}
+
+/// Drain pending file chunks from `from` to `to` (and replies back).
+fn drain(from: &MeshLink, to: &MeshLink) -> Vec<LinkOutput> {
+    let mut outs = Vec::new();
+    loop {
+        let o = from.flush().unwrap();
+        let more = o.more_pending;
+        outs.extend(pump_out(from, to, o));
+        if !more {
+            return outs;
+        }
+    }
+}
+
+fn link(a: &Arc<OmcpNode>, b: &Arc<OmcpNode>) -> (Arc<MeshLink>, Arc<MeshLink>, Vec<LinkOutput>) {
+    let bid = b.identity().peer_id_hex;
+    let la = a.open_initiator_link(bid).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let outs = pump_out(&la, &lb, la.start().unwrap());
+    assert!(la.is_established() && lb.is_established());
+    (la, lb, outs)
+}
+
+/// Back up all chat blobs of `n` (snapshot + logs so far).
+fn backup_all(n: &OmcpNode, now: u64, blobs: &mut Vec<Vec<u8>>) {
+    if let Some(u) = n.chat_backup_next(now, false).unwrap() {
+        assert_eq!(
+            u.blob.len() % omcp_core::chat_backup::BUCKET,
+            0,
+            "CB2 padded"
+        );
+        n.chat_backup_commit(u.seq).unwrap();
+        blobs.push(u.blob);
+    }
+}
+
+/// Restore `a` onto a new device from its 24 words and the chat backup.
+fn restore_device(a: &OmcpNode, blobs: &[Vec<u8>], dir: &std::path::Path) -> Arc<OmcpNode> {
+    // Identity backup (contacts with their X25519 keys) → new install.
+    let key = generate_backup_key().unwrap();
+    let r = open_backup_with_key(
+        a.create_backup_with_key(key.clone(), "t".into(), 1)
+            .unwrap(),
+        key,
+    )
+    .unwrap();
+    let a2 = open_node(&r.phrase, "Alice", dir);
+    for c in r.contacts {
+        assert!(c.dh_hex.is_some(), "v0.1.4a backups carry the X25519 key");
+        a2.restore_contact_with_key(c.contact_id, c.display_name, c.verified, c.dh_hex)
+            .unwrap();
+    }
+    a2.mark_restored(now_ms()).unwrap();
+    a2.chat_backup_restore(blobs.to_vec()).unwrap();
+    a2
+}
+
+const PIC: &[u8] = b"pretend these are the bytes of a holiday photo";
+
+#[test]
+fn cb1_cb4_restore_brings_back_all_text_no_media_bytes_no_burn() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let bob = b.identity().peer_id_hex;
+    let mut sent = Vec::new();
+    for i in 0..30 {
+        let t = format!("text {i} – ünïcödé");
+        pump(&la, &lb, la.send_text(t.clone()).unwrap());
+        sent.push(t);
+    }
+    let got = pump(&lb, &la, lb.send_text("reply from Bob".into()).unwrap());
+    assert_eq!(got.len(), 1);
+    a.queue_message(
+        bob.clone(),
+        "burn never in backup".into(),
+        Some(spec(BurnMode::OnOpen, 0, core_burn::UNREAD_TTL_1H)),
+    )
+    .unwrap();
+    a.queue_file(
+        bob.clone(),
+        "pic.jpg".into(),
+        "image/jpeg".into(),
+        PIC.to_vec(),
+    )
+    .unwrap();
+    pump(&la, &lb, la.flush().unwrap());
+    drain(&la, &lb);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    pump(
+        &la,
+        &lb,
+        la.send_text("after the first upload".into()).unwrap(),
+    );
+    sent.push("after the first upload".into());
+    backup_all(&a, 2, &mut blobs);
+    assert_eq!(blobs.len(), 2, "snapshot + incremental log");
+    for blob in &blobs {
+        assert!(!has(blob, PIC), "no media bytes");
+        assert!(!has(blob, b"burn never in backup"), "CB4");
+        assert!(!has(blob, b"text 1"), "encrypted");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let msgs = a2.stored_messages(bob.clone()).unwrap();
+    let texts: Vec<&str> = msgs.iter().map(|m| m.text.as_str()).collect();
+    for t in &sent {
+        assert!(texts.contains(&t.as_str()), "missing {t}");
+    }
+    assert!(texts.contains(&"reply from Bob"));
+    assert!(msgs.iter().all(|m| m.burn.is_none()));
+    let pic = msgs.iter().find(|m| m.file.is_some()).unwrap();
+    let f = pic.file.as_ref().unwrap();
+    assert_eq!(f.state, StoredFileState::Missing);
+    assert_eq!((f.mime.as_str(), f.size), ("image/jpeg", PIC.len() as u64));
+    assert!(f.local_path.is_none());
+    // Text count is exact: everything that wasn't burn content.
+    let before = a.stored_messages(bob).unwrap();
+    assert_eq!(
+        msgs.len(),
+        before.iter().filter(|m| m.burn.is_none()).count()
+    );
+}
+
+#[test]
+fn cb2_wrong_words_cannot_decrypt() {
+    let (a, _b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    pump(&la, &lb, la.send_text("private".into()).unwrap());
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let other = node("Mallory");
+    assert!(matches!(
+        other.chat_backup_restore(blobs.clone()),
+        Err(FfiError::WrongBackupPassword)
+    ));
+    assert!(
+        a.chat_backup_next(2, false).unwrap().is_none(),
+        "nothing new"
+    );
+    assert!(a.chat_backup_due(1 + 3_600_000, true, false).unwrap());
+    assert!(
+        !a.chat_backup_due(1 + 3_600_000, false, false).unwrap(),
+        "Wi-Fi only"
+    );
+}
+
+#[test]
+fn cb3_placeholder_refills_from_partner_and_unavailable_path() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let bob = b.identity().peer_id_hex;
+    let alice = a.identity().peer_id_hex;
+    // Bob sends Alice a photo; Alice saves it.
+    lb.flush().unwrap();
+    let offer = b
+        .queue_file(
+            alice.clone(),
+            "pic.jpg".into(),
+            "image/jpeg".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    let outs = drain(&lb, &la);
+    let rf: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    assert_eq!(rf.len(), 1);
+    a.set_received_file_path(offer.transfer_id_hex.clone(), Some("/a/pic.jpg".into()))
+        .unwrap();
+    b.set_received_file_path(offer.transfer_id_hex.clone(), Some("/b/pic.jpg".into()))
+        .ok();
+    // A second file Bob will no longer have.
+    let gone = b
+        .queue_file(
+            alice.clone(),
+            "doc.pdf".into(),
+            "application/pdf".into(),
+            b"pdf".to_vec(),
+        )
+        .unwrap();
+    drain(&lb, &la);
+    // Bob's kept copies: the photo answers from the app below; the pdf is gone.
+    {
+        let st = b.inner.lock();
+        st.db()
+            .delete_kept_media(&parse_msg_id(&offer.transfer_id_hex).unwrap())
+            .unwrap();
+        st.db()
+            .delete_kept_media(&parse_msg_id(&gone.transfer_id_hex).unwrap())
+            .unwrap();
+    }
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    la.shutdown();
+    lb.shutdown();
+
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let st = |id: &str| {
+        a2.stored_messages(bob.clone())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id_hex == id)
+            .unwrap()
+            .file
+            .unwrap()
+            .state
+    };
+    assert_eq!(st(&offer.transfer_id_hex), StoredFileState::Missing);
+    // Bob comes into range: requests go out on link-up, Bob's app answers.
+    let t0 = Instant::now();
+    let (l2, lb2, outs) = link(&a2, &b);
+    assert!(outs.iter().any(|o| o
+        .media_updates
+        .iter()
+        .any(|u| u.state == StoredFileState::Requested)));
+    let reqs: Vec<_> = outs.iter().flat_map(|o| o.media_requests.clone()).collect();
+    assert_eq!(reqs.len(), 2);
+    for r in &reqs {
+        let bytes = (r.msg_id_hex == offer.transfer_id_hex).then(|| PIC.to_vec());
+        b.answer_media_request(r.contact_id.clone(), r.msg_id_hex.clone(), bytes)
+            .unwrap();
+    }
+    let outs = drain(&lb2, &l2);
+    let files: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].bytes, PIC);
+    assert!(t0.elapsed().as_secs() < 10, "CB3 within 10 s");
+    a2.set_received_file_path(files[0].transfer_id_hex.clone(), Some("/a2/pic.jpg".into()))
+        .unwrap();
+    assert_eq!(st(&offer.transfer_id_hex), StoredFileState::Received);
+    let unavailable: Vec<_> = outs.iter().flat_map(|o| o.media_updates.clone()).collect();
+    assert!(unavailable
+        .iter()
+        .any(|u| u.msg_id_hex == gone.transfer_id_hex && u.state == StoredFileState::Unavailable));
+    assert_eq!(st(&gone.transfer_id_hex), StoredFileState::Unavailable);
+    // "Ask to resend" reaches Bob as a prompt.
+    // (e) "Ask to resend" is ONE message carrying the optional note.
+    a2.ask_to_resend(
+        gone.transfer_id_hex.clone(),
+        Some("  lost it, pls resend ".into()),
+    )
+    .unwrap();
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    let asks: Vec<_> = outs.iter().flat_map(|o| o.resend_asks.clone()).collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].note.as_deref(), Some("lost it, pls resend"));
+    assert!(
+        outs.iter().all(|o| o.received.is_empty()),
+        "no separate text message"
+    );
+    // Without a note, and a too-long note is refused.
+    a2.ask_to_resend(gone.transfer_id_hex.clone(), None)
+        .unwrap();
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    let asks: Vec<_> = outs.iter().flat_map(|o| o.resend_asks.clone()).collect();
+    assert_eq!(asks.len(), 1);
+    assert_eq!(asks[0].note, None);
+    assert!(a2
+        .ask_to_resend(gone.transfer_id_hex.clone(), Some("x".repeat(281)))
+        .is_err());
+}
+
+#[test]
+fn e_resend_ask_wire_carries_note_and_old_form_still_decodes() {
+    use omcp_core::burn::{decode_app, encode_app, MediaControl, CONTROL_MEDIA_RESEND_ASK};
+    let c = MediaControl {
+        note: Some("merci".into()),
+        ..MediaControl::new(CONTROL_MEDIA_RESEND_ASK, [1; 16], [2; 32])
+    };
+    let wire = encode_app(None, &AppContent::MediaControl(c.clone())).unwrap();
+    assert_eq!(decode_app(&wire).unwrap().1, AppContent::MediaControl(c));
+    let bare = MediaControl::new(CONTROL_MEDIA_RESEND_ASK, [1; 16], [2; 32]);
+    assert_eq!(bare.encode().len(), MediaControl::WIRE_LEN);
+    assert_eq!(MediaControl::decode(&bare.encode()).unwrap(), bare);
+}
+
+#[test]
+fn rs3_restored_contact_refetches_file_sent_30_days_ago_burn_never_served() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let bob = b.identity().peer_id_hex;
+    // Bob sends Alice a photo, and a view-once photo.
+    lb.flush().unwrap();
+    let offer = b
+        .queue_file(
+            alice.clone(),
+            "pic.jpg".into(),
+            "image/jpeg".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    let once = b
+        .queue_media(
+            alice.clone(),
+            "image/jpeg".into(),
+            b"view-once".to_vec(),
+            Some(spec(BurnMode::OnOpen, 0, 86_400)),
+        )
+        .unwrap();
+    drain(&lb, &la);
+    let u = b.kept_media_usage().unwrap();
+    assert_eq!(
+        (u.count, u.bytes),
+        (1, PIC.len() as u64),
+        "burn media never kept"
+    );
+    assert_eq!(
+        b.kept_media_settings().unwrap(),
+        KeptMediaSettings {
+            max_days: 90,
+            max_bytes: 2_000_000_000
+        }
+    );
+    // 30 days later the copy is still kept.
+    let day = 86_400_000u64;
+    assert_eq!(b.evict_kept_media(now_ms() + 30 * day).unwrap(), 0);
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    la.shutdown();
+    lb.shutdown();
+
+    // Alice restores; the photo is a placeholder. Bob's app answers nothing itself.
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let (l2, lb2, outs) = link(&a2, &b);
+    assert!(
+        outs.iter().all(|o| o.media_requests.is_empty()),
+        "served from the kept copy, no app round trip"
+    );
+    let mut files: Vec<_> = outs.iter().flat_map(|o| o.files.clone()).collect();
+    files.extend(drain(&lb2, &l2).iter().flat_map(|o| o.files.clone()));
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].transfer_id_hex, offer.transfer_id_hex);
+    assert_eq!(files[0].bytes, PIC);
+    assert_eq!(
+        blake3::hash(&files[0].bytes),
+        blake3::hash(PIC),
+        "hash verified"
+    );
+
+    // A (forged) request for the burn item is never served.
+    {
+        let mut st = a2.inner.lock();
+        let peer = parse_id(&bob).unwrap();
+        st.queue_control(
+            &peer,
+            AppContent::MediaControl(omcp_core::burn::MediaControl::new(
+                omcp_core::burn::CONTROL_MEDIA_REQUEST,
+                parse_msg_id(&once).unwrap(),
+                *blake3::hash(b"view-once").as_bytes(),
+            )),
+        )
+        .unwrap();
+    }
+    let outs = pump_out(&l2, &lb2, l2.flush().unwrap());
+    let outs2 = drain(&lb2, &l2);
+    assert!(outs
+        .iter()
+        .chain(outs2.iter())
+        .all(|o| o.files.is_empty() && o.media_requests.is_empty()));
+
+    // Limits are configurable; shrinking them evicts oldest first.
+    assert_eq!(
+        b.set_kept_media_settings(
+            KeptMediaSettings {
+                max_days: 90,
+                max_bytes: 10
+            },
+            now_ms()
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(b.kept_media_usage().unwrap().count, 0);
+}
+
+#[test]
+fn cb3_refetch_with_wrong_bytes_is_rejected() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let offer = b
+        .queue_file(alice, "pic.jpg".into(), "image/jpeg".into(), PIC.to_vec())
+        .unwrap();
+    drain(&lb, &la);
+    // No kept copy: the misbehaving partner below answers by hand.
+    b.inner
+        .lock()
+        .db()
+        .delete_kept_media(&parse_msg_id(&offer.transfer_id_hex).unwrap())
+        .unwrap();
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let (l2, lb2, _) = link(&a2, &b);
+    // A misbehaving partner sends other bytes under the same locator.
+    let mut st = b.inner.lock();
+    let peer = st.contacts.keys().next().copied().unwrap();
+    let f = files::build_outgoing(
+        parse_msg_id(&offer.transfer_id_hex).unwrap(),
+        "pic.jpg",
+        "image/jpeg",
+        b"evil",
+    )
+    .unwrap();
+    st.files.out.entry(peer).or_default().push_back(f);
+    drop(st);
+    let outs = drain(&lb2, &l2);
+    assert!(outs.iter().all(|o| o.files.is_empty()));
+    assert!(outs
+        .iter()
+        .any(|o| o.file_failures.iter().any(|e| e.reason == "integrity")));
+}
+
+#[test]
+fn cb5_media_backup_on_restores_hash_verified_off_uploads_nothing() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let offer = b
+        .queue_file(alice, "pic.jpg".into(), "image/jpeg".into(), PIC.to_vec())
+        .unwrap();
+    drain(&lb, &la);
+    a.set_received_file_path(offer.transfer_id_hex.clone(), Some("/a/pic.jpg".into()))
+        .unwrap();
+    // Off by default: nothing to upload, sealing refused.
+    let s = a.media_backup_settings().unwrap();
+    assert!(!s.enabled && s.photos && s.voice && s.files && !s.videos && !s.mobile_data);
+    assert!(a.media_backup_todo().unwrap().is_empty());
+    assert!(!a.media_backup_due(100_000_000, true).unwrap());
+    let item_hash = hex::encode(blake3::hash(PIC).as_bytes());
+    assert!(a
+        .seal_media_backup(item_hash.clone(), PIC.to_vec())
+        .is_err());
+    // On.
+    a.set_media_backup_settings(MediaBackupSettings { enabled: true, ..s })
+        .unwrap();
+    assert!(a.media_backup_due(100_000_000, true).unwrap());
+    let todo = a.media_backup_todo().unwrap();
+    assert_eq!(todo.len(), 1);
+    assert_eq!(todo[0].hash_hex, item_hash);
+    let mb = a
+        .seal_media_backup(todo[0].hash_hex.clone(), PIC.to_vec())
+        .unwrap();
+    assert!(!has(&mb.blob, PIC));
+    a.media_backup_commit(todo[0].hash_hex.clone(), 5).unwrap();
+    assert!(a.media_backup_todo().unwrap().is_empty());
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &blobs, dir.path());
+    let ph = a2.media_placeholders().unwrap();
+    assert_eq!(ph.len(), 1);
+    assert_eq!(ph[0].blob_name, mb.name);
+    let bytes = a2
+        .restore_media_from_backup(ph[0].msg_id_hex.clone(), mb.blob.clone())
+        .unwrap();
+    assert_eq!(bytes, PIC, "hash verified");
+    assert!(a2
+        .restore_media_from_backup(ph[0].msg_id_hex.clone(), blobs[0].clone())
+        .is_err());
+    // Turning it off hands back the blobs to delete.
+    let del = a
+        .set_media_backup_settings(MediaBackupSettings {
+            enabled: false,
+            ..s
+        })
+        .unwrap();
+    assert_eq!(del, vec![mb.name]);
+}
+
+#[test]
+fn rs1_contact_sees_unsuppressible_notice_and_old_key_superseded() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let old_dev = a.device_info().unwrap().device_key_hex;
+    assert!(b.contacts()[0].restored_at_ms.is_none());
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    let info = a2.device_info().unwrap();
+    assert_ne!(info.device_key_hex, old_dev);
+    assert!(
+        info.restored_at_ms.is_some(),
+        "banner on the restored phone"
+    );
+    let t0 = Instant::now();
+    let (l2, lb2, outs) = link(&a2, &b);
+    let notices: Vec<_> = outs
+        .iter()
+        .flat_map(|o| o.restore_notices.clone())
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert!(t0.elapsed().as_secs() < 5, "RS1 within 5 s");
+    assert_eq!(notices[0].contact_id, alice);
+    assert_eq!(notices[0].restored_at_ms, info.restored_at_ms);
+    let c = b
+        .contacts()
+        .into_iter()
+        .find(|c| c.contact_id == alice)
+        .unwrap();
+    assert!(c.restored_badge && c.restored_unverified && !c.verified);
+    let sys: Vec<_> = b
+        .stored_messages(alice.clone())
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.status == MessageStatus::System)
+        .collect();
+    assert_eq!(sys.len(), 1);
+    assert!(sys[0].text.starts_with("restored:"));
+    // Old device key superseded: the old install can no longer connect.
+    {
+        let st = b.inner.lock();
+        let d = &st.contacts.values().next().unwrap().device;
+        assert!(d.is_superseded(&hex::decode(&old_dev).unwrap().try_into().unwrap()));
+    }
+    let lo = a.open_initiator_link(b.identity().peer_id_hex).unwrap();
+    let lbo = b.open_responder_link().unwrap();
+    let mut failed = false;
+    for p in lo.start().unwrap().outgoing {
+        failed |= lbo.on_pdu(p).is_err();
+    }
+    assert!(failed && !lbo.is_established());
+    // Reconnecting with the same new device doesn't repeat the notice.
+    l2.shutdown();
+    lb2.shutdown();
+    let (_l3, _lb3, outs) = link(&a2, &b);
+    assert!(outs.iter().all(|o| o.restore_notices.is_empty()));
+}
+
+#[test]
+fn rs2_safety_number_changes_verified_cleared_old_qr_fails() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let alice = a.identity().peer_id_hex;
+    let old_qr = a.qr_payload();
+    b.verify_contact_from_qr(old_qr.clone()).unwrap();
+    a.set_verified(b.identity().peer_id_hex, true).unwrap();
+    let before = b.contacts()[0].safety_number.clone();
+    assert_eq!(before, a.contacts()[0].safety_number, "both sides agree");
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    // O3: our own verification of Bob carries over ("Still verified on your side").
+    assert!(a2.contacts().iter().all(|c| c.verified));
+    link(&a2, &b);
+    let c = b
+        .contacts()
+        .into_iter()
+        .find(|c| c.contact_id == alice)
+        .unwrap();
+    assert!(!c.verified, "contact side cleared");
+    assert_ne!(c.safety_number, before);
+    assert_eq!(c.safety_number, a2.contacts()[0].safety_number);
+    assert!(matches!(
+        b.verify_contact_from_qr(old_qr),
+        Err(FfiError::VerificationFailed)
+    ));
+    let v = b.verify_contact_from_qr(a2.qr_payload()).unwrap();
+    assert!(v.verified && !v.restored_unverified);
+}
+
+// ---- v0.1.4a: device binding (c) and PeerID / migration (d) ----
+
+/// Send a hand-built message 1 (initiator static `id`, payload from `payload(h)`)
+/// to a fresh responder link of `b`. Returns whether `b` refused it.
+fn raw_msg1_refused(
+    id: StaticIdentity,
+    b: &OmcpNode,
+    b_dh: [u8; 32],
+    payload: impl FnOnce(&[u8]) -> omcp_core::error::Result<Vec<u8>>,
+) -> bool {
+    let mut init = HybridInitiator::new(id, &b_dh).unwrap();
+    let m1 = init.write_message_1_with(payload).unwrap();
+    let mut pdus = Vec::new();
+    chunk_handshake(&m1, &mut pdus).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    let mut refused = false;
+    for p in pdus {
+        refused |= lb.on_pdu(p).is_err();
+    }
+    refused && !lb.is_established()
+}
+
+#[test]
+fn c_missing_certificate_or_binding_fails_the_handshake() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let b_dh = b.inner.dh_public();
+    // No certificate at all (a pre-v0.1.4a or modified client).
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |_| { Ok(b"omcp-ffi-v1".to_vec()) }
+    ));
+    // Certificate without the device-key signature over the handshake hash.
+    let cert = a.inner.device().cert().unwrap().encode();
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |_| {
+            let mut p = b"omcp-ffi-v1\x01".to_vec();
+            p.extend_from_slice(&cert);
+            Ok(p)
+        }
+    ));
+    // The genuine payload still works.
+    assert!(!raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        |h| { a.inner.handshake_payload(h) }
+    ));
+}
+
+#[test]
+fn c_replayed_old_certificate_is_rejected_and_notice_still_shows() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    // An attacker captured a payload of the old device from an earlier session.
+    let old_payload = a
+        .inner
+        .handshake_payload(b"an earlier session hash")
+        .unwrap();
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let a2 = restore_device(&a, &[], dir.path());
+    let b_dh = b.inner.dh_public();
+    // A modified restored client replays it (with its own Noise key): rejected,
+    // the binding signature is over another handshake hash and the cert's
+    // X25519 key isn't this session's.
+    let replay = old_payload.clone();
+    assert!(raw_msg1_refused(
+        a2.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        move |_| Ok(replay)
+    ));
+    // Even with the old Noise key it can't sign the fresh hash with the old device key.
+    let replay = old_payload;
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b_dh,
+        move |_| Ok(replay)
+    ));
+    // Nothing was applied: the genuine restored device still raises the notice.
+    let (_l, _lb, outs) = link(&a2, &b);
+    assert_eq!(
+        outs.iter().map(|o| o.restore_notices.len()).sum::<usize>(),
+        1
+    );
+    // And the old device key, now superseded, can't connect even signing a fresh hash.
+    assert!(raw_msg1_refused(
+        a.inner.identity().unwrap(),
+        &b,
+        b.inner.dh_public(),
+        |h| { a.inner.handshake_payload(h) }
+    ));
+}
+
+#[test]
+fn d_peer_id_is_blake2b_of_identity_key_and_contacts_key_by_it() {
+    use blake2::digest::consts::U32;
+    use blake2::{Blake2b, Digest};
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let ik = omcp_core::device::identity_signing_key(&a.inner.seed)
+        .unwrap()
+        .verifying_key()
+        .to_bytes();
+    let mut h = Blake2b::<U32>::new();
+    h.update(ik);
+    let want = hex::encode::<[u8; 32]>(h.finalize().into());
+    assert_eq!(a.identity().peer_id_hex, want);
+    assert_eq!(b.contacts()[0].contact_id, want);
+    // X25519 is per device and not the id.
+    assert_ne!(hex::encode(a.inner.dh_public()), want);
+    let qr = a.qr_payload();
+    assert!(qr.starts_with(&format!("omcp:3:{want}:{}:", hex::encode(ik))));
+    // A QR whose identity key doesn't hash to the PeerID is refused.
+    let bad = qr.replacen(&want, &"00".repeat(32), 1);
+    assert!(b.preview_contact_from_qr(bad).is_err());
+    // The advertisement carries the PeerID prefix and maps back to the contact.
+    let adv = a.advertisement();
+    let prefix = parse_advertisement(adv).unwrap();
+    assert_eq!(b.contact_for_prefix(prefix), Some(want));
+}
+
+/// A store as written before v0.1.4a: owner and contact ids are X25519 keys.
+fn legacy_store(dir: &std::path::Path, own_phrase: &str, peer_phrase: &str, peer_name: &str) {
+    let own = recovery::phrase_to_seed(own_phrase).unwrap();
+    let peer = recovery::phrase_to_seed(peer_phrase).unwrap();
+    let db = Store::open(&dir.join("omcp.db"), &SKEY).unwrap();
+    db.bind_owner(&omcp_core::device::legacy_dh_public(&own).unwrap())
+        .unwrap();
+    let pid = omcp_core::device::legacy_dh_public(&peer).unwrap();
+    db.put_contact(&st::ContactRec {
+        peer: pid,
+        name: peer_name.into(),
+        verified: true,
+        device: None,
+        dh: None,
+    })
+    .unwrap();
+    db.put_message(&st::MessageRec {
+        id: [7; 16],
+        peer: pid,
+        mine: true,
+        time_ms: 10,
+        status: st::STATUS_SENT,
+        text: format!("hi {peer_name}, from before the upgrade"),
+        mime: None,
+        burn: None,
+        burn_state: st::BURN_NONE,
+        burn_at_ms: None,
+        file: None,
+    })
+    .unwrap();
+}
+
+#[test]
+fn d_legacy_store_migrates_to_peer_ids_on_first_handshake() {
+    let pa = generate_recovery_phrase().unwrap();
+    let pb = generate_recovery_phrase().unwrap();
+    let (da, db) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    legacy_store(da.path(), &pa, &pb, "Bob");
+    legacy_store(db.path(), &pb, &pa, "Alice");
+    let a = open_node(&pa, "Alice", da.path());
+    let b = open_node(&pb, "Bob", db.path());
+    // Migrated installs keep their X25519 key, so legacy contacts can still dial.
+    let legacy_b = hex::encode(
+        omcp_core::device::legacy_dh_public(&recovery::phrase_to_seed(&pb).unwrap()).unwrap(),
+    );
+    assert_eq!(hex::encode(b.inner.dh_public()), legacy_b);
+    assert_eq!(a.contacts()[0].contact_id, legacy_b);
+    let sn_before = a.contacts()[0].safety_number.clone();
+    assert_eq!(sn_before, b.contacts()[0].safety_number);
+    // Legacy contacts still find a migrated install by its advertisement.
+    assert_eq!(
+        a.contact_for_prefix(parse_advertisement(b.advertisement()).unwrap()),
+        Some(legacy_b.clone())
+    );
+    let la = a.open_initiator_link(legacy_b).unwrap();
+    let lb = b.open_responder_link().unwrap();
+    pump_out(&la, &lb, la.start().unwrap());
+    assert!(la.is_established() && lb.is_established());
+    let (pid_a, pid_b) = (a.identity().peer_id_hex, b.identity().peer_id_hex);
+    assert_eq!(a.contacts()[0].contact_id, pid_b);
+    assert_eq!(b.contacts()[0].contact_id, pid_a);
+    assert!(
+        a.contacts()[0].verified && b.contacts()[0].verified,
+        "verification kept"
+    );
+    assert!(
+        b.contacts()[0].restored_at_ms.is_none(),
+        "an upgrade is not a restore"
+    );
+    assert_eq!(a.contacts()[0].safety_number, b.contacts()[0].safety_number);
+    let ms = a.stored_messages(pid_b.clone()).unwrap();
+    assert!(ms[0].text.contains("before the upgrade"));
+    // Persisted: survives a restart under the new ids.
+    drop((la, lb, a));
+    let a = open_node(&pa, "Alice", da.path());
+    assert_eq!(a.contacts()[0].contact_id, pid_b);
+    assert_eq!(a.stored_messages(pid_b).unwrap().len(), 1);
+}
+
+#[test]
+fn d_old_identity_backup_restores_legacy_contacts() {
+    let r = restored(backup::BackupContents {
+        entropy: Zeroizing::new([5; 32]),
+        contacts: vec![backup::BackupContact {
+            peer_id: [9; 32],
+            name: "Old".into(),
+            verified: true,
+            dh: None,
+        }],
+        display_name: None,
+        history: None,
+    })
+    .unwrap();
+    assert_eq!(r.contacts[0].dh_hex, None);
+    let n = node("Me");
+    let c = &r.contacts[0];
+    n.restore_contact_with_key(
+        c.contact_id.clone(),
+        c.display_name.clone(),
+        c.verified,
+        None,
+    )
+    .unwrap();
+    // A legacy contact: dialled by its id (the X25519 key) until re-keyed.
+    assert_eq!(n.inner.lock().contacts[&[9; 32]].dh, [9; 32]);
 }

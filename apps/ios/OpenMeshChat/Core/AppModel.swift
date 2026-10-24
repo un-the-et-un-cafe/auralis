@@ -17,10 +17,12 @@ final class AppModel: ObservableObject {
     private var burnTimer: Timer?
 
     init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore()) {
-        repo = MeshRepository(core: core, store: store)
+        repo = MeshRepository(core: core, store: store, dbPath: Self.localStorePath())
         onboarded = store.onboarded && store.recoveryPhrase != nil
         repo.notifier = LocalNotifier()
         repo.fileSink = ReceivedFiles()
+        // Chat backup (CB1–CB5) in iCloud: private DB, zone HoplaBackupV1 (REQUIREMENTS v0.1.4a).
+        repo.chatBackup = ChatBackupSync(core: core, blobs: RecordChatBlobStore(backend: CloudKitChatRecordBackend()))
         repo.genericBody = L("notif_new_message")
         // Flow steps may run off the main thread (cloud I/O); always publish on main.
         repo.onChange = { [weak self] in
@@ -31,11 +33,27 @@ final class AppModel: ObservableObject {
             }
         }
         repo.restore()
+        // Keep sent media: age limit on start (the size limit applies on every insert).
+        _ = repo.core.evictKeptMedia(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
         // Burn timers + unread expiry, decided in Rust; ≤ 250 ms so B1 (≤ 1 s) holds.
         burnTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.repo.tickBurn() }
         }
         if onboarded { startMesh() }
+    }
+
+    /// Application Support/omcp-store.db, excluded from iCloud/iTunes backup (its key is
+    /// this-device-only anyway) and protected until first unlock.
+    static func localStorePath() -> String? {
+        let fm = FileManager.default
+        guard var dir = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
+            return nil
+        }
+        try? fm.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: dir.path)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+        return dir.appendingPathComponent("omcp-store.db").path
     }
 
     var core: OmcpCore { repo.core }

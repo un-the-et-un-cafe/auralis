@@ -482,6 +482,10 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         r.fileProgress.forEach(repo::onFileProgress)
         r.files.forEach(repo::onFileReceived)
         r.fileFailures.forEach(repo::onFileFailed)
+        r.restoreNotices.forEach(repo::onRestoreNotice)
+        r.mediaRequests.forEach(repo::onMediaRequest)
+        r.resendAsks.forEach(repo::onResendAsk)
+        r.mediaUpdates.forEach(repo::onMediaUpdate)
         r.peerContactId?.let { repo.markFlushed(it, r.flushed) } ?: repo.refresh()
     }
 

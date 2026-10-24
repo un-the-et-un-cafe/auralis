@@ -39,6 +39,7 @@ import chat.omcp.app.data.MeshRepository
 import chat.omcp.app.mesh.MeshPermissions
 import chat.omcp.app.mesh.MeshService
 import chat.omcp.app.ui.screens.BackupSettingsScreen
+import chat.omcp.app.ui.screens.StorageSettingsScreen
 import chat.omcp.app.ui.screens.ChatThreadScreen
 import chat.omcp.app.ui.screens.ChatsListScreen
 import chat.omcp.app.ui.screens.CommunitiesHomeScreen
@@ -69,6 +70,7 @@ private object Routes {
     const val ContactAdd = "contact-add"
     const val MyQr = "my-qr"
     const val Backup = "backup"
+    const val Storage = "storage"
 
     fun thread(id: String) = "thread/$id"
     fun security(id: String) = "security/$id"
@@ -100,7 +102,19 @@ fun OmcpRoot(
 
     if (!onboarded || gate == BackupGate.Required) {
         // O6: after 24 h without a backup method, the Secure step is mandatory.
-        val ovm = vm { OnboardingViewModel(repo, cloud) }
+        val app = ctx.applicationContext as? chat.omcp.app.OmcpApplication
+        val ovm = vm {
+            if (app != null) {
+                OnboardingViewModel(
+                    repo, cloud,
+                    deviceHint = android.os.Build.MODEL ?: "Android",
+                    restore = app.restore,
+                    runner = chat.omcp.app.restore.RestoreWorker.runner(ctx.applicationContext),
+                )
+            } else {
+                OnboardingViewModel(repo, cloud)
+            }
+        }
         if (onboarded && gate == BackupGate.Required) {
             LaunchedEffect(Unit) { if (ovm.state.value.step == OnboardingStep.Welcome) ovm.getStarted(); ovm.profileNext() }
         }
@@ -158,6 +172,7 @@ fun OmcpRoot(
                     onGateway = { nav.navigate(Routes.Gateway) },
                     onSecurity = { contacts.firstOrNull()?.let { nav.navigate(Routes.security(it.id)) } },
                     onBackup = { nav.navigate(Routes.Backup) },
+                    onStorage = { nav.navigate(Routes.Storage) },
                     onMyQr = { nav.navigate(Routes.MyQr) },
                 )
             }
@@ -203,6 +218,9 @@ fun OmcpRoot(
                     onBack = { nav.popBackStack() },
                     onScanTheirs = { nav.navigate(Routes.ContactAdd) { popUpTo(Routes.Chats) } },
                 )
+            }
+            composable(Routes.Storage) {
+                StorageSettingsScreen(vm = vm { chat.omcp.app.ui.vm.StorageViewModel(repo.core) }, onBack = { nav.popBackStack() })
             }
             composable(Routes.Backup) {
                 BackupSettingsScreen(

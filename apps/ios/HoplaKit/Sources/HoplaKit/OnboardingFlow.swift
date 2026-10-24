@@ -269,7 +269,7 @@ public final class OnboardingFlow {
             state.error = "badphrase"
             return false
         }
-        do { try repo.saveIdentity(phrase: p, name: name) } catch {
+        do { try repo.restoreFromPhrase(p, name: name) } catch {
             state.error = "badphrase"
             return false
         }

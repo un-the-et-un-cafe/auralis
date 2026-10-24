@@ -85,7 +85,50 @@ fun BackupSettingsScreen(
             }
             OutlinedButton(onClick = vm::hidePhrase, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.backup_hide_phrase)) }
         }
+        MediaBackupSection(s, vm)
         s.message?.let { Callout(it) }
         TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+    }
+}
+
+/** Chat backup + Settings › Backup › Photos, videos and files (§5.96). */
+@Composable
+private fun MediaBackupSection(s: chat.omcp.app.ui.vm.BackupSettingsState, vm: BackupSettingsViewModel) {
+    val m = s.media
+    Text(stringResource(R.string.chatbackup_title), style = MaterialTheme.typography.titleMedium)
+    BodyText(stringResource(R.string.chatbackup_desc))
+    s.chatsBackedUpMs?.let { BodyText(stringResource(R.string.chatbackup_last, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(it)))) }
+    OutlinedButton(onClick = { vm.backUpChatsNow() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.chatbackup_now)) }
+    SwitchRow(stringResource(R.string.mediabackup_master), stringResource(R.string.mediabackup_master_sub), m.enabled) {
+        vm.setMedia(if (it) m.copy(enabled = true, photos = true, voice = true, files = true, videos = false) else m.copy(enabled = false))
+    }
+    if (!m.enabled) {
+        Callout(stringResource(R.string.mediabackup_off_note))
+    } else {
+        SwitchRow(stringResource(R.string.mediabackup_photos), null, m.photos) { vm.setMedia(m.copy(photos = it)) }
+        SwitchRow(stringResource(R.string.mediabackup_videos), null, m.videos) { vm.setMedia(m.copy(videos = it)) }
+        SwitchRow(stringResource(R.string.mediabackup_voice), null, m.voice) { vm.setMedia(m.copy(voice = it)) }
+        SwitchRow(stringResource(R.string.mediabackup_files), null, m.files) { vm.setMedia(m.copy(files = it)) }
+        SwitchRow(stringResource(R.string.mediabackup_mobile), stringResource(R.string.mediabackup_mobile_sub), m.mobileData) { vm.setMedia(m.copy(mobileData = it)) }
+    }
+    if (s.confirmMediaOff) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = vm::keepMedia,
+            title = { Text(stringResource(R.string.mediabackup_off_title)) },
+            text = { Text(stringResource(R.string.mediabackup_off_body)) },
+            confirmButton = { TextButton(onClick = { vm.confirmMediaOff() }) { Text(stringResource(R.string.mediabackup_off_confirm), color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = vm::keepMedia) { Text(stringResource(R.string.mediabackup_keep)) } },
+        )
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, sub: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+            Text(title)
+            sub?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
+        }
+        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onChange)
     }
 }

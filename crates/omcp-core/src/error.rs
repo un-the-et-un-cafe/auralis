@@ -59,6 +59,9 @@ pub enum OmcpError {
     #[error("backup error: {0}")]
     Backup(&'static str),
 
+    #[error("backup format v{0} is newer than this app supports")]
+    BackupTooNew(u8),
+
     #[error("backup authentication failed (wrong password or key)")]
     BackupAuth,
 
@@ -83,6 +86,12 @@ pub enum OmcpError {
     /// Scalable sync (§22) failure.
     #[error("sync: {0}")]
     Sync(&'static str),
+
+    #[error("local store error: {0}")]
+    Store(&'static str),
+
+    #[error("local store authentication failed (wrong storage key or tampered row)")]
+    StoreAuth,
 
     #[error("burn-after-read error: {0}")]
     Burn(&'static str),

@@ -212,6 +212,15 @@ impl HybridInitiator {
     /// The EK is cleartext and `MixHash`'d before the sealed payload so tampering
     /// fails AEAD (PROTOCOL §21.5 transcript binding).
     pub fn write_message_1(&mut self, payload: &[u8]) -> Result<Vec<u8>> {
+        self.write_message_1_with(|_| Ok(payload.to_vec()))
+    }
+
+    /// [`Self::write_message_1`] with a payload built from the handshake hash at
+    /// the point the payload is sealed (device binding, PROTOCOL §3.4).
+    pub fn write_message_1_with(
+        &mut self,
+        payload: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
+    ) -> Result<Vec<u8>> {
         if self.msg1_sent {
             return Err(OmcpError::HandshakeState);
         }
@@ -234,7 +243,8 @@ impl HybridInitiator {
         self.sym.mix_hash(&ek);
         msg.extend_from_slice(&ek);
 
-        let enc_payload = self.sym.encrypt_and_hash(payload)?;
+        let payload = payload(&self.sym.handshake_hash())?;
+        let enc_payload = self.sym.encrypt_and_hash(&payload)?;
         msg.extend_from_slice(&enc_payload);
 
         self.msg1_sent = true;
@@ -245,6 +255,15 @@ impl HybridInitiator {
     ///
     /// Layout: `e (32) || mlkem_ct (1088) || enc(payload)`
     pub fn read_message_2(&mut self, message: &[u8]) -> Result<(Vec<u8>, HybridSessionKeys)> {
+        self.read_message_2_bound(message).map(|(p, _, k)| (p, k))
+    }
+
+    /// [`Self::read_message_2`] also returning the handshake hash the responder
+    /// saw when sealing its payload.
+    pub fn read_message_2_bound(
+        &mut self,
+        message: &[u8],
+    ) -> Result<(Vec<u8>, [u8; HASHLEN], HybridSessionKeys)> {
         if !self.msg1_sent {
             return Err(OmcpError::HandshakeState);
         }
@@ -275,6 +294,7 @@ impl HybridInitiator {
         let mut mlkem_ss = [0u8; MLKEM768_SS_LEN];
         mlkem_ss.copy_from_slice(ss.as_slice());
 
+        let h_pre = self.sym.handshake_hash();
         let payload = self.sym.decrypt_and_hash(enc_payload)?;
 
         let h = self.sym.handshake_hash();
@@ -282,7 +302,7 @@ impl HybridInitiator {
         let ck = sym.chaining_key();
         let keys = derive_session(&ck, &mlkem_ss, &h)?;
         mlkem_ss.zeroize();
-        Ok((payload, keys))
+        Ok((payload, h_pre, keys))
     }
 }
 
@@ -306,6 +326,12 @@ impl HybridResponder {
     ///
     /// Parses initiator ML-KEM ek (cleartext, MixHash'd) per §21.5.
     pub fn read_message_1(&mut self, message: &[u8]) -> Result<Vec<u8>> {
+        self.read_message_1_bound(message).map(|(p, _)| p)
+    }
+
+    /// [`Self::read_message_1`] also returning the handshake hash the initiator
+    /// saw when sealing its payload.
+    pub fn read_message_1_bound(&mut self, message: &[u8]) -> Result<(Vec<u8>, [u8; HASHLEN])> {
         if self.msg1_ok {
             return Err(OmcpError::HandshakeState);
         }
@@ -343,6 +369,7 @@ impl HybridResponder {
         let _ = parse_kem_ek(&ek_arr)?;
         self.sym.mix_hash(&ek_arr);
 
+        let h_pre = self.sym.handshake_hash();
         let payload = self.sym.decrypt_and_hash(enc_payload)?;
 
         self.re = Some(re);
@@ -350,7 +377,7 @@ impl HybridResponder {
         self.initiator_kem_ek = Some(ek_arr);
         self.e = Some(StaticSecret::from(random_32()?));
         self.msg1_ok = true;
-        Ok(payload)
+        Ok((payload, h_pre))
     }
 
     /// Initiator static X25519 public key learned from message 1 (None before).
@@ -362,6 +389,14 @@ impl HybridResponder {
     ///
     /// Layout: `e (32) || mlkem_ct (1088) || enc(payload)`
     pub fn write_message_2(&mut self, payload: &[u8]) -> Result<(Vec<u8>, HybridSessionKeys)> {
+        self.write_message_2_with(|_| Ok(payload.to_vec()))
+    }
+
+    /// [`Self::write_message_2`] with a payload built from the handshake hash.
+    pub fn write_message_2_with(
+        &mut self,
+        payload: impl FnOnce(&[u8]) -> Result<Vec<u8>>,
+    ) -> Result<(Vec<u8>, HybridSessionKeys)> {
         if !self.msg1_ok {
             return Err(OmcpError::HandshakeState);
         }
@@ -386,7 +421,8 @@ impl HybridResponder {
         debug_assert_eq!(ct_bytes.len(), MLKEM768_CT_LEN);
         self.sym.mix_hash(ct_bytes);
 
-        let enc_payload = self.sym.encrypt_and_hash(payload)?;
+        let payload = payload(&self.sym.handshake_hash())?;
+        let enc_payload = self.sym.encrypt_and_hash(&payload)?;
         let mut msg = Vec::with_capacity(DHLEN + MLKEM768_CT_LEN + enc_payload.len());
         msg.extend_from_slice(&e_pub);
         msg.extend_from_slice(ct_bytes);

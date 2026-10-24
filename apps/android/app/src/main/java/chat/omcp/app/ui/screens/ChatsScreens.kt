@@ -112,10 +112,19 @@ fun ChatsListScreen(
         ChatRowModel(
             id = c.id,
             title = c.displayName,
-            preview = last?.let { if (it.burn != null) "🔥" else it.file?.name ?: it.text } ?: "",
+            preview = last?.let {
+                when {
+                    it.status == ChatMessage.Status.System -> if (c.restoredUnverified) stringResource(R.string.restored_preview, c.displayName) else ""
+                    it.burn != null -> "🔥"
+                    it.file?.isPlaceholder == true -> "📎 " + it.file.name + " · " + stringResource(R.string.media_requested_toast).lowercase()
+                    else -> it.file?.name ?: it.text
+                }
+            } ?: "",
             time = last?.let { time(it.timeMs) } ?: "",
             initials = c.displayName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString(""),
             verified = c.verified,
+            restoredUnverified = c.restoredUnverified,
+            waitingMedia = messages[c.id]?.count { it.file?.isPlaceholder == true } ?: 0,
             path = if (messages[c.id]?.any { it.mine && it.status == ChatMessage.Status.Queued } == true) PathKind.Queued else null,
         )
     }
@@ -197,6 +206,22 @@ fun ChatThreadScreen(
     }
     val path = remember(status, msgs) { vm.path() }
     val ctx = LocalContext.current
+    val resendAsks by vm.resendAsks.collectAsState()
+    val selfRestored by vm.restoredAtMs.collectAsState()
+    var sheetAt by remember { mutableStateOf<Long?>(null) }
+    var resendFor by remember { mutableStateOf<ChatMessage?>(null) }
+    var resendSent by remember { mutableStateOf(setOf<String>()) }
+    var selfBannerOff by remember(vm.contactId) { mutableStateOf(false) }
+    var mediaBannerOff by remember(vm.contactId) { mutableStateOf(false) }
+    val peer = contact?.displayName ?: ""
+    sheetAt?.let { at ->
+        chat.omcp.app.ui.components.RestoreSheet(peer, at, onVerifyQr = { sheetAt = null; onSecurity() }, onBlock = null) { sheetAt = null }
+    }
+    resendFor?.let { m ->
+        chat.omcp.app.ui.components.ResendDialog(peer, m.file?.name ?: "", onSend = { t ->
+            vm.askToResend(m.id, t); resendSent = resendSent + m.id; resendFor = null
+        }) { resendFor = null }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         var name = "file"
@@ -262,6 +287,7 @@ fun ChatThreadScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(contact?.displayName ?: "Chat")
                             if (contact?.verified == true) chat.omcp.app.ui.components.VerifiedBadge()
+                            else if (contact?.restoredUnverified == true) chat.omcp.app.ui.components.RestoredPill(onClick = { sheetAt = contact.restoredAtMs ?: 0L })
                         }
                         // Product decision: unverified contacts show no badge or label.
                         if (contact?.verified == true) {
@@ -334,6 +360,21 @@ fun ChatThreadScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (selfRestored != null && !selfBannerOff) {
+                Callout(stringResource(R.string.restored_self_banner), CalloutKind.Info,
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { selfBannerOff = true })
+            }
+            val waiting = msgs.count { it.file?.isPlaceholder == true }
+            if (waiting > 0 && !mediaBannerOff) {
+                Callout(stringResource(R.string.media_banner, waiting, peer), CalloutKind.Info,
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { mediaBannerOff = true })
+            }
+            resendAsks.filter { it.contactId == vm.contactId }.forEach { a ->
+                val askText = a.note?.let { stringResource(R.string.media_resend_asked_note, peer, a.name, it) }
+                    ?: stringResource(R.string.media_resend_asked, peer, a.name)
+                Callout(askText, CalloutKind.Info,
+                    Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { vm.dismissResendAsk(a.msgId) })
+            }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
@@ -341,7 +382,17 @@ fun ChatThreadScreen(
             ) {
                 items(msgs, key = { it.id }) { m ->
                     val f = m.file
-                    if (m.burn != null) {
+                    if (m.status == ChatMessage.Status.System) {
+                        val at = m.restoredAtMs
+                        if (at != null) chat.omcp.app.ui.components.RestoreNotice(peer, if (at > 0) at else m.timeMs) { sheetAt = if (at > 0) at else m.timeMs }
+                    } else if (f != null && f.isPlaceholder) {
+                        chat.omcp.app.ui.components.MissingMediaBubble(
+                            mine = m.mine, f = f, peerName = peer,
+                            onRequest = { vm.requestMedia(m.id) },
+                            onAskResend = { resendFor = m },
+                            resendSent = m.id in resendSent,
+                        )
+                    } else if (m.burn != null) {
                         BurnBubble(m) { vm.openBurn(m.id)?.let { body -> opened = OpenedBurn(vm.messages.value[vm.contactId]!!.first { it.id == m.id }, body) } }
                     } else if (f != null) {
                         FileBubble(
@@ -360,6 +411,7 @@ fun ChatThreadScreen(
                             ChatMessage.Status.Queued -> "Queued"
                             ChatMessage.Status.Sent -> "Sent · Mesh"
                             ChatMessage.Status.Received -> "Mesh"
+                            ChatMessage.Status.System -> ""
                         }
                         Bubble(mine = m.mine, text = m.text, meta = meta)
                     }
@@ -393,6 +445,7 @@ private fun FileBubble(
         S.Received -> stringResource(R.string.file_state_received, total)
         S.Failed -> stringResource(R.string.file_state_failed)
         S.IntegrityFailed -> stringResource(R.string.file_state_integrity, peerName)
+        S.Missing, S.Requested, S.Unavailable -> stringResource(R.string.media_waiting, peerName)
     }
     val meta = when (f.state) {
         S.Received -> stringResource(R.string.file_integrity_checked)

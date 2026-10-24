@@ -26,11 +26,13 @@ class MainActivity : FragmentActivity() {
         // Google consent for Drive (requested from a background backup call).
         val consentLauncher = registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
-        ) { r -> app.driveConsent.complete(if (r.resultCode == RESULT_OK) r.data else null) }
+        ) { r -> app.driveConsent.complete(r.resultCode, r.data) }
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 app.driveConsent.pending.collect { pi ->
-                    if (pi != null) consentLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                    // take(): StateFlow replays on every ON_START (e.g. when the consent Activity
+                    // returns), which used to relaunch the account picker and drop the result.
+                    if (pi != null && app.driveConsent.take(pi)) consentLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
                 }
             }
         }

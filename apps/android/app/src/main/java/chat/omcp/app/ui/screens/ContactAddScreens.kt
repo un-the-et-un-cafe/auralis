@@ -112,6 +112,9 @@ fun ContactAddScreen(
                     Modifier.padding(horizontal = 16.dp),
                 )
             }
+            if (s.qrStale) {
+                Callout(stringResource(R.string.qr_stale), CalloutKind.Warn, Modifier.padding(horizontal = 16.dp))
+            }
             HorizontalDivider()
             Row(R.string.contact_add_scan_qr, R.string.contact_add_scan_qr_desc, Icons.Default.QrCodeScanner) { launchScan() }
             Row(R.string.contact_add_my_qr, R.string.contact_add_my_qr_desc, Icons.Default.QrCode, onMyQr)

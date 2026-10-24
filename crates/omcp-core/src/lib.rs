@@ -18,6 +18,9 @@
 //!   lazy media, padded compression, receipts batching, Plumtree, relay budgets —
 //!   **experimental (v0.2)**
 //!
+//! - Encrypted local store (SQLite, XChaCha20-Poly1305 per row, versioned
+//!   migrations, crypto-shredded burn rows) — [`store`]
+//!
 //! Not in scope yet: real phone BLE bindings, real TLS/QUIC gateway transport, production hardware,
 //! full OpenMLS PQ extension registration on the wire.
 
@@ -27,6 +30,8 @@
 pub mod backup;
 pub mod ble;
 pub mod burn;
+pub mod chat_backup;
+pub mod device;
 pub mod error;
 pub mod files;
 pub mod framing;
@@ -37,6 +42,7 @@ pub mod negotiate;
 pub mod recovery;
 pub mod rendezvous;
 pub mod safety;
+pub mod store;
 pub mod suite;
 pub mod sync;
 

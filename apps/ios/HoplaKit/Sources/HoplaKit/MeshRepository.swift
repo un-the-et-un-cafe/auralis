@@ -2,7 +2,12 @@ import Foundation
 
 /// File attachment state (DESIGN_SPEC §5.24, Designy v0.1.1 `file-transfer`).
 public struct FileAttachment: Equatable, Sendable {
-    public enum State: Sendable { case queued, sending, receiving, paused, sent, received, failed, integrityFailed }
+    public enum State: Sendable {
+        case queued, sending, receiving, paused, sent, received, failed, integrityFailed
+        /// Restored from the chat backup without bytes (§5.92), re-requested, or gone at the partner.
+        case missing, requested, unavailable
+    }
+    public var isPlaceholder: Bool { state == .missing || state == .requested || state == .unavailable }
     public var name: String
     public var sizeBytes: UInt64
     public var mime: String
@@ -36,7 +41,8 @@ public protocol FileSink: AnyObject {
 }
 
 public struct ChatMessage: Equatable, Identifiable, Sendable {
-    public enum Status: Sendable { case queued, sent, received }
+    /// `.system`: in-chat notice; `text` = `restored:<ms>` (RS1, §5.95).
+    public enum Status: Sendable { case queued, sent, received, system }
     public enum BurnState: Sendable { case none, unopened, open, opened }
     public var id: String
     public var contactId: String
@@ -56,6 +62,11 @@ public struct ChatMessage: Equatable, Identifiable, Sendable {
     }
     /// Burnable content can't be saved, forwarded, quoted, shared or searched (B2/B5).
     public var canShare: Bool { burn == nil }
+    /// RS1 notice: when the contact restored (0 = unknown).
+    public var restoredAtMs: Int64? {
+        guard status == .system, text.hasPrefix("restored:") else { return nil }
+        return Int64(text.dropFirst("restored:".count))
+    }
 }
 
 /// Something that raises local notifications (UNUserNotificationCenter on iOS).
@@ -76,14 +87,24 @@ public final class MeshRepository {
     public weak var kick: MeshKick?
     public var notifier: Notifier?
     public var fileSink: FileSink?
+    /// Encrypted chat backup (iCloud / Drive app-private space); nil when not configured.
+    public var chatBackup: ChatBackupSync?
+    /// Partners asking us to resend media we no longer have.
+    public private(set) var resendAsks: [MediaRequestInfo] = []
+    /// Set after a restore on this phone: "You restored this account…" banner (§5.98).
+    public private(set) var restoredAtMs: Int64?
     public var onChange: (() -> Void)?
     public var genericBody = "New message"
     private let clock: () -> Int64
+    /// Encrypted local store (Rust core). nil = everything in memory (tests, previews).
+    private let dbPath: String?
     public private(set) var messages: [String: [ChatMessage]] = [:]
 
-    public init(core: OmcpCore, store: AppStore, clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+    public init(core: OmcpCore, store: AppStore, dbPath: String? = nil,
+                clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.core = core
         self.store = store
+        self.dbPath = dbPath
         self.clock = clock
     }
 
@@ -92,13 +113,60 @@ public final class MeshRepository {
     /// Load identity + contacts from the store on launch. Returns false if there is no identity yet.
     @discardableResult public func restore() -> Bool {
         guard let phrase = store.recoveryPhrase else { return false }
-        guard (try? core.load(phrase: phrase, displayName: store.displayName ?? "Me")) != nil else { return false }
+        guard (try? loadCore(phrase: phrase, name: store.displayName ?? "Me")) != nil else { return false }
         for c in store.contacts { try? core.restoreContact(c) }
+        // Contacts used to live in plain UserDefaults: once in the encrypted store, drop them.
+        if dbPath != nil, !store.contacts.isEmpty { store.contacts = [] }
+        loadMessages()
+        restoredAtMs = core.deviceInfo()?.restoredAtMs
         return true
     }
 
+    private func loadCore(phrase: String, name: String) throws {
+        guard let path = dbPath else {
+            try core.load(phrase: phrase, displayName: name)
+            return
+        }
+        let key: Data
+        if let k = store.storageKey { key = k } else {
+            key = try core.generateStorageKey()
+            store.storageKey = key
+        }
+        do {
+            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
+        } catch CoreError.storageUnavailable {
+            // Unreadable with this key (Keychain reset, other identity, newer app): its data is
+            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
+            let fm = FileManager.default
+            try? fm.moveItem(atPath: path, toPath: "\(path).unreadable-\(clock())")
+            try? fm.removeItem(atPath: "\(path)-journal")
+            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
+        }
+    }
+
+    /// Reload chats from the core's encrypted store (after a restart or a restore).
+    private func loadMessages() {
+        var all: [String: [ChatMessage]] = [:]
+        for c in core.contacts() {
+            let ms = core.storedMessages(c.id).map(Self.chatMessage)
+            if !ms.isEmpty { all[c.id] = ms }
+        }
+        messages = all
+    }
+
+    private static func chatMessage(_ m: StoredMessageInfo) -> ChatMessage {
+        var file = m.file.map {
+            FileAttachment(name: $0.name, sizeBytes: $0.size, mime: $0.mime, state: $0.state, doneBytes: $0.doneBytes, localPath: $0.localPath)
+        }
+        if file == nil, let mime = m.mime {
+            file = FileAttachment(name: mime.hasPrefix("video/") ? "video" : "photo", sizeBytes: 0, mime: mime, state: .received)
+        }
+        return ChatMessage(id: m.id, contactId: m.contactId, text: m.text, mine: m.mine, timeMs: m.timeMs, status: m.status,
+                           file: file, burn: m.burn, burnState: m.burnState, burnAtMs: m.burnAtMs)
+    }
+
     public func saveIdentity(phrase: String, name: String) throws {
-        try core.load(phrase: phrase, displayName: name)
+        try loadCore(phrase: phrase, name: name)
         store.recoveryPhrase = phrase
         store.displayName = name
     }
@@ -106,9 +174,93 @@ public final class MeshRepository {
     public func restoreFromBackup(_ r: RestoredBackup, name: String, method: String) throws {
         try saveIdentity(phrase: r.phrase, name: name)
         for c in r.contacts { try core.restoreContact(c) }
+        // Legacy blobs only: history now lives in the separate chat backup.
+        if let h = r.history { try core.restoreHistory(h) }
+        markRestored()
         store.backupMethods.insert(method)
         persistContacts()
+        loadMessages()
+        changed()
     }
+
+    /// 24-word restore with no cloud blob: identity + new device key (RS1).
+    public func restoreFromPhrase(_ phrase: String, name: String) throws {
+        try saveIdentity(phrase: phrase, name: name)
+        markRestored()
+        changed()
+    }
+
+    private func markRestored() {
+        restoredAtMs = (try? core.markRestored(nowMs: clock()))??.restoredAtMs
+    }
+
+    /// Restore chat text (+ backed-up media) from the chat backup. Blocking (network).
+    @discardableResult public func restoreChats() throws -> ChatRestoreResult? {
+        guard let sync = chatBackup else { return nil }
+        let sink = fileSink
+        let r = try sync.restore { msgId, mime, bytes in
+            sink?.save(ReceivedFileInfo(transferId: msgId, contactId: "", name: "media", mime: mime, bytes: bytes))
+        }
+        loadMessages()
+        changed()
+        return r
+    }
+
+    // MARK: missing media (CB3) + restore notices (RS1)
+
+    public func onRestoreNotice(_ n: RestoreNoticeInfo) {
+        append(ChatMessage(id: n.msgId, contactId: n.contactId, text: "restored:\(n.restoredAtMs ?? 0)", mine: false,
+                           timeMs: clock(), status: .system))
+    }
+
+    public func onMediaRequest(_ r: MediaRequestInfo) {
+        let bytes = r.localPath.flatMap { FileManager.default.contents(atPath: $0) }
+        try? core.answerMediaRequest(contactId: r.contactId, msgId: r.msgId, bytes: bytes)
+        kick?.kick(r.contactId)
+    }
+
+    public func onResendAsk(_ r: MediaRequestInfo) {
+        resendAsks.removeAll { $0.msgId == r.msgId }
+        resendAsks.append(r)
+        changed()
+    }
+
+    public func dismissResendAsk(_ msgId: String) {
+        resendAsks.removeAll { $0.msgId == msgId }
+        changed()
+    }
+
+    public func onMediaUpdate(_ u: MediaUpdateInfo) {
+        guard var m = find(u.contactId, u.msgId), var f = m.file, f.isPlaceholder else { return }
+        f.state = u.state
+        m.file = f
+        replace(m)
+    }
+
+    /// Tap on a placeholder: request again now.
+    public func requestMedia(_ contactId: String, msgId: String) {
+        guard var m = find(contactId, msgId), var f = m.file, f.state == .missing else { return }
+        try? core.requestMedia(msgId)
+        f.state = .requested
+        m.file = f
+        replace(m)
+        kick?.kick(contactId)
+    }
+
+    /// "Ask to resend" after the confirm sheet: ONE request carrying the optional note.
+    public func askToResend(_ contactId: String, msgId: String, note: String?) throws {
+        try core.askToResend(msgId, note: Self.resendNote(note))
+        kick?.kick(contactId)
+    }
+
+    /// Trimmed note, nil when empty, cut to ≤ 280 UTF-8 bytes on a character boundary.
+    public static func resendNote(_ note: String?) -> String? {
+        guard var n = note?.trimmingCharacters(in: .whitespacesAndNewlines), !n.isEmpty else { return nil }
+        while n.utf8.count > 280 { n.removeLast() }
+        return n
+    }
+
+    public func waitingMedia(_ contactId: String) -> Int { messages[contactId]?.filter { $0.file?.isPlaceholder == true }.count ?? 0 }
 
     public var contacts: [Contact] { core.contacts() }
     public func contact(_ id: String) -> Contact? { contacts.first { $0.id == id } }
@@ -134,8 +286,15 @@ public final class MeshRepository {
     /// "Verify & chat" → verified = true; "Chat without verifying" → false (no badge).
     @discardableResult
     public func addContact(qr: String, action: ContactAddAction) throws -> Contact {
+        let known = (try? core.previewContact(qr).alreadyKnown) ?? false
+        if known && action == .verifyAndChat {
+            // Re-verify in person: identity + *current* device key (RS2). Throws on a stale QR.
+            let c = try core.verifyContactFromQr(qr)
+            persistContacts()
+            return c
+        }
         let c = try core.addContactFromQr(qr)
-        if action == .verifyAndChat { try core.setVerified(c.id, true) }
+        if action == .verifyAndChat { _ = try core.verifyContactFromQr(qr) }
         persistContacts()
         return contact(c.id) ?? c
     }
@@ -146,7 +305,8 @@ public final class MeshRepository {
     }
 
     private func persistContacts() {
-        store.contacts = core.contacts()
+        // With a local store the Rust core persists contacts (encrypted); defaults only without one.
+        if dbPath == nil { store.contacts = core.contacts() }
         changed()
     }
 
@@ -223,6 +383,7 @@ public final class MeshRepository {
     /// From the link: a file arrived and its BLAKE3 hash matched (checked in Rust).
     public func onFileReceived(_ r: ReceivedFileInfo) {
         let path = fileSink?.save(r)
+        if fileSink != nil { try? core.setReceivedFilePath(r.transferId, path: path) }
         let ok = path != nil || fileSink == nil
         let f = FileAttachment(name: r.name, sizeBytes: UInt64(r.bytes.count), mime: r.mime, state: ok ? .received : .failed,
                                doneBytes: UInt64(r.bytes.count), localPath: path)
@@ -258,6 +419,10 @@ public final class MeshRepository {
         r.fileProgress.forEach(onFileProgress)
         r.files.forEach(onFileReceived)
         r.fileFailures.forEach(onFileFailed)
+        r.restoreNotices.forEach(onRestoreNotice)
+        r.mediaRequests.forEach(onMediaRequest)
+        r.resendAsks.forEach(onResendAsk)
+        r.mediaUpdates.forEach(onMediaUpdate)
     }
 
     public func markFlushed(_ contactId: String, count: Int) {

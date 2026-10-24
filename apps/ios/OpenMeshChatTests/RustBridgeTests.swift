@@ -32,6 +32,77 @@ final class RustBridgeTests: XCTestCase {
         }
     }
 
+    /// Encrypted local store: contacts, verification, chat, queue and an unopened burn message
+    /// survive an app restart; once burned it is gone after the next restart and never on disk.
+    func testMessagesQueueAndBurnSurviveRestart() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("omcp-store.db").path
+        let store = InMemoryAppStore()
+        var t = Int64(Date().timeIntervalSince1970 * 1000)
+        func bob() -> (RustOmcpCore, MeshRepository) {
+            let c = RustOmcpCore()
+            return (c, MeshRepository(core: c, store: store, dbPath: db, clock: { t }))
+        }
+        let (ca, ra) = try node("Ana")
+        var (cb, rb) = bob()
+        try rb.saveIdentity(phrase: try cb.generateRecoveryPhrase(), name: "Ben")
+        let bOnA = try ra.addContact(qr: try cb.qrPayload(), action: .chatWithoutVerifying)
+        let aOnB = try rb.addContact(qr: try ca.qrPayload(), action: .verifyAndChat)
+        XCTAssertTrue(store.contacts.isEmpty) // encrypted store, not UserDefaults
+        XCTAssertNotNil(store.storageKey)
+        let secret = "burn: meet at gate 7"
+        try ra.send(bOnA.id, text: "hello Ben")
+        try ra.send(bOnA.id, text: secret, burnOnce: .timer(10))
+        var la = try ca.openInitiatorLink(bOnA.id)
+        var lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        try rb.send(aOnB.id, text: "queued for Ana")
+        la.close(); lb.close()
+
+        (cb, rb) = bob()
+        XCTAssertTrue(rb.restore())
+        XCTAssertEqual(rb.contacts.first?.verified, true)
+        let chat = rb.messages[aOnB.id] ?? []
+        XCTAssertEqual(chat.map(\.text), ["hello Ben", "", "queued for Ana"])
+        XCTAssertEqual(chat[1].burnState, .unopened)
+        XCTAssertEqual(chat[2].status, .queued)
+        XCTAssertEqual(cb.queuedFor(aOnB.id), 1)
+        XCTAssertEqual(try cb.openBurn(chat[1].id, nowMs: t)?.text, secret)
+        t += 10_000
+        XCTAssertEqual(cb.tickBurn(nowMs: t), [chat[1].id])
+
+        (cb, rb) = bob()
+        XCTAssertTrue(rb.restore())
+        XCTAssertEqual((rb.messages[aOnB.id] ?? []).map(\.text), ["hello Ben", "queued for Ana"])
+        XCTAssertFalse(cb.burnIsLive(chat[1].id))
+        la = try ca.openInitiatorLink(bOnA.id)
+        lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        XCTAssertEqual(ra.messages[bOnA.id]?.last?.text, "queued for Ana")
+        XCTAssertEqual(cb.queuedFor(aOnB.id), 0)
+        la.close(); lb.close()
+        for f in try FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            let bytes = try Data(contentsOf: dir.appendingPathComponent(f))
+            XCTAssertNil(bytes.range(of: Data(secret.utf8)), "burn content on disk in \(f)")
+            XCTAssertNil(bytes.range(of: Data("hello Ben".utf8)), "plaintext on disk in \(f)")
+        }
+    }
+
+    func testUnreadableStoreIsSetAsideNotFatal() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omcp-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("omcp-store.db").path
+        let store = InMemoryAppStore()
+        let c1 = RustOmcpCore()
+        try MeshRepository(core: c1, store: store, dbPath: db).saveIdentity(phrase: try c1.generateRecoveryPhrase(), name: "Ben")
+        store.storageKey = Data(repeating: 7, count: 32) // e.g. Keychain reset
+        XCTAssertTrue(MeshRepository(core: RustOmcpCore(), store: store, dbPath: db).restore())
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.hasPrefix("omcp-store.db.unreadable-") })
+    }
+
     func testLinkedAndPolicyFromCore() {
         let c = RustOmcpCore()
         XCTAssertTrue(c.linked)
@@ -145,6 +216,74 @@ final class RustBridgeTests: XCTestCase {
         f2.setRestorePassword("violet-orbit-71-tundra")
         XCTAssertTrue(f2.restoreFromCloud())
     }
+
+    /// CB1/CB4 (padded incremental blobs, restore chats) + RS1/RS2 (notice, verified cleared, old QR fails).
+    func testChatBackupRestoreNoticeAndReverify() throws {
+        let t = Int64(Date().timeIntervalSince1970 * 1000)
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let bOnA = try ra.addContact(qr: try cb.qrPayload(), action: .verifyAndChat)
+        let aOnB = try rb.addContact(qr: try ca.qrPayload(), action: .verifyAndChat)
+        let oldQr = try ca.qrPayload()
+        try ra.send(bOnA.id, text: "see you at the market")
+        var la = try ca.openInitiatorLink(bOnA.id)
+        var lb = try cb.openResponderLink()
+        try pump(la, lb, try la.start(), into: ra, rb)
+        la.close(); lb.close()
+
+        let cloud = InMemoryChatBlobStore()
+        XCTAssertEqual(try ChatBackupSync(core: ca, blobs: cloud, clock: { t }).runText(onWifi: true, force: true), 1)
+        XCTAssertFalse(cloud.blobs.isEmpty)
+        for b in cloud.blobs.values { XCTAssertEqual(b.count % 65536, 0) }
+
+        let idBlob = try ca.createBackup(password: "correct horse battery staple", deviceHint: "test", nowMs: t)
+        let restored = try ca.openBackup(idBlob, password: "correct horse battery staple")
+        let c2 = RustOmcpCore()
+        let r2 = MeshRepository(core: c2, store: InMemoryAppStore(), clock: { t + 1000 })
+        r2.chatBackup = ChatBackupSync(core: c2, blobs: cloud, clock: { t + 1000 })
+        try r2.restoreFromBackup(restored, name: "Ana", method: "icloud")
+        let res = try XCTUnwrap(try r2.restoreChats())
+        XCTAssertGreaterThanOrEqual(res.messages, 1)
+        XCTAssertEqual(r2.messages[bOnA.id]?.last(where: { $0.status != .system })?.text, "see you at the market")
+        XCTAssertNotNil(r2.restoredAtMs)
+
+        // RS1: Ben sees the notice on the next link. RS2: verified cleared, old QR fails.
+        var notices: [RestoreNoticeInfo] = []
+        // v0.1.4a: the restored device has a new X25519 key, so it dials first.
+        la = try c2.openInitiatorLink(bOnA.id)
+        lb = try cb.openResponderLink()
+        var queue: [(toB: Bool, pdus: [Data])] = [(true, try la.start().outgoing)]
+        while !queue.isEmpty {
+            let (toB, pdus) = queue.removeFirst()
+            for p in pdus {
+                let out = try (toB ? lb : la).onPdu(p)
+                if toB { notices += out.restoreNotices; rb.applyFileEvents(out) }
+                if !out.outgoing.isEmpty { queue.append((!toB, out.outgoing)) }
+            }
+        }
+        XCTAssertEqual(notices.count, 1)
+        let c = try XCTUnwrap(rb.contact(aOnB.id))
+        XCTAssertFalse(c.verified)
+        XCTAssertTrue(c.restoredUnverified)
+        XCTAssertEqual(rb.messages[aOnB.id]?.last?.status, .system)
+        XCTAssertThrowsError(try rb.addContact(qr: oldQr, action: .verifyAndChat)) { e in
+            XCTAssertEqual(e as? CoreError, .verificationFailed)
+        }
+        let re = try rb.addContact(qr: try c2.qrPayload(), action: .verifyAndChat)
+        XCTAssertTrue(re.verified)
+        XCTAssertFalse(re.restoredUnverified)
+    }
+
+    /// Keep sent media + one-message Ask to resend over the real core (REQUIREMENTS v0.1.4b).
+    func testKeptMediaSettingsRoundTrip() throws {
+        let core = RustOmcpCore()
+        try MeshRepository(core: core, store: InMemoryAppStore()).saveIdentity(phrase: try core.generateRecoveryPhrase(), name: "Ana")
+        XCTAssertEqual(core.keptMediaSettings(), KeptMediaPrefs())
+        XCTAssertEqual(try core.setKeptMediaSettings(KeptMediaPrefs(maxDays: 30, maxBytes: 500_000_000), nowMs: 1), 0)
+        XCTAssertEqual(core.keptMediaSettings(), KeptMediaPrefs(maxDays: 30, maxBytes: 500_000_000))
+        XCTAssertEqual(core.keptMediaUsage(), HoplaKit.KeptMediaUsage(count: 0, bytes: 0))
+    }
+
 }
 
 extension RustOmcpCore {
@@ -153,4 +292,5 @@ extension RustOmcpCore {
         _ = try load(phrase: try generateRecoveryPhrase(), displayName: name)
         return try qrPayload()
     }
+
 }

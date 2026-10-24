@@ -19,6 +19,10 @@ data class BackupSettingsState(
     val passwordOk: Boolean = false,
     val shownPhrase: List<String>? = null,
     val message: String? = null,
+    val media: chat.omcp.app.core.MediaBackupPrefs = chat.omcp.app.core.MediaBackupPrefs(),
+    val chatsBackedUpMs: Long? = null,
+    /** Turning media off waits for the confirm dialog (§5.96 `--confirm-off`). */
+    val confirmMediaOff: Boolean = false,
 )
 
 /** Settings › Backup: status, change password / re-upload, delete cloud backup, view phrase. */
@@ -34,7 +38,37 @@ class BackupSettingsViewModel(
 
     private fun snapshot() = BackupSettingsState(
         cloud.available, BACKUP_DRIVE in store.backupMethods, BACKUP_WRITTEN in store.backupMethods, store.lastCloudBackupMs,
+        media = runCatching { repo.core.mediaBackupSettings() }.getOrDefault(chat.omcp.app.core.MediaBackupPrefs()),
     )
+
+    /** Media toggles. Turning the master off asks first; the delete runs off the main thread. */
+    fun setMedia(p: chat.omcp.app.core.MediaBackupPrefs, io: (() -> Unit) -> Unit = { Thread(it).start() }) {
+        if (_state.value.media.enabled && !p.enabled) { _state.update { it.copy(confirmMediaOff = true) }; return }
+        applyMedia(p, io)
+    }
+
+    fun confirmMediaOff(io: (() -> Unit) -> Unit = { Thread(it).start() }) =
+        applyMedia(_state.value.media.copy(enabled = false), io)
+
+    fun keepMedia() = _state.update { it.copy(confirmMediaOff = false) }
+
+    private fun applyMedia(p: chat.omcp.app.core.MediaBackupPrefs, io: (() -> Unit) -> Unit) {
+        _state.update { it.copy(media = p, confirmMediaOff = false) }
+        val sync = repo.chatBackup
+        io {
+            runCatching { if (sync != null) sync.setMedia(p) else repo.core.setMediaBackupSettings(p) }
+                .onFailure { e -> _state.update { it.copy(message = e.message) } }
+        }
+    }
+
+    /** "Back up chats now" (ignores the hourly / Wi-Fi rule). */
+    fun backUpChatsNow(io: (() -> Unit) -> Unit = { Thread(it).start() }) {
+        val sync = repo.chatBackup ?: return
+        io {
+            runCatching { sync.runText(onWifi = true, force = true) }
+                .fold({ _state.update { it.copy(chatsBackedUpMs = clock()) } }, { e -> _state.update { it.copy(message = e.message) } })
+        }
+    }
 
     fun setPassword(pw: String) = _state.update { it.copy(password = pw, passwordOk = repo.core.checkBackupPassword(pw).ok) }
 

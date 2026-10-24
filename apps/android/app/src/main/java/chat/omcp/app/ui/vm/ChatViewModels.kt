@@ -49,6 +49,13 @@ class ChatThreadViewModel(
 
     fun contact() = repo.contact(contactId)
 
+    val resendAsks = repo.resendAsks
+    val restoredAtMs = repo.restoredAtMs
+    fun requestMedia(msgId: String) = repo.requestMedia(contactId, msgId)
+    fun askToResend(msgId: String, note: String?) = repo.askToResend(contactId, msgId, note)
+    fun dismissResendAsk(msgId: String) = repo.dismissResendAsk(msgId)
+    fun waitingMedia() = repo.waitingMedia(contactId)
+
     /** Per-thread path: queued while anything for this contact waits, else the aggregate. */
     fun path(): PathKind {
         val s = repo.core.pathStatus()
