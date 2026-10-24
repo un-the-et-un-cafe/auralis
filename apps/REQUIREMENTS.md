@@ -7,6 +7,12 @@ Derived from PROTOCOL.md §13. Implementers (Proggy) treat this as the product c
 - Android 12+ (API 31+), Kotlin UI, Rust core via JNI
 - iOS 17+, SwiftUI, Rust core via FFI
 
+## Languages & accessibility
+- UI languages: English, French and Hebrew (RTL, with full layout mirroring). Hebrew copy is a draft until reviewed by a native speaker.
+- Light and dark themes are a matched pair, and both meet WCAG 2.2 AA (text 4.5:1, icons and UI 3:1). Disabled controls are exempt.
+- L1: Every screen renders correctly in Hebrew RTL (navigation, bubbles, chevrons and swipes mirrored; media, numbers and the clock not mirrored).
+- L2: An automated contrast check passes for all frames in light and dark.
+
 ## Must-have features (MVP)
 
 1. Identity creation + 24-word recovery phrase, secured through the onboarding backup flow (see "Onboarding & recovery backup")
@@ -47,7 +53,7 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
 ### Flow
 1. **Welcome**: one screen with the value proposition and a "Get started" button. No account, phone number or email needed.
 2. **Profile**: display name (optional) and avatar (optional). The identity key and 24-word phrase are generated in the background.
-3. **Secure your account**: the user picks one or more backup methods. At least one is required before the user can leave onboarding, but there's a "Remind me later" option that allows 24 h of use with a persistent banner.
+3. **Secure your account**: the user picks one or more backup methods. A cloud backup (Google Drive or iCloud) saves the recovery phrase **and all chat text**, encrypted (see "Encrypted chat backup"). Writing the phrase down restores only the identity and contacts, not the chats. At least one is required before the user can leave onboarding, but there's a "Remind me later" option that allows 24 h of use with a persistent banner.
    - **Google Drive** (Android default; also available on iOS)
    - **iCloud** (iOS default)
    - **Write it down** (shows the 24 words, then a quiz on 3 random words)
