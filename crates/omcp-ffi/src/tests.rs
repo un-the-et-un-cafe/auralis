@@ -81,7 +81,7 @@ fn end_to_end_text_both_directions() {
 
     let got = pump(&lb, &la, lb.send_text("hi back".into()).unwrap());
     assert_eq!(got[0].text, "hi back");
-    la.close();
+    la.shutdown();
     assert_eq!(a.path_status().nearby_peers, 0);
 }
 

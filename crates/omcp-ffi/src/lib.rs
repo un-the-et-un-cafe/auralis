@@ -797,7 +797,7 @@ impl MeshLink {
     }
 
     /// Tear down; the peer no longer counts as nearby.
-    pub fn close(&self) {
+    pub fn shutdown(&self) {
         self.lock().role = Role::Closed;
         self.node.lock().links_up.remove(&self.handle);
     }
