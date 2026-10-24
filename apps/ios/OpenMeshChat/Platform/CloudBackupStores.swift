@@ -10,7 +10,9 @@ import HoplaKit
 /// `iCloud.chat.omcp.app` (see OpenMeshChat.entitlements).
 final class ICloudBackupStore: CloudBackupStore {
     let method = backupICloud
-    private let db = CKContainer(identifier: "iCloud.chat.omcp.app").privateCloudDatabase
+    // Lazy: CKContainer(identifier:) traps when the binary lacks the iCloud entitlement (e.g. unsigned
+    // simulator builds in CI), so only create it when CloudKit is actually used.
+    private lazy var db = CKContainer(identifier: "iCloud.chat.omcp.app").privateCloudDatabase
     private let recordID = CKRecord.ID(recordName: "omcp-backup-v1")
     static let recordType = "OMCPBackup"
 
