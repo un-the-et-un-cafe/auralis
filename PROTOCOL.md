@@ -699,12 +699,17 @@ Computed per community, and per stream host, from **participant attestations**:
 7. **Chunk size: 64 KiB** for all blobs (this replaces the 16 KiB default in §7). BLE framing (§10.2) fragments as needed.
 8. **"Unlinkable" (SY6).** Tags from different epochs are unlinkable if, for any non-member distinguisher working on ≥ 10⁶ tag pairs, the advantage is < 0.005 and the test statistic |z| < 5. These are the pass thresholds for SY6.
 
+9. **Per-recipient sub-tags (replaces the forwarding order in item 1).** Each member *m* of a chat or group has a sub-tag per epoch, `subtag_m = BLAKE2b-64(exporter_secret, "OMCP-sub" || leaf_index_m || epoch)`. Nodes advertise only their own sub-tags in their want-digest, and carry state is kept per sub-tag. An envelope for a 1:1 chat or a small group (≤ 8 members) carries the recipients' sub-tags (TLV `0x56`, 8 B each). Groups over 8 members use the chat tag and Plumtree (§22.3). Forwarding: (a) to neighbours that want a sub-tag; else (b) to the lowest carry distance; else (c) **scoped flood** within `ttl_hops` (it replaces spray-and-wait for cold starts and missing carry state). SY4 requires 100 % delivery, cold and warm, with fewer transmissions than pure flooding.
+10. **Metadata metric (replaces 2).** *Per-message metadata* is the bytes needed to deliver one envelope beyond its ciphertext (header, routing TLVs, reconciliation exchanges caused by it). The averaged requirement is **≤ 256 B per delivered envelope, or ≤ 10 % of the ciphertext, whichever is larger**. Periodic hellos and digests count only towards the idle budget.
+11. **Idle budget and refresh (replaces the 5-min refresh in 2).** Digests are sent as deltas on change. A full digest is sent **only to a new neighbour, on request** (`DIGEST_REQ`), and as a safety refresh every 30 min. Idle overhead is ≤ 1 MB/day per node with up to 32 neighbours, and above that the hello interval backs off further (up to 120 s).
+
 ### 21.8 `header_aad` TLV registry
 | Type | Name | Length | Section |
 |---|---|---|---|
 | `0x01`–`0x3F` | reserved for core | — | §21 |
 | `0x54` | `mailbox_tag` | 8 | §22.1 |
-| `0x55`–`0x7F` | unassigned (extension process §16) | — | — |
+| `0x56` | `recipient_subtags` | 8·n | §22.7(9) |
+| `0x55`, `0x57`–`0x7F` | unassigned (extension process §16) | — | — |
 | `0x80`–`0xFF` | experimental / private use | — | — |
 
 ### 23.8 Clarifications (v0.2.1)
