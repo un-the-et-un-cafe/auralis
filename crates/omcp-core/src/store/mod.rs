@@ -2,8 +2,9 @@
 //! file-transfer metadata, received-file references, the pending outbound
 //! queue and burn-after-read state survive an app restart.
 //!
-//! Spec: PROTOCOL §4 item 4 ("Local storage key — device-bound (Android
-//! Keystore / iOS Secure Enclave)"), §5 threat table ("Compromised device"),
+//! Spec: PROTOCOL §3.2 item 4 ("Local storage key — device-bound (Android
+//! Keystore / iOS Secure Enclave)"), §4 threat table ("Compromised device"),
+//! §19.1 item 4 (crypto-shredding),
 //! apps/REQUIREMENTS.md "Burn after read (v0.1.3)" (separate encrypted table,
 //! crypto-shredding, B1 forensic test, B5 no burn content in backups).
 //!
