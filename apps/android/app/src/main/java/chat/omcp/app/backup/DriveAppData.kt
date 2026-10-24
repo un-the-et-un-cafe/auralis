@@ -73,6 +73,14 @@ class DriveAppDataClient(
         return call("GET", "$API/$id?alt=media", emptyMap(), null).body
     }
 
+    /** Drive `about.storageQuota`: true when usage has reached the limit (unlimited → false). */
+    fun storageFull(): Boolean {
+        val t = call("GET", "https://www.googleapis.com/drive/v3/about?fields=storageQuota", emptyMap(), null).text
+        val limit = Regex("\"limit\"\\s*:\\s*\"(\\d+)\"").find(t)?.groupValues?.get(1)?.toLongOrNull() ?: return false
+        val usage = Regex("\"usage\"\\s*:\\s*\"(\\d+)\"").find(t)?.groupValues?.get(1)?.toLongOrNull() ?: return false
+        return usage >= limit - 64 * 1024
+    }
+
     fun delete() {
         val id = findId() ?: return
         call("DELETE", "$API/$id", emptyMap(), null)

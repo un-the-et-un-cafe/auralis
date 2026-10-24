@@ -73,9 +73,15 @@ data class PasswordCheck(val ok: Boolean, val score: Int, val tooShort: Boolean)
 
 data class BackupMeta(val createdAtMs: Long, val deviceHint: String, val needsPassword: Boolean)
 
-data class RestoredBackup(val phrase: String, val contacts: List<Contact>)
+data class RestoredBackup(val phrase: String, val contacts: List<Contact>, val displayName: String? = null)
 
 class WrongBackupPasswordException : Exception("wrong backup password")
+
+/** Blob format `v` is newer than this build understands (§5.88 "Update Hopla"). */
+class BackupTooNewException : Exception("backup format too new")
+
+/** Blob can't be parsed or decrypted for a reason other than the password. */
+class BackupCorruptedException(msg: String) : Exception(msg)
 
 /** One BLE connection's secure session (Noise hybrid + M2 fragments). */
 interface CoreLink {
@@ -142,8 +148,12 @@ interface OmcpCore {
     fun checkBackupPassword(password: String): PasswordCheck
     /** Encrypted blob of identity + contacts. Never contains the plaintext phrase. */
     fun createBackup(password: String, deviceHint: String, nowMs: Long): ByteArray
+    /** Null if unreadable; throws [BackupTooNewException] if the format is newer than supported. */
     fun backupInfo(blob: ByteArray): BackupMeta?
-    /** Throws [WrongBackupPasswordException] on a wrong password. */
+    /**
+     * Throws [WrongBackupPasswordException] on a wrong password, [BackupTooNewException] or
+     * [BackupCorruptedException] otherwise.
+     */
     fun openBackup(blob: ByteArray, password: String): RestoredBackup
     /** The loaded identity's phrase (gate behind device auth in UI). */
     fun recoveryPhrase(): String

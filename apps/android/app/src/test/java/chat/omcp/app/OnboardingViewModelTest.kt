@@ -27,6 +27,8 @@ class OnboardingViewModelTest {
     @Test
     fun `O1 cloud backup path reaches chats in 4 screens`() {
         val vm = vm()
+        assertEquals(OnboardingStep.RestoreChecking, vm.state.value.step)
+        vm.detectBackup() // empty Drive → Welcome, silently
         val seen = mutableListOf(vm.state.value.step)
         vm.getStarted(); seen += vm.state.value.step
         vm.setName("Alice"); vm.profileNext(); seen += vm.state.value.step
@@ -114,10 +116,12 @@ class OnboardingViewModelTest {
         val repo2 = MeshRepository(FakeOmcpCore(), InMemoryAppStore()) { now }
         val vm2 = vm(repo2)
         vm2.detectBackup()
-        assertEquals(OnboardingStep.RestorePrompt, vm2.state.value.step)
+        assertEquals(OnboardingStep.RestoreDetect, vm2.state.value.step)
         assertNotNull(vm2.state.value.foundBackup)
+        vm2.restoreTapped()
         vm2.setRestorePassword("correct horse battery")
         assertTrue(vm2.restoreFromCloud())
+        assertEquals(OnboardingStep.RestoreSuccess, vm2.state.value.step)
         assertEquals(oldId, repo2.core.identity()!!.peerIdHex)
         val restored = repo2.contacts.value.single()
         assertEquals(c.id, restored.id)
@@ -134,12 +138,12 @@ class OnboardingViewModelTest {
         val repo2 = MeshRepository(FakeOmcpCore(), InMemoryAppStore()) { now }
         val vm2 = vm(repo2)
         vm2.detectBackup()
+        vm2.restoreTapped()
         repeat(3) {
             vm2.setRestorePassword("wrong password!")
             assertFalse(vm2.restoreFromCloud())
         }
-        assertNotNull(vm2.state.value.error)
-        assertTrue(vm2.state.value.restoreLockMs > 0)
+        assertEquals(5, vm2.state.value.restoreLockMinutes)
         // Locked: even the right password is refused until the delay passes.
         vm2.setRestorePassword("correct horse battery")
         assertFalse(vm2.restoreFromCloud())

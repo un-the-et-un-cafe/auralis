@@ -110,7 +110,7 @@ class MeshRepository(
 
     /** Restore identity + contacts + verification state from a decrypted backup (O3). */
     fun restoreFromBackup(r: chat.omcp.app.core.RestoredBackup, name: String) {
-        saveIdentity(r.phrase, name)
+        saveIdentity(r.phrase, r.displayName?.takeIf { it.isNotBlank() } ?: name)
         r.contacts.forEach { core.restoreContact(it) }
         store.backupMethods = store.backupMethods + BACKUP_DRIVE
         persistContacts()

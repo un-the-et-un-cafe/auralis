@@ -102,15 +102,23 @@ class RustOmcpCore : OmcpCore {
     override fun createBackup(password: String, deviceHint: String, nowMs: Long): ByteArray =
         n().createBackup(password, deviceHint, nowMs.toULong())
 
-    override fun backupInfo(blob: ByteArray): BackupMeta? = runCatching {
+    override fun backupInfo(blob: ByteArray): BackupMeta? = try {
         chat.omcp.ffi.backupInfo(blob).let { BackupMeta(it.createdAtMs.toLong(), it.deviceHint, it.needsPassword) }
-    }.getOrNull()
+    } catch (e: FfiException.BackupTooNew) {
+        throw BackupTooNewException()
+    } catch (e: FfiException) {
+        null
+    }
 
     override fun openBackup(blob: ByteArray, password: String): RestoredBackup = try {
         val r = chat.omcp.ffi.openBackupWithPassword(blob, password)
-        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified) })
+        RestoredBackup(r.phrase, r.contacts.map { Contact(it.contactId, it.displayName, emptyList(), it.verified) }, r.displayName)
     } catch (e: FfiException.WrongBackupPassword) {
         throw WrongBackupPasswordException()
+    } catch (e: FfiException.BackupTooNew) {
+        throw BackupTooNewException()
+    } catch (e: FfiException) {
+        throw BackupCorruptedException(e.message ?: "unreadable backup")
     }
 
     override fun recoveryPhrase(): String = n().recoveryPhrase()

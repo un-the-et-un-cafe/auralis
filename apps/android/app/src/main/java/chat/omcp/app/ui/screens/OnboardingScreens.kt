@@ -27,8 +27,6 @@ import chat.omcp.app.ui.components.CalloutKind
 import chat.omcp.app.ui.components.PlainPage
 import chat.omcp.app.ui.vm.OnboardingStep
 import chat.omcp.app.ui.vm.OnboardingViewModel
-import java.text.DateFormat
-import java.util.Date
 
 /**
  * Onboarding per apps/REQUIREMENTS.md "Onboarding & recovery backup (v0.1.1)".
@@ -53,31 +51,18 @@ fun OnboardingFlow(
             BodyText(stringResource(R.string.onb_tagline))
             BodyText(stringResource(R.string.onb_welcome_body))
             Button(onClick = vm::getStarted, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onb_get_started)) }
+            OutlinedButton(onClick = vm::openRestoreSource, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.restore_welcome_cta)) }
             TextButton(onClick = vm::usePhraseInstead) { Text(stringResource(R.string.onb_restore_phrase)) }
         }
 
-        OnboardingStep.RestorePrompt -> PlainPage(stringResource(R.string.onb_welcome_back)) {
-            val meta = s.foundBackup
-            BodyText(
-                stringResource(
-                    R.string.onb_backup_found,
-                    meta?.deviceHint ?: "",
-                    meta?.let { DateFormat.getDateInstance().format(Date(it.createdAtMs)) } ?: "",
-                ),
-            )
-            OutlinedTextField(
-                s.restorePassword, vm::setRestorePassword,
-                label = { Text(stringResource(R.string.onb_backup_password)) },
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrect = false),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            s.error?.let { Callout(it, CalloutKind.Danger) }
-            if (s.restoreLockMs > 0) Callout(stringResource(R.string.onb_retry_wait, (s.restoreLockMs / 1000).toInt()), CalloutKind.Warn)
-            Button(onClick = { io.launch(kotlinx.coroutines.Dispatchers.IO) { vm.restoreFromCloud() } }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onb_restore)) }
-            TextButton(onClick = vm::usePhraseInstead) { Text(stringResource(R.string.onb_restore_phrase)) }
-            TextButton(onClick = vm::getStarted) { Text(stringResource(R.string.onb_start_fresh)) }
-        }
+        OnboardingStep.RestoreChecking -> RestoreCheckingScreen()
+        OnboardingStep.RestoreDetect -> RestoreDetectScreen(s, vm, io)
+        OnboardingStep.RestoreSource -> RestoreSourceScreen(s, vm, io)
+        OnboardingStep.RestoreNoBackup -> RestoreNoBackupScreen(s, vm, io)
+        OnboardingStep.RestorePassword -> RestorePasswordScreen(s, vm, io)
+        OnboardingStep.RestoreProgress -> RestoreProgressScreen(s)
+        OnboardingStep.RestoreSuccess -> RestoreSuccessScreen(s, vm)
+        OnboardingStep.RestoreError -> RestoreErrorScreen(s, vm, io)
 
         OnboardingStep.RestorePhrase -> PlainPage(stringResource(R.string.onb_restore_title)) {
             BodyText(stringResource(R.string.onb_restore_body))

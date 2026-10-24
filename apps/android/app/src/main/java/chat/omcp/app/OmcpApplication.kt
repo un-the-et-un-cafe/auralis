@@ -32,6 +32,9 @@ class OmcpApplication : Application() {
         }
     }
 
+    /** Restore-from-backup job state (§5.86); the job itself runs in [chat.omcp.app.restore.RestoreWorker]. */
+    val restore by lazy { chat.omcp.app.restore.RestoreCoordinator(repository) }
+
     val receivedFiles by lazy { chat.omcp.app.files.ReceivedFiles(this) }
 
     override fun onCreate() {

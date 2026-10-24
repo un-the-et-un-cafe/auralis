@@ -16,6 +16,8 @@ interface CloudBackupStore {
     fun delete()
     /** Like [download] but never shows UI (fresh-install probe); null if consent is needed. */
     fun downloadSilently(): ByteArray? = download()
+    /** True if the cloud account has no room left (restore still works; the next backup won't). */
+    fun storageFull(): Boolean = false
 }
 
 class CloudUnavailableException(msg: String) : Exception(msg)
@@ -43,6 +45,7 @@ class DriveAppDataBackupStore(
     override fun download(): ByteArray? = if (available) d().download() else null
     override fun delete() = d().delete()
     override fun downloadSilently(): ByteArray? = if (available) d(interactive = false).download() else null
+    override fun storageFull(): Boolean = available && runCatching { d(interactive = false).storageFull() }.getOrDefault(false)
 }
 
 /** In-memory store for tests and the debug "simulated Drive" toggle. */
@@ -53,6 +56,10 @@ class InMemoryCloudBackupStore(override val label: String = "Google Drive (simul
         private set
     override val available = true
     override fun upload(blob: ByteArray) { this.blob = blob.copyOf(); uploads++ }
-    override fun download() = blob?.copyOf()
+    override fun download(): ByteArray? { failWith?.let { throw it }; return blob?.copyOf() }
     override fun delete() { blob = null }
+    /** Test hooks: next calls fail with this, or report a full account. */
+    var failWith: Exception? = null
+    var full = false
+    override fun storageFull() = full
 }

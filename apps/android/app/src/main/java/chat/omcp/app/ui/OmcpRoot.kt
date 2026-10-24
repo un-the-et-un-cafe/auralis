@@ -100,7 +100,19 @@ fun OmcpRoot(
 
     if (!onboarded || gate == BackupGate.Required) {
         // O6: after 24 h without a backup method, the Secure step is mandatory.
-        val ovm = vm { OnboardingViewModel(repo, cloud) }
+        val app = ctx.applicationContext as? chat.omcp.app.OmcpApplication
+        val ovm = vm {
+            if (app != null) {
+                OnboardingViewModel(
+                    repo, cloud,
+                    deviceHint = android.os.Build.MODEL ?: "Android",
+                    restore = app.restore,
+                    runner = chat.omcp.app.restore.RestoreWorker.runner(ctx.applicationContext),
+                )
+            } else {
+                OnboardingViewModel(repo, cloud)
+            }
+        }
         if (onboarded && gate == BackupGate.Required) {
             LaunchedEffect(Unit) { if (ovm.state.value.step == OnboardingStep.Welcome) ovm.getStarted(); ovm.profileNext() }
         }

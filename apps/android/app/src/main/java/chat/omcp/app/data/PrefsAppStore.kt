@@ -103,6 +103,19 @@ class PrefsAppStore(context: Context) : AppStore {
         get() = prefs.getLong("backup_deadline", 0)
         set(v) = prefs.edit().putLong("backup_deadline", v).apply()
 
+    // commit(): the lockout must survive the process being killed right after a wrong try.
+    override var restoreFailures: Int
+        get() = prefs.getInt("restore_failures", 0)
+        set(v) { prefs.edit().putInt("restore_failures", v).commit() }
+
+    override var restoreRound: Int
+        get() = prefs.getInt("restore_round", 0)
+        set(v) { prefs.edit().putInt("restore_round", v).commit() }
+
+    override var restoreLockedUntilMs: Long
+        get() = prefs.getLong("restore_locked_until", 0)
+        set(v) { prefs.edit().putLong("restore_locked_until", v).commit() }
+
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey(ALIAS, null) as? SecretKey)?.let { return it }

@@ -121,11 +121,13 @@ class FakeOmcpCore : OmcpCore {
 
     override fun backupInfo(blob: ByteArray): BackupMeta? {
         val parts = String(blob).split("|")
+        if (parts.isNotEmpty() && parts[0] == "FAKEBK9") throw BackupTooNewException()
         if (parts.size < 4 || parts[0] != "FAKEBK") return null
         return BackupMeta(parts[1].toLong(), parts[2], true)
     }
 
     override fun openBackup(blob: ByteArray, password: String): RestoredBackup {
+        if (backupInfo(blob) == null) throw BackupCorruptedException("not a fake backup")
         val head = String(blob).split("|").take(3).joinToString("|").length + 1
         val k = password.hashCode()
         val body = String(blob.drop(head).map { (it.toInt() xor k).toByte() }.toByteArray())

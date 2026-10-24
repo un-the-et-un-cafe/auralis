@@ -94,6 +94,8 @@ dependencies {
 
     implementation("androidx.fragment:fragment-ktx:1.8.5")
     implementation("androidx.biometric:biometric:1.1.0")
+    // Restore job (DESIGN_SPEC §5.86): expedited work + ongoing notification.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Drive backup: Google Identity Services AuthorizationClient (scope drive.appdata only).
     implementation("com.google.android.gms:play-services-auth:21.3.0")
     // UniFFI Kotlin bindings load libomcp_ffi.so through JNA.
