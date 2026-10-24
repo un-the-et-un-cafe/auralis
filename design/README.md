@@ -1,6 +1,6 @@
-# OMCP App Design Pack v0.1.9 — Hopla
+# OMCP App Design Pack v0.1.14 — Hopla
 
-**Date:** 2026-10-24 (Europe/Paris) · v0.1.8 2026-10-24 · v0.1.7 2026-10-24 · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
+**Date:** 2026-10-24 (Europe/Paris) · v0.1.13 2026-10-24 · v0.1.12 2026-10-24 · v0.1.11 2026-10-24 · v0.1.10 2026-10-24 · v0.1.9 2026-10-24 · v0.1.8 2026-10-24 · v0.1.7 2026-10-24 · v0.1.6 2026-10-24 · v0.1.5 2026-10-24 · v0.1.4 2026-10-24 · v0.1.3 2026-10-24 · v0.1.2 2026-10-24 · v0.1.1 2026-10-24 · v0.1.0 2026-10-23  
 **App name:** Hopla (consumer app) · **Protocol:** OMCP. Logo: approved `brand/hopla-v2/icon.svg` (inlined in welcome, done, restore mockups).  
 **Audience:** Proggy (Android/iOS implementers), Pipely (release), the maintainer / Writey (product)  
 **Source of truth for product rules:** `../PROTOCOL.md` §13, §20 and `../apps/REQUIREMENTS.md`  
@@ -123,7 +123,19 @@ design/
     onboarding-secure-reminder.html (+ .png, --expired) v0.1.2
     onboarding-done.html (+ .png)                     v0.1.2
     settings-backup.html (+ .png, --queued, --view-phrase-auth, --delete-confirm) v0.1.2
-    restore-reinstall.html (+ .png, --password, --wrong-password, --error) v0.1.2
+    media-missing.html (+ .png, --requested, --syncing, --restored, --reduced-motion, --video, --gone, --group, --dark, --ios, --ios-dark, --fr, --syncing-fr, --gone-fr, --confirm, --sent, --wifi, --wifi-dark, --confirm-fr, --sent-fr, --wifi-fr, --ios-confirm)  v0.1.11, v0.1.12 HERO
+    settings-media-backup.html (+ .png, --on, --uploading, --near-full, --full, --confirm-off, --deleting, --dark, --ios, --ios-dark, --fr, --confirm-off-fr, --near-full-fr, --deleting-fr)  v0.1.13 HERO
+    restore-media.html (+ .png, --success, --partial, --partial-fr, --partial-dark, --dark, --ios, --success-dark, --success-ios, --fr, --success-fr)  v0.1.13, v0.1.14 HERO
+    restore-notice.html (+ .png, --sheet, --list, --self, --qr, --reverified, --list-reverified, --dark, --sheet-dark, --reverified-dark, --ios, --ios-list, --ios-self-dark, --ios-reverified, --fr, --sheet-fr, --list-fr, --self-fr, --qr-fr, --reverified-fr)  v0.1.12, v0.1.14 HERO
+    settings-missing-media.html (+ .png, --on, --dark, --ios, --fr)  v0.1.12
+    chats-restored.html (+ .png, --dark, --ios, --ios-dark, --fr)  v0.1.11
+    restore-detect.html (+ .png, --ios, --dark, --ios-dark, --checking, --start-fresh, --fr, --ios-fr)  v0.1.10 (copy v0.1.11) HERO
+    restore-source.html (+ .png, --ios, --picker, --ios-google-signin, --dark, --no-backup, --no-backup-ios, --no-backup-dark, --fr, --no-backup-fr)  v0.1.10
+    restore-password.html (+ .png, --wrong, --lockout, --dark, --ios, --keychain, --keychain-missing, --keychain-dark, --fr, --lockout-fr, --keychain-fr)  v0.1.10 HERO
+    restore-progress.html (+ .png, --download, --decrypt, --dark, --ios, --reduced-motion, --background-android, --background-ios, --fr)  v0.1.10 (copy v0.1.11) HERO
+    restore-success.html (+ .png, --dark, --ios, --ios-dark, --fr)  v0.1.10 (copy v0.1.11, v0.1.12) HERO
+    restore-error.html (+ .png, --permission, --quota, --corrupted, --too-new, --dark, --ios, --fr, --offline-fr)  v0.1.10
+    restore-reinstall.html (+ .png, --password, --wrong-password, --error) v0.1.2 — visuals superseded by restore-* (v0.1.10)
     onboarding-restore.html (+ .png)                  24-word fallback
     onboarding-recovery.html (+ .png, --checked.png)  DEPRECATED
     onboarding-recovery-confirm.html (+ .png, --mismatch.png) DEPRECATED

@@ -1,5 +1,85 @@
 # OMCP Design Pack — Changelog
 
+## v0.1.14 — 2026-10-24
+
+Re-verification after restore (REQUIREMENTS, RS2). `DESIGN_SPEC.md` §5.98.
+
+### Changed
+- `restore-notice`: after a restore, contacts lose the verified badge. A “Restored, not verified” pill shows in the header and row until re-verified. The sheet says the safety number changed, with primary **Verify in person (QR)**. The restored phone's banner says contacts need to re-verify you, with Show my QR.
+- `restore-success`, `restore-media`: “Your safety number changed. Contacts need to verify you again in person (QR).” Verified badges now read “Still verified on your side”.
+- Earlier spec text saying verification carries over is annotated (§5.x backup note, Restoring row, §5.87, §5.95, Q15).
+
+### Added
+- QR re-verify frames (`--qr`, `--qr-fr`) and badge earned back (`--reverified`, `--list-reverified`, dark/iOS/FR).
+- `restore-media--partial` (+`-fr`, `-dark`): a partial media restore falls back to placeholders that refill from nearby contacts.
+- `settings-media-backup` copy: “Backed up daily on Wi-Fi”; the size card notes chats hourly, media daily.
+- §12: Q20–Q23 resolved; Q24–Q25 added.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.13 — 2026-10-24
+
+Media backup setting (REQUIREMENTS “Include media”, CB5). `DESIGN_SPEC.md` §5N (§5.96–5.97).
+
+### Added
+- `settings-media-backup`: “Also back up photos, videos and files” (off by default), per-type toggles, estimated size, Wi-Fi only with a mobile-data option, first-upload progress, nearly-full / full quota warnings, danger confirm to turn off and delete the media backup, and a deleting progress state. 14 frames, EN/FR, light/dark, Android/iOS.
+- `restore-media`: detect and Welcome back when the backup includes media. Media is restored directly (hash checked); only types that were off come back via placeholders.
+
+### Changed
+- §5.92 placeholders now apply only to media not in the backup. §12 Q21–Q23 added.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.12 — 2026-10-24
+
+Approved Q17–Q19 (REQUIREMENTS “Encrypted chat backup”). `DESIGN_SPEC.md` §5.94.
+
+### Added
+- `media-missing`: “Ask to resend” on the partner-no-longer-has-it state, a confirm sheet that previews the message before sending, a Sent state, and a “Waiting for Wi-Fi” state with a link to the setting (EN/FR, light/dark, iOS).
+- `settings-missing-media`: Settings › Backup › Missing media, “Use mobile data for missing media” (off by default); Bluetooth mesh is always allowed.
+
+- `restore-notice`: restore indicator (security). Contacts get an in-chat notice “<name> restored Hopla on a new device · <date>”, a sheet with Verify safety number / Block, and a 7-day “Restored” badge beside the verified badge in the row and header. The restored phone gets a banner: “You restored this account. Your contacts were notified.”
+
+### Changed
+- The restore is announced to contacts. Media re-requests carry no extra metadata (toast “Requested”). `restore-success` notes that contacts will see the restore. The Settings footnote saying contacts aren't told was removed.
+- §12 Q17–Q19 resolved (2026-10-24). New Q20 (safety number after a restore).
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. Mirror updated.
+
+## v0.1.11 — 2026-10-24
+
+Text chat backup (REQUIREMENTS “Encrypted chat backup”, v0.1.4 text only). `DESIGN_SPEC.md` §5M (§5.91–5.93).
+
+### Added
+- `media-missing`: calm missing-media placeholders for photo, video, voice note and file. Keeps type, size, sender, time and caption. States: waiting, requested (with toast), syncing via mesh/gateway with progress, restored (swap animation 240 ms, reduced-motion instant), partner no longer has it, group. Thread banner “N media waiting”.
+- `chats-restored`: chats list “Chats restored” card with “12 photos and 4 files waiting for partners”, plus per-row waiting pills.
+- 14 + 5 frames in light/dark, Android/iOS, EN/FR.
+
+### Changed
+- `restore-detect`, `restore-progress`, `restore-success`: chats now come back. Size reads “2.4 MB · text only”. Success shows Restored / Coming back later / Not restored.
+- §12 Q14 resolved. New Q17–Q19.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real names/photos. Mirror updated.
+
+## v0.1.10 — 2026-10-24
+
+Restore from backup for Google Drive and iCloud, reinstall-first. Extends §5.17/§5.26/§5.30/§5.31; `DESIGN_SPEC.md` §5L (§5.83–5.90).
+
+### Added
+- Hero screens: `restore-detect` (auto-detected backup card: date, size, device, protection; Start fresh confirm), `restore-password` (wrong, lockout, iCloud Keychain no-password, Keychain not synced), `restore-progress` (download → decrypt → contacts and chats, backgrounding on Android and iOS), `restore-success` (“Welcome back”, restored vs not restored).
+- `restore-source` (Welcome › Restore fallback, system account picker / Google sign-in, No backup found), `restore-error` (offline, permission revoked, storage full, corrupted, version too new).
+- 52 PNG frames, light/dark, Android/iOS, EN/FR. §12 Q14–Q16.
+
+### Changed
+- §5.31 `restore-reinstall` visuals superseded (rules unchanged). Settings › Backup has no Restore entry.
+
+### Constraints observed
+- `brand/` and `tokens.css` unchanged. No GitHub push. No real names/photos. Mirror updated.
+
 ## v0.1.9 — 2026-10-24
 
 maintainer resolved Q12/Q13; Q11 fixed in REQUIREMENTS (commit 6a0ee67). `DESIGN_SPEC.md` §5K (§5.81–5.82).

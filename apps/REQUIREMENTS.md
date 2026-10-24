@@ -68,10 +68,31 @@ Goal: a new user is chatting in under 60 seconds, and nobody loses their identit
 ### Acceptance tests
 - O1: A fresh install reaches the chat list in ≤ 4 screens and ≤ 60 s for a user who picks a cloud backup.
 - O2: The Drive and iCloud blobs never contain the phrase or the key in plaintext (verified by inspecting the uploaded bytes in a test).
-- O3: Reinstall, then restore from Google Drive (Android) and from iCloud (iOS). The identity, contacts and verification state are restored.
+- O3: Reinstall, then restore from Google Drive (Android) and from iCloud (iOS). The identity and contacts are restored, along with your verifications of contacts. Contacts' verification of you resets (see RS2).
 - O4: A wrong backup password fails cleanly, with rate-limited retries. The phrase fallback still works.
 - O5: Deleting the cloud backup in Settings removes the remote record (verified via API).
 - O6: Skipping the backup shows a banner, and after 24 h the user can't continue without completing a backup method.
+
+### Encrypted chat backup (v0.1.4, text by default, media optional)
+- When Google Drive or iCloud backup is enabled, Hopla also backs up **all message text**: 1:1 chats, groups, community chats you joined, plus reactions, edits, timestamps and contact names. It does **not** back up images, videos, voice notes or files.
+- The backup is encrypted end to end on the device with a key derived from the 24-word phrase (HKDF, label `hopla/chat-backup/v1`, XChaCha20-Poly1305). Google and Apple only ever see opaque blobs, stored in Drive `appDataFolder` or the iCloud private database.
+- The backup is incremental: an encrypted append-only log plus a weekly compacted snapshot, padded to buckets of 64 KiB. It uploads on Wi-Fi only by default and runs at most hourly.
+- Burn-after-read and view-once messages are never backed up.
+- **Include media (setting, off by default)**: Settings > Backup > "Also back up photos, videos and files". When it's on, media is added to the same encrypted backup, with per-type toggles (photos, videos, voice notes, files), Wi-Fi only by default, and an estimated size plus a warning about provider storage quota. Restored media then appears directly with no placeholder. Media that hasn't been backed up still uses the placeholder flow. Turning it off deletes the backed-up media blobs after confirmation.
+- Media backup defaults: when it's switched on, photos, voice notes and files are pre-selected and videos are not. Media backs up in a separate daily pass, on Wi-Fi only by default (an optional "Back up media on mobile data" toggle is off by default), apart from the hourly text backup. If the media download fails partway through a restore, the remaining items fall back to placeholders that refill from nearby contacts.
+- CB5: With media backup on, a restore returns every media item, its hash verified. With it off, no media bytes are uploaded.
+- **Restore**: after the 24-word recovery, the text history is restored. Every media item comes back as a **missing-media placeholder**, keeping its type, size, sender, time and caption (designed by Designy). When a chat partner who still has the file is reachable over the mesh or a gateway, the app automatically requests it again using the stored media locator and hash (§7, 64 KiB chunks), verifies the hash, and swaps the placeholder for the file. A user can also tap the placeholder to request it.
+- **Partner no longer has it**: the placeholder says so and offers a one-tap "Ask to resend" request, which the user confirms before it is sent.
+- **Restore indicator (security)**: after a restore from the 24 words, the restored device creates a new device key, signed by the identity key, with a `restored_at` timestamp. Contacts see an in-chat system notice, "<name> restored Hopla on a new device · <date>", and a "Restored" badge on the contact for 7 days, like a safety-number change. On the restored phone, a banner in each chat says "You restored this account. Your contacts were notified." If the restore was not made by the account owner, the contact can tap the notice to verify the safety number or block. Media re-requests themselves carry no extra metadata.
+- **Re-verification after restore**: a restore resets the contact's "Verified" status on every contact's device. The safety number now covers the identity key plus the current device key, so it changes after a restore and contacts must verify again (QR code in person). Until then the contact shows as "Restored, not verified".
+- RS2: After a restore, the safety number differs from the one before, the verified badge is cleared for all contacts, and verifying with the old QR code fails.
+- RS1: Every contact who comes online after the restore shows the notice within 5 s of syncing. The notice can't be suppressed by the restored device, and the old device key is marked superseded.
+- **Data use**: missing media re-downloads over a gateway on Wi-Fi only by default, with a setting to allow mobile data. Over direct BLE mesh it is always allowed.
+- Tests:
+  - CB1: Restoring on a new device brings back 100% of message text and no media bytes.
+  - CB2: The backup blob can't be decrypted without the 24 words, and the provider sees only padded sizes.
+  - CB3: Placeholders show for every media item, and each one resolves within 10 s once a partner holding the file is in range.
+  - CB4: Burn-after-read content is never present in the backup.
 
 ## Notifications (v0.1.2)
 - **Default ON**: when a message arrives, the notification shows the sender name, avatar and a text preview. Calls, mentions and livestream starts notify too.
