@@ -346,6 +346,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
     private fun handle(r: LinkResult) {
         r.received.forEach { repo.onReceived(it); MeshNotifications.onMessage(context, repo, it) }
+        r.opened.forEach(repo::onOpened)
         r.peerContactId?.let { repo.markFlushed(it, r.flushed) } ?: repo.refresh()
     }
 

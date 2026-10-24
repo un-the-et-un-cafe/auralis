@@ -97,14 +97,18 @@ App icon is a **placeholder** (redesign pending).
 - **Text**: shows blurred as "Tap to read" and opens in a full-screen viewer with a countdown ring. When the timer ends it's deleted. The sender deletes its copy once the `OPENED` receipt arrives and its timer ends.
 - **View-once image**: opens once. A second tap shows "🔥 Photo opened". Save, forward, quote and share are disabled (`ChatMessage.canShare`).
 - **FLAG_SECURE**: the viewer is a `Dialog` with `SecureFlagPolicy.SecureOn`, on top of the app-wide block (B3, updated: burn content can never be captured, per SS1).
-- **Storage**: burnable content lives only in the in-memory `BurnVault`, with a separate AES-GCM key per item. Shredding zeroes the key and ciphertext. `ChatMessage.text` stays empty.
+- **Storage**: all burn rules live in Rust (`omcp-core::burn` through `omcp-ffi`): validation, timers, unread expiry, single use, `OPENED` and crypto-shredding. Kotlin only holds UI state, and `ChatMessage.text` stays empty for burn messages.
+- **Wire**: every send uses `InnerV1` (outer content type `0x02`), with the encrypted `burn` header and inner content type. Opening a message queues an encrypted `OPENED` receipt. When the sender gets it, its copy is shredded in Rust (view once or media), or its timer starts.
 - **Exclusions (B5)**: notifications always use the generic text. Backups exclude burn content: `allowBackup=false`, and the cloud backup holds only the phrase and contacts. There's no search index yet, so nothing is indexed. The honest-copy line is shown in the viewer and in chat info.
-- **Tests**: `BurnAfterReadTest` (B1, B2, B4, B5 at the logic level) plus Rust `omcp-core::burn` tests (header, single-use media key, OPENED, crypto-shredding, relay expiry).
+- **Tests**:
+  - `RustBridgeTest`: two Rust nodes behind two repositories. Covers timer burn plus `OPENED` deleting on both sides, view-once image (single use, placeholder, sender shredded on `OPENED`), and unread-TTL expiry on both sides.
+  - `BurnAfterReadTest`: UI-only checks and B5.
+  - Rust `omcp-core::burn` and `omcp-ffi` burn tests.
 - **Stubs**:
-  - The burn header, OPENED receipt and media aren't carried over the FFI or mesh yet: `core.queueText` sends plain text, and `BurnControl` is a no-op.
-  - Media transfer itself is still queued-only, as before.
+  - Media transfer from the app stays queued: the picker path doesn't send bytes. `queueMedia` (≤ 16 KiB) exists in the core and is used by tests only.
   - View-once video playback is a placeholder (no Media3).
-  - The 256-member group cap isn't enforced in the UI, because there are no groups in the Android beta.
+  - Relays: the outer `expires_at` applies to gateway `OpaqueEnvelope.expiry_ms`, but the gateway transport isn't wired on Android yet. Over BLE, `EnvelopeV1` has no expiry field, so unread expiry is enforced by both endpoints.
+  - The 256-member cap isn't enforced in the UI, because there are no groups in the Android beta.
 - **Deferred to iOS (M6)**: iOS B1–B5. The 📸 screenshot notice has been dropped: screenshots are now blocked app-wide (see below).
 
 ## Product decisions (2026-10-24)

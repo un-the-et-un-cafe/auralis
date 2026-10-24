@@ -44,7 +44,7 @@ class ChatThreadViewModel(val repo: MeshRepository, val contactId: String) : Vie
     /** Per-chat default (Chat info) so the composer can show the 🔥 state. */
     fun chatBurn() = repo.chatBurn(contactId)
 
-    fun openBurn(id: String) = repo.openBurn(contactId, id)
+    fun openBurn(id: String): ByteArray? = repo.openBurn(contactId, id)?.body
     fun closeBurn(id: String) = repo.closeBurn(contactId, id)
     fun tickBurn() = repo.tickBurn()
 

@@ -17,7 +17,15 @@ data class Contact(
 
 data class ContactPreview(val contact: Contact, val alreadyKnown: Boolean, val mismatchWith: Contact?)
 
-data class IncomingText(val contactId: String, val text: String, val createdMs: Long, val envelopeId: String)
+data class IncomingText(
+    val contactId: String,
+    /** Empty for burn messages: content only via [OmcpCore.openBurn]. */
+    val text: String,
+    val createdMs: Long,
+    val envelopeId: String,
+    val burn: chat.omcp.app.burn.BurnSpec? = null,
+    val mime: String? = null,
+)
 
 /** PDUs to transmit (in order) + decrypted messages from one link step. */
 data class LinkResult(
@@ -26,6 +34,7 @@ data class LinkResult(
     val established: Boolean,
     val peerContactId: String?,
     val flushed: Int,
+    val opened: List<chat.omcp.app.burn.OpenedInfo> = emptyList(),
 )
 
 enum class NetworkType { Offline, Wifi, Cellular }
@@ -80,6 +89,18 @@ interface OmcpCore {
     fun contactForAdvertisement(adv: ByteArray): String?
 
     fun queueText(contactId: String, text: String)
+    /** Queue text with an optional encrypted burn header. Returns the message id. */
+    fun queueMessage(contactId: String, text: String, burn: chat.omcp.app.burn.BurnSpec?): String
+    /** Small view-once media (≤ 16 KiB in the beta). Returns the message id. */
+    fun queueMedia(contactId: String, mime: String, bytes: ByteArray, burn: chat.omcp.app.burn.BurnSpec?): String
+
+    /** Burn after read, all enforced in Rust. Content is returned exactly once; queues OPENED. */
+    fun openBurn(msgId: String, nowMs: Long): chat.omcp.app.burn.BurnContent?
+    fun closeBurn(msgId: String)
+    /** Timers + unread expiry on sent and received copies; returns shredded ids. */
+    fun tickBurn(nowMs: Long): List<String>
+    fun burnIsLive(msgId: String): Boolean
+    fun burnSpecValid(spec: chat.omcp.app.burn.BurnSpec): Boolean
     fun queuedFor(contactId: String): Int
     fun pathStatus(): MeshStatus
 

@@ -69,6 +69,20 @@ class FakeOmcpCore : OmcpCore {
         require(contactId in contacts) { "unknown contact" }
         queues.getOrPut(contactId) { ArrayDeque() }.addLast(text)
     }
+    private var msgSeq = 0
+
+    /** Fake: burn is a Rust-only feature; the burn header is accepted but not enforced here. */
+    override fun queueMessage(contactId: String, text: String, burn: chat.omcp.app.burn.BurnSpec?): String {
+        queueText(contactId, text)
+        return "fake-${msgSeq++}"
+    }
+    override fun queueMedia(contactId: String, mime: String, bytes: ByteArray, burn: chat.omcp.app.burn.BurnSpec?) = "fake-${msgSeq++}"
+    override fun openBurn(msgId: String, nowMs: Long): chat.omcp.app.burn.BurnContent? = null
+    override fun closeBurn(msgId: String) {}
+    override fun tickBurn(nowMs: Long): List<String> = emptyList()
+    override fun burnIsLive(msgId: String) = false
+    override fun burnSpecValid(spec: chat.omcp.app.burn.BurnSpec) = true
+
     override fun queuedFor(contactId: String) = queues[contactId]?.size ?: 0
 
     override fun pathStatus(): MeshStatus {

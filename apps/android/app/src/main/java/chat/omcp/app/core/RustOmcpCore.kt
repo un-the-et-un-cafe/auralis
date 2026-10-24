@@ -1,5 +1,8 @@
 package chat.omcp.app.core
 
+import chat.omcp.app.burn.BurnContent
+import chat.omcp.app.burn.BurnSpec
+import chat.omcp.app.burn.OpenedInfo
 import chat.omcp.ffi.ContactInfo
 import chat.omcp.ffi.FfiException
 import chat.omcp.ffi.LinkOutput
@@ -55,6 +58,17 @@ class RustOmcpCore : OmcpCore {
         chat.omcp.ffi.parseAdvertisement(adv)?.let { n().contactForPrefix(it) }
 
     override fun queueText(contactId: String, text: String) = n().queueText(contactId, text)
+    override fun queueMessage(contactId: String, text: String, burn: BurnSpec?) =
+        n().queueMessage(contactId, text, burn?.toFfi())
+    override fun queueMedia(contactId: String, mime: String, bytes: ByteArray, burn: BurnSpec?) =
+        n().queueMedia(contactId, mime, bytes, burn?.toFfi())
+
+    override fun openBurn(msgId: String, nowMs: Long): BurnContent? =
+        n().openBurn(msgId, nowMs.toULong())?.let { BurnContent(it.text, it.bytes, it.mime, it.burnAtMs?.toLong()) }
+    override fun closeBurn(msgId: String) = n().closeBurn(msgId)
+    override fun tickBurn(nowMs: Long): List<String> = n().tickBurn(nowMs.toULong())
+    override fun burnIsLive(msgId: String) = n().burnIsLive(msgId)
+    override fun burnSpecValid(spec: BurnSpec) = chat.omcp.ffi.burnSpecValid(spec.toFfi())
     override fun queuedFor(contactId: String) = n().queuedFor(contactId).toInt()
 
     override fun pathStatus(): MeshStatus {
@@ -107,14 +121,29 @@ class RustOmcpCore : OmcpCore {
     }
 }
 
+private fun BurnSpec.toFfi() = chat.omcp.ffi.BurnSpec(
+    if (mode == BurnSpec.Mode.OnOpen) chat.omcp.ffi.BurnMode.ON_OPEN else chat.omcp.ffi.BurnMode.TIMER,
+    secs.toUInt(),
+    unreadTtlSecs.toUInt(),
+)
+
+private fun chat.omcp.ffi.BurnSpec.toApp() = BurnSpec(
+    if (mode == chat.omcp.ffi.BurnMode.ON_OPEN) BurnSpec.Mode.OnOpen else BurnSpec.Mode.Timer,
+    secs.toInt(),
+    unreadTtl.toInt(),
+)
+
 private fun ContactInfo.toContact() = Contact(contactId, displayName, safetyNumber, verified)
 
 private fun LinkOutput.toResult() = LinkResult(
     outgoing = outgoing,
-    received = received.map { IncomingText(it.contactId, it.text, it.createdMs.toLong(), it.envelopeIdHex) },
+    received = received.map {
+        IncomingText(it.contactId, it.text, it.createdMs.toLong(), it.envelopeIdHex, it.burn?.toApp(), it.mime)
+    },
     established = established,
     peerContactId = peerContactId,
     flushed = flushed.toInt(),
+    opened = opened.map { OpenedInfo(it.contactId, it.msgIdHex, it.openedMs.toLong(), it.shredded, it.burnAtMs?.toLong()) },
 )
 
 private class RustLink(private val link: MeshLink) : CoreLink {

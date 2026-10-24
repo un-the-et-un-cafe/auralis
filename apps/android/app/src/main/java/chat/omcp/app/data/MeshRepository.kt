@@ -5,9 +5,9 @@ import chat.omcp.app.core.IncomingText
 import chat.omcp.app.core.MeshStatus
 import chat.omcp.app.core.OmcpCore
 import chat.omcp.app.core.PathKind
-import chat.omcp.app.burn.BurnControl
+import chat.omcp.app.burn.BurnContent
+import chat.omcp.app.burn.OpenedInfo
 import chat.omcp.app.burn.BurnSpec
-import chat.omcp.app.burn.BurnVault
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,7 +26,7 @@ data class ChatMessage(
     val timeMs: Long,
     val status: Status,
     val file: FileAttachment? = null,
-    /** Burn after read (v0.1.3). Content lives in [BurnVault]; [text] stays empty. */
+    /** Burn after read (v0.1.3). Content lives only in the Rust shredding store; [text] stays empty. */
     val burn: BurnSpec? = null,
     val burnState: BurnState = BurnState.None,
     /** When the opened content is deleted (timer); null = on close. */
@@ -73,9 +73,6 @@ class MeshRepository(
     val appStore: AppStore get() = store
 
     @Volatile var kick: MeshKick? = null
-    /** TODO(M5.x): wire to the mesh control channel; until then receipts are dropped. */
-    @Volatile var burnControl: BurnControl = BurnControl { _, _, _ -> }
-    val burnVault = BurnVault()
     private var seq = 0L
 
     /** Load an existing identity from the store; returns true if onboarded. */
@@ -142,23 +139,22 @@ class MeshRepository(
         BurnSpec.fromOption(store.burnChats[contactId] ?: -1, store.burnUnreadTtl[contactId] ?: BurnSpec.UNREAD_7D)
 
     fun setChatBurn(contactId: String, option: Int, unreadTtl: Int = BurnSpec.UNREAD_7D) {
-        BurnSpec.fromOption(option, unreadTtl) // validate
+        BurnSpec.fromOption(option, unreadTtl)?.let { require(core.burnSpecValid(it)) { "invalid burn option" } }
         store.burnChats = if (option == -1) store.burnChats - contactId else store.burnChats + (contactId to option)
         store.burnUnreadTtl = store.burnUnreadTtl + (contactId to unreadTtl)
     }
 
     /**
-     * Send text. [burnOnce] = the composer's per-message 🔥 toggle; otherwise the chat default applies.
-     * TODO(M5.x): the burn header isn't carried over the FFI/mesh yet (core.queueText sends plain text).
+     * Send text. [burnOnce] = the composer's per-message 🔥 toggle; otherwise the chat default.
+     * The burn header travels encrypted inside the message (Rust, PROTOCOL §19.1); the
+     * sender's copy lives in the Rust shredding store, never in [ChatMessage.text].
      */
     fun send(contactId: String, text: String, burnOnce: BurnSpec? = null) {
         val t = text.trim()
         if (t.isEmpty()) return
         val burn = burnOnce ?: chatBurn(contactId)
-        core.queueText(contactId, t)
-        val id = "local-${seq++}"
+        val id = core.queueMessage(contactId, t, burn)
         if (burn != null) {
-            burnVault.put(id, t.toByteArray())
             append(ChatMessage(id, contactId, "", true, clock(), ChatMessage.Status.Queued, burn = burn, burnState = ChatMessage.BurnState.Unopened))
         } else {
             append(ChatMessage(id, contactId, t, true, clock(), ChatMessage.Status.Queued))
@@ -200,67 +196,54 @@ class MeshRepository(
         refresh()
     }
 
-    fun onReceived(msg: IncomingText, burn: BurnSpec? = null, file: FileAttachment? = null, media: ByteArray? = null) {
-        if (burn == null) {
+    fun onReceived(msg: IncomingText) {
+        val file = msg.mime?.let { FileAttachment(if (it.startsWith("video/")) "video" else "photo", 0, it, FileAttachment.State.Received) }
+        if (msg.burn == null) {
             append(ChatMessage(msg.envelopeId, msg.contactId, msg.text, false, msg.createdMs, ChatMessage.Status.Received, file))
             return
         }
-        burnVault.put(msg.envelopeId, media ?: msg.text.toByteArray())
         append(
             ChatMessage(
                 msg.envelopeId, msg.contactId, "", false, msg.createdMs, ChatMessage.Status.Received, file,
-                burn = burn, burnState = ChatMessage.BurnState.Unopened,
+                burn = msg.burn, burnState = ChatMessage.BurnState.Unopened,
             ),
         )
     }
 
-    /**
-     * Receiver opens a burn message: returns content exactly once (B2), sends OPENED,
-     * starts the timer. View-once content is shredded from the vault immediately.
-     */
-    fun openBurn(contactId: String, msgId: String, now: Long = clock()): ByteArray? {
+    /** Receiver opens a burn message: Rust returns it exactly once and queues OPENED. */
+    fun openBurn(contactId: String, msgId: String, now: Long = clock()): BurnContent? {
         val m = find(contactId, msgId) ?: return null
-        val b = m.burn ?: return null
-        if (m.mine || m.burnState != ChatMessage.BurnState.Unopened) return null
-        val body = burnVault.read(msgId) ?: return null
-        val at = if (b.mode == BurnSpec.Mode.Timer) now + b.secs * 1000L else null
-        if (at == null) burnVault.shred(msgId)
-        replace(m.copy(burnState = ChatMessage.BurnState.Open, burnAtMs = at))
-        burnControl.sendOpened(contactId, msgId, now)
-        return body
+        if (m.burn == null || m.mine || m.burnState != ChatMessage.BurnState.Unopened) return null
+        val c = core.openBurn(msgId, now) ?: return null
+        replace(m.copy(burnState = ChatMessage.BurnState.Open, burnAtMs = c.burnAtMs))
+        kick?.kick(contactId) // deliver the OPENED receipt
+        return c
     }
 
     /** Viewer closed: burn now. */
     fun closeBurn(contactId: String, msgId: String) {
         val m = find(contactId, msgId) ?: return
-        if (m.burnState == ChatMessage.BurnState.Open) burnNow(m)
+        if (m.burnState != ChatMessage.BurnState.Open) return
+        core.closeBurn(msgId)
+        burnNow(m)
     }
 
-    /** Sender got OPENED: shred its media key/copy now, or start its timer for text. */
-    fun onOpenedReceipt(contactId: String, msgId: String, openedMs: Long) {
-        val m = find(contactId, msgId) ?: return
-        val b = m.burn ?: return
-        if (b.mode == BurnSpec.Mode.OnOpen || m.file != null) burnNow(m)
-        else replace(m.copy(burnState = ChatMessage.BurnState.Open, burnAtMs = openedMs + b.secs * 1000L))
+    /** From the link: the peer opened our message (Rust already shredded or started the timer). */
+    fun onOpened(o: OpenedInfo) {
+        val m = find(o.contactId, o.msgId) ?: return
+        if (o.shredded) burnNow(m) else replace(m.copy(burnState = ChatMessage.BurnState.Open, burnAtMs = o.burnAtMs))
     }
 
-    /** Timers + unread expiry (B1, B4). Call often (≤ 250 ms). Returns how many burned. */
+    /** Timers + unread expiry, decided in Rust. Call often (≤ 250 ms). Returns how many burned. */
     fun tickBurn(now: Long = clock()): Int {
-        val due = _messages.value.values.flatten().filter { m ->
-            val b = m.burn ?: return@filter false
-            when (m.burnState) {
-                ChatMessage.BurnState.Open -> m.burnAtMs?.let { now >= it } ?: false
-                ChatMessage.BurnState.Unopened -> now >= b.expiresAtMs(m.timeMs)
-                else -> false
-            }
-        }
+        val ids = core.tickBurn(now).toSet()
+        val due = _messages.value.values.flatten().filter { it.id in ids && it.burnState != ChatMessage.BurnState.Opened }
         due.forEach(::burnNow)
         return due.size
     }
 
     private fun burnNow(m: ChatMessage) {
-        burnVault.shred(m.id)
-        if (m.file != null && m.isViewOnceMedia) {
+        if (m.isViewOnceMedia) {
             replace(m.copy(burnState = ChatMessage.BurnState.Opened, burnAtMs = null)) // "🔥 Photo opened"
         } else {
             _messages.update { all -> all + (m.contactId to all[m.contactId].orEmpty().filterNot { it.id == m.id }) }
