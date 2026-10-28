@@ -39,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.ui.components.AuralisSimulationNotice
 import chat.omcp.app.core.Contact
 import chat.omcp.app.core.Identity
 import chat.omcp.app.ui.components.AuralisActionCard
@@ -91,6 +92,7 @@ fun YouScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             val name = identity?.displayName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.tab_you)
+            AuralisSimulationNotice()
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(OmcpDark.Bg).padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

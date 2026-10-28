@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.ui.components.AuralisSimulationNotice
 import chat.omcp.app.ui.components.AuralisMark
 import chat.omcp.app.ui.components.AuralisWordmark
 import chat.omcp.app.ui.theme.LocalOmcpColors
@@ -46,6 +47,7 @@ fun AuralisWelcome(onGetStarted: () -> Unit, onRestore: () -> Unit, onUsePhrase:
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         AuralisWordmark(Modifier.padding(bottom = 8.dp))
+        AuralisSimulationNotice()
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp)).background(OmcpDark.Bg).padding(28.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),

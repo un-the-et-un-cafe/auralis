@@ -16,8 +16,8 @@ class OmcpApplication : Application() {
     val driveConsent = chat.omcp.app.backup.DriveConsentBroker()
 
     /**
-     * Google Drive appDataFolder store. Live when the build has GOOGLE_OAUTH_CLIENT_ID; debug
-     * builds without one use an in-memory simulation (BuildConfig.SIMULATED_DRIVE_BACKUP).
+     * Google Drive appDataFolder store. Without GOOGLE_OAUTH_CLIENT_ID it is unavailable.
+     * In-memory simulation requires an explicit debug-only build opt-in and visible UI notice.
      */
     val cloudBackup: CloudBackupStore by lazy {
         if (BuildConfig.SIMULATED_DRIVE_BACKUP) {

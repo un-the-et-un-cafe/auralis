@@ -1,11 +1,20 @@
 // Google OAuth client for Drive backup (appDataFolder). Never committed: pass it with
 // -PGOOGLE_OAUTH_CLIENT_ID=… or put it in ~/.gradle/gradle.properties / env GOOGLE_OAUTH_CLIENT_ID.
-// Empty = Drive backup reports "not configured" (debug builds fall back to a simulated Drive).
+// Empty = Drive backup reports "not configured" in every normal build.
+// Test-only in-memory backup requires -PAURALIS_SIMULATED_DRIVE_BACKUP=true (debug only).
 // See apps/android/README.md › "Google Drive backup".
 val googleOAuthClientId: String =
     (findProperty("GOOGLE_OAUTH_CLIENT_ID") as String?)?.trim()?.takeIf { it.isNotEmpty() }
         ?: System.getenv("GOOGLE_OAUTH_CLIENT_ID")?.trim().orEmpty()
 require(googleOAuthClientId.all { it.isLetterOrDigit() || it in ".-_" }) { "GOOGLE_OAUTH_CLIENT_ID has unexpected characters" }
+val simulatedDriveProperty = (findProperty("AURALIS_SIMULATED_DRIVE_BACKUP") as String?).orEmpty()
+require(simulatedDriveProperty in setOf("", "true", "false")) {
+    "AURALIS_SIMULATED_DRIVE_BACKUP must be true or false"
+}
+val simulatedDriveBackup = simulatedDriveProperty == "true"
+require(!simulatedDriveBackup || googleOAuthClientId.isEmpty()) {
+    "Simulated Drive is test-only; remove GOOGLE_OAUTH_CLIENT_ID or disable AURALIS_SIMULATED_DRIVE_BACKUP"
+}
 
 plugins {
     id("com.android.application")
@@ -43,9 +52,8 @@ android {
         }
         debug {
             applicationIdSuffix = ".debug"
-            // Debug only, and only without a real client id: in-memory "Drive" so the
-            // backup flow can be exercised end to end.
-            buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", (googleOAuthClientId.isEmpty()).toString())
+            // Deliberate opt-in only. Normal debug builds must not claim durable cloud backup.
+            buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", simulatedDriveBackup.toString())
         }
     }
 

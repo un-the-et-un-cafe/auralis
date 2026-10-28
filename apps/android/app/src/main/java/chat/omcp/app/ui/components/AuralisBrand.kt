@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.BuildConfig
 import chat.omcp.app.ui.theme.OmcpDark
 
 /** Three open signal strokes: the same geometry as the launcher, with no text baked in. */
@@ -44,5 +45,13 @@ fun AuralisWordmark(modifier: Modifier = Modifier) {
             AuralisMark(Modifier.size(30.dp))
         }
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+    }
+}
+
+/** Never let an opted-in test build present volatile in-memory storage as a durable backup. */
+@Composable
+fun AuralisSimulationNotice() {
+    if (BuildConfig.SIMULATED_DRIVE_BACKUP) {
+        Callout(stringResource(R.string.auralis_simulated_backup_warning), CalloutKind.Warn)
     }
 }

@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.ui.components.AuralisSimulationNotice
 import chat.omcp.app.burn.BurnSpec
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -164,6 +165,7 @@ fun ChatsListScreen(
             item(key = "header") {
                 Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text(stringResource(R.string.auralis_conversations_title), style = MaterialTheme.typography.headlineLarge)
+                    AuralisSimulationNotice()
                     FlowRow(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
                             .background(MaterialTheme.colorScheme.surface).clickable(onClick = onMesh).padding(14.dp),

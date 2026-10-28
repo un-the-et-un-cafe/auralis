@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.ui.components.AuralisSimulationNotice
 import chat.omcp.app.core.MeshStatus
 import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.components.AuralisActionCard
@@ -76,6 +77,7 @@ fun MeshHomeScreen(
                 }
             }
             AuralisSectionLabel(stringResource(R.string.auralis_connect))
+            AuralisSimulationNotice()
             AuralisActionCard(stringResource(R.string.contact_add_title), stringResource(R.string.auralis_contact_interop), Icons.Default.QrCodeScanner, onAddContact)
             AuralisActionCard(stringResource(R.string.gateway_title), stringResource(R.string.auralis_gateway_availability), Icons.Default.Hub, onGateway)
             AuralisSectionLabel(stringResource(R.string.auralis_on_horizon))

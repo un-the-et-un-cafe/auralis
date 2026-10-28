@@ -34,4 +34,18 @@ The tested Swift 6.4.1 Debian 13 archive was authenticated by the Swift 6.x rele
 
 ## Not established by this run
 
-Linux syntax parsing does **not** typecheck Apple frameworks or establish a full iOS build. Xcode compilation, simulator tests, SwiftUI layout, iOS lifecycle/background BLE behavior, signing, and physical-device testing remain separate gates. No IPA or App Store-ready release is implied. The repository's macOS CI job is the configured Xcode/simulator gate.
+Linux syntax parsing does **not** typecheck Apple frameworks or establish a full iOS build. Xcode compilation and simulator tests are reported separately below. SwiftUI layout, iOS lifecycle/background BLE behavior, signing, and physical-device testing remain separate gates. No IPA or App Store-ready release is implied. The repository's macOS CI job is the configured Xcode/simulator gate.
+
+## Android: local build and tests passed
+
+The final default (non-simulated-backup) debug build passed `assembleDebug testDebugUnitTest lintDebug` on 2026-10-28 with Temurin JDK 17.0.21, Gradle 8.9, Android SDK 35, NDK 27.2.12479018 and pinned Rust 1.99.1. All **76 JVM tests passed**, with zero failures, errors or skips. A debug APK was produced for `chat.auralis.app.debug`. Lint completed successfully; nonfatal warnings remain and are not presented as a clean-warning result.
+
+Enabling Android-specific UniFFI generation fixed the API-31 compatibility lint failures in generated cleaner code. The generated implementation gates SystemCleaner to API 34+ and falls back to JNA on earlier supported Android versions. This is a platform binding configuration change, not a wire-protocol change.
+
+Simulated Drive is now an explicit debug-only opt-in, never the default, with visible non-durable test-mode warnings. Normal builds without OAuth configuration report cloud backup unavailable rather than pretending to upload it.
+
+## Hosted iOS build and simulator: passed
+
+[CI run 40672379479](https://github.com/un-the-et-un-cafe/auralis/actions/runs/40672379479), for commit `50f3f80e18eb5a99e5e766652c37b10dfdbe789c`, passed the macOS iOS job: 39 Swift package tests, native Rust XCFramework generation, full Xcode 16.4 app/extension/test build, and all eight simulator RustBridgeTests. The result bundle was uploaded by CI. Later Android-only changes still require their own exact-head CI checks.
+
+This proves native compilation and simulator bridge execution, not physical Bluetooth interoperability, all-screen visual/accessibility QA, real cloud-provider roundtrips, signing, App Store acceptance, or an independent security audit.

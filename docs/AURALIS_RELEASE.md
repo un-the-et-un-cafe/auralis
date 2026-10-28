@@ -123,12 +123,17 @@ not secret names to add expecting this workflow to consume them.
   `apps/ios/Config/Secrets.xcconfig`, using `GOOGLE_OAUTH_CLIENT_ID` and
   `GOOGLE_OAUTH_REVERSED_CLIENT_ID`. No real OAuth configuration is injected.
 
-Internal Xcode targets, the `HoplaKit` module, and app identifiers currently
-remain upstream-compatible. **App/store identifiers are not OMCP wire
-identifiers.** Confirm ownership and choose the fork's own registered app IDs,
-CloudKit containers, keychain groups and OAuth registrations before a separately
-installable public release. Changing these requires a deliberate migration and
-backup-compatibility decision, not an automatic search-and-replace.
+Internal Xcode targets, the `HoplaKit` module and the Android source namespace
+retain their upstream names. The separately installable app identifiers are
+`chat.auralis.app` (Android debug adds `.debug`) and
+`chat.auralis.app.notifications` for the iOS notification extension. iOS uses
+`iCloud.chat.auralis.app` and an Auralis-scoped keychain group.
+**App/store identifiers are not OMCP wire identifiers.** The corresponding app
+IDs, CloudKit container, keychain entitlement and OAuth registrations must be
+registered and provisioned by their owner before distribution; changing source
+configuration does not create those registrations. Existing Hopla local data or
+cloud backups are not automatically migrated into Auralis's separate sandbox.
+Any such migration needs an explicit compatibility and recovery plan.
 See the existing [Drive setup](../apps/GOOGLE_DRIVE_BACKUP.md) and
 [Apple distribution guide](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
 
@@ -147,11 +152,11 @@ Before any public distribution, establish and retain evidence of:
 - An independent security review appropriate to the intended risk. The upstream
   OMCP protocol remains a draft; passing tests is not a cryptographic audit.
 
-The workflow authoring environment could validate YAML, embedded shell syntax,
-action pins and `actionlint`, but did not run these workflows on GitHub-hosted
-Android/macOS runners or produce release artifacts. A passing local Rust run is
-separate evidence and does not prove native packaging. After authorized
-publication to a fork, the first CI and manually dispatched packaging runs are
-mandatory integration verification. No GitHub publishing, signing, deployment,
-store submission or external repository settings change is performed by adding
-these files.
+YAML, embedded shell, action-pin and `actionlint` validation is separate from
+hosted workflow execution. Consult the CI run for the exact current commit;
+an older successful run does not validate later changes. Passing Rust or
+simulator tests does not prove unsigned device packaging, which requires its
+own manually dispatched run. Signed distribution and physical-device acceptance
+remain separate gates even after all build jobs pass. Adding these files alone
+does not publish a repository, sign or deploy an app, submit it to a store, or
+change external repository settings.

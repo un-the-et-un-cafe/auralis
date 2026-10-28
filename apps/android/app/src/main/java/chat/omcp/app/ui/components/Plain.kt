@@ -41,6 +41,7 @@ fun PlainPage(title: String, modifier: Modifier = Modifier, content: @Composable
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         AuralisWordmark(Modifier.padding(bottom = 12.dp))
+        AuralisSimulationNotice()
         Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
         content()
     }

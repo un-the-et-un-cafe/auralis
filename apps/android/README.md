@@ -50,8 +50,14 @@ Services `AuthorizationClient` (scope `drive.appdata` only, consent shown by `Ma
 Drive v3 REST on `appDataFolder` (create / overwrite / download / delete one file). It is live
 when the build has `GOOGLE_OAUTH_CLIENT_ID` (Gradle property or env var, never committed); see
 [`../GOOGLE_DRIVE_BACKUP.md`](../GOOGLE_DRIVE_BACKUP.md) for creating the OAuth client. Without it,
-Drive shows as unavailable and debug builds use an in-memory “simulated Drive”. TODO: WorkManager
-retry when offline.
+Drive shows as unavailable in both debug and release; “Write it down” and 24-word recovery remain
+available. TODO: WorkManager retry when offline.
+
+For deliberate UI tests only, `-PAURALIS_SIMULATED_DRIVE_BACKUP=true` enables an in-memory store in
+**debug** builds without an OAuth client. It is off by default, cannot replace real Drive in release,
+and every setup/recovery/backup dashboard shows a prominent **TEST MODE** warning. No data is sent
+to Google; simulated backups disappear when the process ends. Never use this option for a distributable
+or recovery test that claims durable cloud storage.
 
 The Auralis application layer is rewritten around **Conversations · Mesh · You**. The Mesh hub
 uses live `MeshRepository` status; it is not a simulated radar. Contact-name search is recent-first
@@ -109,6 +115,9 @@ export ANDROID_HOME=~/android-sdk ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.124790
 
 `RustBridgeTest` loads the host `target/debug/libomcp_ffi.so` through JNA (skipped if absent).
 The launcher and splash screen use the Auralis three-stroke signal mark.
+UniFFI Kotlin generation sets `android = true`: the vendor-generated cleaner uses Android
+SystemCleaner only on API 34+ and JNA below it, preserving the Android 12 / API 31 minimum without
+blanket lint suppression.
 
 ### Auralis UI verification
 

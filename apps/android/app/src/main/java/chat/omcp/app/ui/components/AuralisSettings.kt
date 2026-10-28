@@ -66,6 +66,7 @@ fun AuralisSettingsPage(
                 Text(title, style = MaterialTheme.typography.headlineLarge, modifier = Modifier.semantics { heading() })
                 intro?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = LocalOmcpColors.current.ink2) }
             }
+            AuralisSimulationNotice()
             content()
         }
     }

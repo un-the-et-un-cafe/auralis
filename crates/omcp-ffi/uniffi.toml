@@ -1,4 +1,6 @@
 [bindings.kotlin]
+# Android API 31 support: use SDK-gated SystemCleaner (34+) with JNA fallback.
+android = true
 package_name = "chat.omcp.ffi"
 cdylib_name = "omcp_ffi"
 
