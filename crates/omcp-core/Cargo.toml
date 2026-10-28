@@ -41,7 +41,7 @@ openmls_basic_credential = "=0.6.0"
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "zeroize"] }
 
 # v0.2 §22.3: optional zstd compression with a static public dictionary.
-zstd = { version = "=0.13.3", default-features = false }
+zstd = { version = "=0.14.3", default-features = false }
 
 # M5: 24-word recovery phrase (BIP39 English wordlist, 256-bit entropy).
 bip39 = { version = "=2.1.0", default-features = false, features = ["std"] }
