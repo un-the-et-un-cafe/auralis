@@ -33,7 +33,15 @@ runs:
           -o "$TOOLS/tools.zip"
         echo "$CMDLINE_TOOLS_SHA256  $TOOLS/tools.zip" | sha256sum --check --strict
         unzip -q "$TOOLS/tools.zip" -d "$TOOLS"
-        SDKMANAGER="$TOOLS/cmdline-tools/bin/sdkmanager"
+        # avdmanager derives the SDK root from this canonical directory layout;
+        # unlike sdkmanager it has no --sdk_root option.
+        SDK_CLI="$ANDROID_HOME/cmdline-tools/19.0"
+        mkdir -p "$ANDROID_HOME/cmdline-tools"
+        if [[ -e "$SDK_CLI" || -L "$SDK_CLI" ]]; then
+          mv "$SDK_CLI" "$TOOLS/runner-commandline-tools-19"
+        fi
+        mv "$TOOLS/cmdline-tools" "$SDK_CLI"
+        SDKMANAGER="$SDK_CLI/bin/sdkmanager"
         # Ignore only yes's expected SIGPIPE, not sdkmanager failure.
         set +o pipefail
         yes | "$SDKMANAGER" --sdk_root="${ANDROID_HOME:?Android SDK is required}" --licenses > /dev/null
@@ -41,5 +49,6 @@ runs:
         "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
           "platform-tools" "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0"
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+        echo "ANDROID_AVDMANAGER=$SDK_CLI/bin/avdmanager" >> "$GITHUB_ENV"
         rustc --version --verbose
         java -version

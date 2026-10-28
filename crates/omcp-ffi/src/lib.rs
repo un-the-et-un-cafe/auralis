@@ -34,7 +34,7 @@
 //! and held by the platform (Android Keystore-wrapped, iOS Keychain).
 //! [`OmcpNode::from_phrase`] keeps everything in memory only.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -69,6 +69,10 @@ pub use persist::{
 
 /// Max handshake bytes per PDU chunk.
 pub const HANDSHAKE_CHUNK: usize = 480;
+/// Full existing u8 chunk-count range, with no unbounded repeated appends.
+const MAX_HANDSHAKE_BYTES: usize = u8::MAX as usize * HANDSHAKE_CHUNK;
+/// Node-wide local transport admission, including unauthenticated links.
+const MAX_ACTIVE_LINKS: usize = 8;
 /// Link fragment plaintext payload; frame = 2 + 12 + payload + 16 (+1 kind) < 512.
 pub const LINK_FRAGMENT_PAYLOAD: usize = 400;
 const PDU_HANDSHAKE: u8 = 0x01;
@@ -531,6 +535,7 @@ struct NodeState {
     burn_out: BurnStore,
     burn_meta: HashMap<[u8; 16], BurnMeta>,
     links_up: HashMap<u64, [u8; 32]>,
+    active_links: HashSet<u64>,
     next_link: u64,
     seen: SeenCache,
     files: files::FileState,
@@ -742,6 +747,7 @@ impl OmcpNode {
                     burn_out: BurnStore::default(),
                     burn_meta: HashMap::new(),
                     links_up: HashMap::new(),
+                    active_links: HashSet::new(),
                     next_link: 1,
                     seen: SeenCache::default(),
                     files: files::FileState::default(),
@@ -1351,13 +1357,13 @@ impl OmcpNode {
             None => return Err(FfiError::UnknownContact),
         };
         let init = HybridInitiator::new(self.inner.identity()?, &dh)?;
-        Ok(self.new_link(Role::Initiator(Box::new(init)), Some(id)))
+        self.new_link(Role::Initiator(Box::new(init)), Some(id))
     }
 
     /// New link as Noise responder (we are the GATT peripheral).
     pub fn open_responder_link(&self) -> Result<Arc<MeshLink>, FfiError> {
         let resp = HybridResponder::new(self.inner.identity()?);
-        Ok(self.new_link(Role::Responder(Box::new(resp)), None))
+        self.new_link(Role::Responder(Box::new(resp)), None)
     }
 }
 
@@ -1433,11 +1439,20 @@ impl OmcpNode {
         contact_info(&self.inner, id, c)
     }
 
-    fn new_link(&self, role: Role, peer: Option<[u8; 32]>) -> Arc<MeshLink> {
+    fn new_link(&self, role: Role, peer: Option<[u8; 32]>) -> Result<Arc<MeshLink>, FfiError> {
         let mut st = self.inner.lock();
+        if st.active_links.len() >= MAX_ACTIVE_LINKS {
+            return Err(FfiError::State {
+                msg: "active link resource budget exhausted; close an idle link".into(),
+            });
+        }
         let handle = st.next_link;
-        st.next_link += 1;
-        Arc::new(MeshLink {
+        st.next_link = st
+            .next_link
+            .checked_add(1)
+            .ok_or_else(|| invalid("link handle exhausted"))?;
+        st.active_links.insert(handle);
+        Ok(Arc::new(MeshLink {
             node: self.inner.clone(),
             handle,
             state: Mutex::new(LinkState {
@@ -1445,8 +1460,9 @@ impl OmcpNode {
                 peer,
                 hs_buf: Vec::new(),
                 hs_total: 0,
+                hs_next: 0,
             }),
-        })
+        }))
     }
 }
 
@@ -1488,6 +1504,7 @@ struct LinkState {
     peer: Option<[u8; 32]>,
     hs_buf: Vec<u8>,
     hs_total: u8,
+    hs_next: u16,
 }
 
 /// One BLE connection's secure session.
@@ -1498,10 +1515,18 @@ pub struct MeshLink {
     state: Mutex<LinkState>,
 }
 
+impl Drop for MeshLink {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 fn chunk_handshake(msg: &[u8], out: &mut Vec<Vec<u8>>) -> Result<(), FfiError> {
-    let chunks: Vec<_> = msg.chunks(HANDSHAKE_CHUNK).collect();
-    let total = u8::try_from(chunks.len()).map_err(|_| invalid("handshake too large"))?;
-    for (i, c) in chunks.iter().enumerate() {
+    if msg.is_empty() || msg.len() > MAX_HANDSHAKE_BYTES {
+        return Err(invalid("handshake size outside chunk budget"));
+    }
+    let total = msg.len().div_ceil(HANDSHAKE_CHUNK) as u8;
+    for (i, c) in msg.chunks(HANDSHAKE_CHUNK).enumerate() {
         let mut p = Vec::with_capacity(3 + c.len());
         p.extend_from_slice(&[PDU_HANDSHAKE, i as u8, total]);
         p.extend_from_slice(c);
@@ -1527,61 +1552,14 @@ impl MeshLink {
     /// Feed one PDU received from the peer (Inbox write or Outbox notify).
     pub fn on_pdu(&self, pdu: Vec<u8>) -> Result<LinkOutput, FfiError> {
         let mut st = self.lock();
-        let mut out = LinkOutput::default();
-        let (&kind, body) = pdu.split_first().ok_or_else(|| invalid("empty pdu"))?;
-        match kind {
-            PDU_HANDSHAKE => {
-                if body.len() < 2 {
-                    return Err(invalid("handshake pdu"));
-                }
-                let (idx, total) = (body[0], body[1]);
-                if idx == 0 {
-                    st.hs_buf.clear();
-                    st.hs_total = total;
-                } else if total != st.hs_total {
-                    return Err(invalid("handshake chunk mismatch"));
-                }
-                st.hs_buf.extend_from_slice(&body[2..]);
-                if idx + 1 == total {
-                    let msg = std::mem::take(&mut st.hs_buf);
-                    self.complete_handshake(&mut st, &msg, &mut out)?;
-                }
-            }
-            PDU_LINK => {
-                let peer = st.peer;
-                let Role::Up(up) = &mut st.role else {
-                    return Err(FfiError::State {
-                        msg: "link fragment before handshake".into(),
-                    });
-                };
-                let peer = peer.ok_or(FfiError::UnknownContact)?;
-                if let Some(bytes) = up.reasm.push_frame(&mut up.link, body, Instant::now())? {
-                    let env = EnvelopeV1::decode(&bytes)?;
-                    let key = up.recv_key();
-                    let (ct, plain) = open_app_envelope(&key, &peer, &env, &mut up.app_recv)?;
-                    let plain = Zeroizing::new(plain);
-                    let mut node = self.node.lock();
-                    if !node.seen.check_and_insert(env.envelope_id, Instant::now()) {
-                        let from = (
-                            out.file_progress.len(),
-                            out.files.len(),
-                            out.file_failures.len(),
-                        );
-                        Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
-                        node.check_refetched(&mut out, from.1);
-                        node.persist_file_events(&out, from, now_ms())?;
-                    }
-                    let replies = node.queues.get(&peer).is_some_and(|q| !q.is_empty());
-                    drop(node);
-                    if replies {
-                        self.flush_locked(&mut st, &mut out)?;
-                    }
-                }
-            }
-            _ => return Err(invalid("unknown pdu kind")),
+        let result = self.on_pdu_locked(&mut st, &pdu);
+        if result.is_err() {
+            // A transport/app nonce may already have advanced. Never continue a
+            // failed session: release its unauthenticated/fragment buffers and
+            // keys, mark it offline, and let a fresh link replay queued work.
+            self.shutdown_locked(&mut st);
         }
-        Self::fill(&st, &mut out);
-        Ok(out)
+        result
     }
 
     /// Send text now if established, otherwise queue it on the node.
@@ -1646,19 +1624,101 @@ impl MeshLink {
 
     /// Tear down; the peer no longer counts as nearby.
     pub fn shutdown(&self) {
-        let mut st = self.lock();
+        self.shutdown_locked(&mut self.lock());
+    }
+}
+
+impl MeshLink {
+    fn shutdown_locked(&self, st: &mut LinkState) {
         st.role = Role::Closed;
+        st.hs_buf = Vec::new();
+        st.hs_total = 0;
+        st.hs_next = 0;
         let mut node = self.node.lock();
         node.links_up.remove(&self.handle);
+        node.active_links.remove(&self.handle);
         if let Some(peer) = st.peer {
             if !node.links_up.values().any(|p| *p == peer) {
                 let _ = node.pause_transfers(&peer);
             }
         }
     }
-}
 
-impl MeshLink {
+    fn on_pdu_locked(&self, st: &mut LinkState, pdu: &[u8]) -> Result<LinkOutput, FfiError> {
+        let mut out = LinkOutput::default();
+        let (&kind, body) = pdu.split_first().ok_or_else(|| invalid("empty pdu"))?;
+        match kind {
+            PDU_HANDSHAKE => {
+                if !matches!(st.role, Role::Initiator(_) | Role::Responder(_)) {
+                    return Err(FfiError::State {
+                        msg: "unexpected handshake message".into(),
+                    });
+                }
+                if body.len() < 2 || body.len() > 2 + HANDSHAKE_CHUNK {
+                    return Err(invalid("handshake chunk exceeds PDU budget"));
+                }
+                let (idx, total) = (body[0], body[1]);
+                if total == 0 || idx >= total || u16::from(idx) != st.hs_next {
+                    return Err(invalid("handshake chunk index/count/order"));
+                }
+                if st.hs_next == 0 {
+                    st.hs_total = total;
+                    // Exact reservation avoids geometric growth beyond the budget.
+                    st.hs_buf
+                        .try_reserve_exact(total as usize * HANDSHAKE_CHUNK)
+                        .map_err(|_| invalid("handshake allocation failed"))?;
+                } else if total != st.hs_total {
+                    return Err(invalid("handshake chunk count mismatch"));
+                }
+                if body.len() - 2 > MAX_HANDSHAKE_BYTES - st.hs_buf.len() {
+                    return Err(invalid("handshake byte budget exhausted"));
+                }
+                st.hs_buf.extend_from_slice(&body[2..]);
+                st.hs_next += 1;
+                if st.hs_next == u16::from(total) {
+                    let msg = std::mem::take(&mut st.hs_buf);
+                    st.hs_next = 0;
+                    st.hs_total = 0;
+                    self.complete_handshake(st, &msg, &mut out)?;
+                }
+            }
+            PDU_LINK => {
+                let peer = st.peer;
+                let Role::Up(up) = &mut st.role else {
+                    return Err(FfiError::State {
+                        msg: "link fragment before handshake".into(),
+                    });
+                };
+                let peer = peer.ok_or(FfiError::UnknownContact)?;
+                if let Some(bytes) = up.reasm.push_frame(&mut up.link, body, Instant::now())? {
+                    let env = EnvelopeV1::decode(&bytes)?;
+                    let key = up.recv_key();
+                    let (ct, plain) = open_app_envelope(&key, &peer, &env, &mut up.app_recv)?;
+                    let plain = Zeroizing::new(plain);
+                    let mut node = self.node.lock();
+                    if !node.seen.check_and_insert(env.envelope_id, Instant::now()) {
+                        let from = (
+                            out.file_progress.len(),
+                            out.files.len(),
+                            out.file_failures.len(),
+                        );
+                        Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
+                        node.check_refetched(&mut out, from.1);
+                        node.persist_file_events(&out, from, now_ms())?;
+                    }
+                    let replies = node.queues.get(&peer).is_some_and(|q| !q.is_empty());
+                    drop(node);
+                    if replies {
+                        self.flush_locked(st, &mut out)?;
+                    }
+                }
+            }
+            _ => return Err(invalid("unknown pdu kind")),
+        }
+        Self::fill(st, &mut out);
+        Ok(out)
+    }
+
     fn lock(&self) -> MutexGuard<'_, LinkState> {
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -1739,7 +1799,35 @@ impl MeshLink {
                     burn_at_ms,
                 });
             }
-            (None, AppContent::FileMeta(b)) => files::on_offer(&mut node.files, peer, &b, out),
+            (None, AppContent::FileMeta(b)) => {
+                // Transfer IDs share the durable message namespace. Check its
+                // owner before allocating a receiver or emitting a file result.
+                if let Some(id) = b.get(..16) {
+                    let id: [u8; 16] = id.try_into().expect("16-byte transfer id");
+                    if let Some(m) = node.db().message(&id)? {
+                        // A completed transfer ID is immutable. Replayed offers
+                        // and chunks must not discard its saved path or emit a
+                        // second file. Explicit missing-media states still admit
+                        // the existing hash-verified re-fetch flow.
+                        if m.peer == peer
+                            && m.file
+                                .as_ref()
+                                .is_some_and(|f| f.state == st::FILE_RECEIVED)
+                        {
+                            return Ok(());
+                        }
+                        if !persist::accepts_incoming_file(&m, &peer) {
+                            out.file_failures.push(FileFailure {
+                                transfer_id_hex: hex::encode(id),
+                                contact_id: hex::encode(peer),
+                                reason: "invalid".into(),
+                            });
+                            return Ok(());
+                        }
+                    }
+                }
+                files::on_offer(&mut node.files, peer, &b, out)
+            }
             (None, AppContent::FileChunk(b)) => files::on_chunk(&mut node.files, peer, &b, out),
             (Some(_), AppContent::FileMeta(_) | AppContent::FileChunk(_)) => {
                 return Err(invalid("burn file"))

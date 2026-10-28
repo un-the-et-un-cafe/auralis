@@ -49,8 +49,7 @@ final class BleMeshTransport: NSObject, MeshKick {
         var contactId: String?
         var link: CoreLink?
         var inbox: CBCharacteristic?
-        var writes: [Data] = []
-        var writing = false
+        var writes = LinkWriteQueue()
         /// Rust has more file chunks for this link: flush again when `writes` drains.
         var more = false
         init(_ p: CBPeripheral) { self.p = p }
@@ -104,7 +103,7 @@ final class BleMeshTransport: NSObject, MeshKick {
 
     private func onClientResult(_ c: Client, _ r: LinkResult) {
         c.more = r.morePending
-        c.writes += r.outgoing
+        c.writes.append(contentsOf: r.outgoing)
         handle(r, contact: c.contactId)
         pumpWrites(c)
     }
@@ -117,16 +116,15 @@ final class BleMeshTransport: NSObject, MeshKick {
     }
 
     private func pumpWrites(_ c: Client) {
-        guard !c.writing, let ch = c.inbox else { return }
+        guard !c.writes.failed, !c.writes.inFlight, let ch = c.inbox else { return }
         if c.writes.isEmpty, c.more, let link = c.link, link.isEstablished, let r = try? link.flush() {
             // Write queue drained: pull the next file chunks from Rust.
             c.more = r.morePending
-            c.writes += r.outgoing
+            c.writes.append(contentsOf: r.outgoing)
             handle(r, contact: c.contactId)
         }
-        guard !c.writes.isEmpty else { return }
-        c.writing = true
-        c.p.writeValue(c.writes.removeFirst(), for: ch, type: .withResponse)
+        guard let pdu = c.writes.next() else { return }
+        c.p.writeValue(pdu, for: ch, type: .withResponse)
     }
 
     private func pumpNotify() {
@@ -144,6 +142,25 @@ final class BleMeshTransport: NSObject, MeshKick {
             if !peripheral.updateValue(pdu, for: ch, onSubscribedCentrals: [sub]) { return } // wait for ready
             notifyQueue.removeFirst()
         }
+    }
+
+    private func abortClient(_ c: Client) {
+        // Never retry or continue nonce-bearing ciphertext after a failed ATT write. Keep
+        // the failed client until didDisconnect so late callbacks cannot target a new link.
+        c.writes.fail()
+        c.more = false
+        c.link?.close()
+        c.link = nil
+        pause(c.contactId)
+        central.cancelPeripheralConnection(c.p)
+    }
+
+    private func dropResponder(_ id: UUID) {
+        notifyQueue.removeAll { $0.0 == id }
+        subscribers.removeValue(forKey: id)
+        responders.removeValue(forKey: id)?.close()
+        responderMore.removeValue(forKey: id)
+        pause(responderPeer.removeValue(forKey: id))
     }
 
     private func pause(_ contactId: String?) {
@@ -192,7 +209,8 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
-        guard let c = clients[p.identifier], let value = ch.value else { return }
+        guard let c = clients[p.identifier] else { return }
+        guard error == nil, !c.writes.failed, let value = ch.value else { abortClient(c); return }
         if ch.uuid == control {
             // 13-byte discovery ad → known contact? Tie-break: lower PeerID dials.
             guard let cid = repo.core.contactForAdvertisement(value),
@@ -204,25 +222,30 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
             c.contactId = cid
             c.link = link
             if let ob = p.services?.first?.characteristics?.first(where: { $0.uuid == outbox }) { p.setNotifyValue(true, for: ob) }
-        } else if ch.uuid == outbox, let link = c.link, let r = try? link.onPdu(value) {
-            onClientResult(c, r)
+        } else if ch.uuid == outbox, let link = c.link {
+            do { onClientResult(c, try link.onPdu(value)) } catch { abortClient(c) }
         }
     }
 
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-        guard ch.uuid == outbox, ch.isNotifying, let c = clients[p.identifier], let r = try? c.link?.start() else { return }
-        onClientResult(c, r)
+        guard ch.uuid == outbox, let c = clients[p.identifier] else { return }
+        guard error == nil, ch.isNotifying, !c.writes.failed, let link = c.link else { abortClient(c); return }
+        do { onClientResult(c, try link.start()) } catch { abortClient(c) }
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-        guard let c = clients[p.identifier] else { return }
-        c.writing = false
-        if error == nil, let link = c.link, link.isEstablished, c.writes.isEmpty, let r = try? link.flush() {
-            onClientResult(c, r)
+        guard ch.uuid == inbox, let c = clients[p.identifier] else { return }
+        guard c.writes.complete(succeeded: error == nil) else {
+            abortClient(c)
+            return
+        }
+        if let link = c.link, link.isEstablished, c.writes.isEmpty {
+            do { onClientResult(c, try link.flush()) } catch { abortClient(c) }
             return
         }
         pumpWrites(c)
     }
+
 }
 
 extension BleMeshTransport: CBPeripheralManagerDelegate {
@@ -257,19 +280,26 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom ch: CBCharacteristic) {
-        subscribers.removeValue(forKey: central.identifier)
-        responders.removeValue(forKey: central.identifier)?.close()
-        responderMore.removeValue(forKey: central.identifier)
-        pause(responderPeer.removeValue(forKey: central.identifier))
+        dropResponder(central.identifier)
     }
 
     func peripheralManager(_ pm: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
-        for req in requests where req.characteristic.uuid == inbox {
+        var result: CBATTError.Code = .success
+        for req in requests {
             let id = req.central.identifier
-            guard let link = responders[id], let v = req.value, let r = try? link.onPdu(v) else { continue }
-            onResponderResult(id, r)
+            guard req.characteristic.uuid == inbox, let link = responders[id], let value = req.value else {
+                result = .requestNotSupported
+                break
+            }
+            do { onResponderResult(id, try link.onPdu(value)) } catch {
+                // Reject rather than acknowledging a rejected/closed Noise session. The peer
+                // must establish a new session; queued ciphertext for this one is discarded.
+                dropResponder(id)
+                result = .unlikelyError
+                break
+            }
         }
-        if let first = requests.first { pm.respond(to: first, withResult: .success) }
+        if let first = requests.first { pm.respond(to: first, withResult: result) }
         pumpNotify()
     }
 

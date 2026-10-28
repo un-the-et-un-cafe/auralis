@@ -2,6 +2,7 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use zeroize::Zeroizing;
 
 use crate::error::{OmcpError, Result};
 use crate::files::meta::FileMeta;
@@ -50,6 +51,9 @@ impl FileChunk {
                 have: buf.len(),
             });
         }
+        if buf.len() != len {
+            return Err(OmcpError::File("trailing chunk bytes"));
+        }
         Ok(Self {
             chunk_index,
             nonce,
@@ -77,6 +81,26 @@ fn chunk_nonce(chunk_index: u32) -> [u8; 12] {
 /// PROTOCOL §13.2 default; the app's "too large" copy says "50 MB".
 pub const MAX_FILE_BYTES: u64 = 50_000_000;
 
+/// Local budget for the materialized encrypted chunk API (not a wire limit).
+/// Incremental receiving does not pay a Vec/nonce/tag allocation per chunk.
+const MAX_ENCRYPTED_CHUNK_MEMORY: u64 = 128 * 1024 * 1024;
+
+fn encrypted_chunk_count(size: u64, chunk_len: usize) -> Result<usize> {
+    check_file_size(size)?;
+    if chunk_len == 0 || chunk_len > u32::MAX as usize {
+        return Err(OmcpError::File("chunk size outside u32 range"));
+    }
+    let count = size.div_ceil(chunk_len as u64).max(1);
+    // Include each Vec/nonce/index, AEAD tag and a conservative allocation allowance.
+    let overhead = std::mem::size_of::<FileChunk>() as u64 + 16 + 32;
+    if size + count * overhead > MAX_ENCRYPTED_CHUNK_MEMORY {
+        return Err(OmcpError::File(
+            "encrypted chunk memory budget exhausted; use larger chunks",
+        ));
+    }
+    Ok(count as usize)
+}
+
 /// Fail fast with [`OmcpError::FileTooLarge`] before any encryption/chunking.
 pub fn check_file_size(size: u64) -> Result<()> {
     if size > MAX_FILE_BYTES {
@@ -95,9 +119,12 @@ pub fn encrypt_file(
     recipients: &[RecipientFileKeys],
     chunk_plaintext_len: usize,
 ) -> Result<(FileMeta, ContentKey, Vec<FileChunk>)> {
-    check_file_size(plaintext.len() as u64)?;
-    if chunk_plaintext_len == 0 {
-        return Err(OmcpError::File("chunk size zero"));
+    let count = encrypted_chunk_count(plaintext.len() as u64, chunk_plaintext_len)?;
+    if name.len() > u16::MAX as usize
+        || mime.len() > u16::MAX as usize
+        || recipients.len() > u16::MAX as usize
+    {
+        return Err(OmcpError::File("metadata field outside u16 range"));
     }
     let content_hash = *blake3::hash(plaintext).as_bytes();
     let content_key = generate_content_key()?;
@@ -105,10 +132,15 @@ pub fn encrypt_file(
         .map_err(|_| OmcpError::Crypto("chacha key"))?;
 
     let mut chunks = Vec::new();
+    chunks
+        .try_reserve_exact(count)
+        .map_err(|_| OmcpError::File("encrypted chunk allocation failed"))?;
     let mut offset = 0usize;
     let mut index = 0u32;
     while offset < plaintext.len() || (plaintext.is_empty() && index == 0) {
-        let end = (offset + chunk_plaintext_len).min(plaintext.len());
+        let end = offset
+            .saturating_add(chunk_plaintext_len)
+            .min(plaintext.len());
         let piece = &plaintext[offset..end];
         let nonce_bytes = chunk_nonce(index);
         let nonce = Nonce::from(nonce_bytes);
@@ -153,55 +185,129 @@ pub fn encrypt_file(
     Ok((meta, content_key, chunks))
 }
 
+/// Bounded incremental receiver: one file buffer and one bit per chunk, even for
+/// valid one-byte chunk layouts. Authenticates before retaining plaintext;
+/// unfinished plaintext is zeroized on cancellation/error/drop.
+pub struct FileReassembler {
+    content_hash: [u8; 32],
+    chunk_len: usize,
+    num_chunks: u32,
+    plaintext: Zeroizing<Vec<u8>>,
+    seen: Vec<u8>,
+    have: u32,
+}
+
+impl FileReassembler {
+    /// Exact buffer bytes required, validated without allocating. At the default
+    /// 50 MB file limit this is at most 56,250,000 bytes (one-byte chunks).
+    pub fn required_bytes(meta: &FileMeta) -> Result<usize> {
+        check_file_size(meta.size)?;
+        let len = u64::from(meta.chunk_plaintext_len);
+        if len == 0 || u64::from(meta.num_chunks) != meta.size.div_ceil(len).max(1) {
+            return Err(OmcpError::File("invalid file chunk layout"));
+        }
+        Ok(meta.size as usize + (meta.num_chunks as usize).div_ceil(8))
+    }
+
+    /// Call `required_bytes` to check an aggregate admission budget first.
+    pub fn new(meta: &FileMeta) -> Result<Self> {
+        Self::required_bytes(meta)?;
+        let mut plaintext = Zeroizing::new(Vec::new());
+        plaintext
+            .try_reserve_exact(meta.size as usize)
+            .map_err(|_| OmcpError::File("file buffer allocation failed"))?;
+        plaintext.resize(meta.size as usize, 0);
+        let mut seen = Vec::new();
+        let bitmap_len = (meta.num_chunks as usize).div_ceil(8);
+        seen.try_reserve_exact(bitmap_len)
+            .map_err(|_| OmcpError::File("file bitmap allocation failed"))?;
+        seen.resize(bitmap_len, 0);
+        Ok(Self {
+            content_hash: meta.content_hash,
+            chunk_len: meta.chunk_plaintext_len as usize,
+            num_chunks: meta.num_chunks,
+            plaintext,
+            seen,
+            have: 0,
+        })
+    }
+
+    /// Retain one authenticated chunk. Exact duplicates are idempotent; a
+    /// conflicting duplicate, invalid index or mismatched length is an error.
+    /// Returns true only for a newly received chunk.
+    pub fn push(&mut self, key: &ContentKey, chunk: &FileChunk) -> Result<bool> {
+        if chunk.chunk_index >= self.num_chunks {
+            return Err(OmcpError::File("chunk index oob"));
+        }
+        let index = chunk.chunk_index as usize;
+        // Layout validation guarantees the multiplication is at most file size.
+        let start = index * self.chunk_len;
+        let end = start
+            .saturating_add(self.chunk_len)
+            .min(self.plaintext.len());
+        if chunk.ciphertext.len() != end - start + 16 {
+            return Err(OmcpError::File("chunk length mismatch"));
+        }
+        let cipher = ChaCha20Poly1305::new_from_slice(key.as_bytes())
+            .map_err(|_| OmcpError::Crypto("chacha key"))?;
+        let piece = Zeroizing::new(
+            cipher
+                .decrypt(
+                    &Nonce::from(chunk.nonce),
+                    Payload {
+                        msg: &chunk.ciphertext,
+                        aad: &chunk_aad(&self.content_hash, chunk.chunk_index),
+                    },
+                )
+                .map_err(|_| OmcpError::File("chunk open"))?,
+        );
+        let mask = 1 << (index % 8);
+        if self.seen[index / 8] & mask != 0 {
+            if self.plaintext[start..end] != piece[..] {
+                return Err(OmcpError::File("conflicting duplicate chunk"));
+            }
+            return Ok(false);
+        }
+        self.plaintext[start..end].copy_from_slice(&piece);
+        self.seen[index / 8] |= mask;
+        self.have += 1;
+        Ok(true)
+    }
+
+    pub fn received_chunks(&self) -> u32 {
+        self.have
+    }
+
+    /// Verify the complete content hash and move the buffer without a second
+    /// whole-file copy. Any error zeroizes the unfinished plaintext.
+    pub fn finish(mut self) -> Result<Vec<u8>> {
+        if self.have != self.num_chunks {
+            return Err(OmcpError::File("missing chunk"));
+        }
+        if blake3::hash(&self.plaintext).as_bytes() != &self.content_hash {
+            return Err(OmcpError::FileHashMismatch);
+        }
+        Ok(std::mem::take(&mut *self.plaintext))
+    }
+}
+
 /// Decrypt chunks with `content_key` and verify BLAKE3 against `meta.content_hash`.
 pub fn decrypt_and_reassemble(
     meta: &FileMeta,
     content_key: &ContentKey,
     chunks: &[FileChunk],
 ) -> Result<Vec<u8>> {
-    if chunks.len() as u32 != meta.num_chunks {
+    FileReassembler::required_bytes(meta)?;
+    if chunks.len() != meta.num_chunks as usize {
         return Err(OmcpError::File("chunk count mismatch"));
     }
-    let cipher = ChaCha20Poly1305::new_from_slice(content_key.as_bytes())
-        .map_err(|_| OmcpError::Crypto("chacha key"))?;
-
-    let mut ordered: Vec<Option<&FileChunk>> = vec![None; meta.num_chunks as usize];
-    for c in chunks {
-        let i = c.chunk_index as usize;
-        if i >= ordered.len() {
-            return Err(OmcpError::File("chunk index oob"));
-        }
-        if ordered[i].is_some() {
+    let mut receiver = FileReassembler::new(meta)?;
+    for chunk in chunks {
+        if !receiver.push(content_key, chunk)? {
             return Err(OmcpError::File("duplicate chunk"));
         }
-        ordered[i] = Some(c);
     }
-
-    let mut plaintext = Vec::with_capacity(meta.size as usize);
-    for (i, slot) in ordered.iter().enumerate() {
-        let c = slot.ok_or(OmcpError::File("missing chunk"))?;
-        let nonce = Nonce::from(c.nonce);
-        let aad = chunk_aad(&meta.content_hash, i as u32);
-        let piece = cipher
-            .decrypt(
-                &nonce,
-                Payload {
-                    msg: &c.ciphertext,
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| OmcpError::File("chunk open"))?;
-        plaintext.extend_from_slice(&piece);
-    }
-
-    if plaintext.len() as u64 != meta.size {
-        return Err(OmcpError::File("size mismatch"));
-    }
-    let hash = *blake3::hash(&plaintext).as_bytes();
-    if hash != meta.content_hash {
-        return Err(OmcpError::FileHashMismatch);
-    }
-    Ok(plaintext)
+    receiver.finish()
 }
 
 /// Helper: find the wrapped key for `recipient_id` in meta.
@@ -284,5 +390,130 @@ mod tests {
         let shuffled = vec![chunks[2].clone(), chunks[0].clone(), chunks[1].clone()];
         let out = decrypt_and_reassemble(&meta, &ck, &shuffled).unwrap();
         assert_eq!(out, plain);
+    }
+
+    fn layout(size: u64, chunk_plaintext_len: u32, num_chunks: u32) -> FileMeta {
+        FileMeta {
+            name: "test".into(),
+            mime: "application/octet-stream".into(),
+            size,
+            chunk_plaintext_len,
+            num_chunks,
+            content_hash: [0; 32],
+            wrapped_keys: vec![],
+        }
+    }
+
+    #[test]
+    fn maximum_file_and_one_byte_chunks_have_bounded_layout_without_allocating() {
+        let meta = layout(MAX_FILE_BYTES, 1, MAX_FILE_BYTES as u32);
+        assert_eq!(FileReassembler::required_bytes(&meta).unwrap(), 56_250_000);
+        let meta = layout(MAX_FILE_BYTES, 65536, MAX_FILE_BYTES.div_ceil(65536) as u32);
+        assert_eq!(FileReassembler::required_bytes(&meta).unwrap(), 50_000_096);
+        assert_eq!(
+            FileReassembler::required_bytes(&layout(0, 1, 1)).unwrap(),
+            1
+        );
+        for meta in [
+            layout(u64::MAX, 1, 1),
+            layout(1, 0, 1),
+            layout(10, 1, u32::MAX),
+            layout(0, 1, 0),
+        ] {
+            assert!(FileReassembler::new(&meta).is_err());
+            assert!(decrypt_and_reassemble(&meta, &ContentKey([0; 32]), &[]).is_err());
+        }
+        assert!(encrypted_chunk_count(MAX_FILE_BYTES, 1).is_err());
+        assert_eq!(encrypted_chunk_count(MAX_FILE_BYTES, 65536).unwrap(), 763);
+    }
+
+    #[test]
+    fn incremental_one_byte_chunks_allow_reordering_and_idempotent_reconnect() {
+        let bytes: Vec<u8> = (0..=255).collect();
+        let (meta, key, chunks) = encrypt_file(&bytes, "bytes", "binary", &[], 1).unwrap();
+        let mut receiver = FileReassembler::new(&meta).unwrap();
+        for chunk in chunks.iter().rev() {
+            assert!(receiver.push(&key, chunk).unwrap());
+            assert!(!receiver.push(&key, chunk).unwrap());
+        }
+        assert_eq!(receiver.received_chunks(), 256);
+        assert_eq!(receiver.finish().unwrap(), bytes);
+        assert!(
+            decrypt_and_reassemble(&meta, &key, &vec![chunks[0].clone(); chunks.len()]).is_err()
+        );
+    }
+
+    #[test]
+    fn incremental_chunks_reject_invalid_length_index_authentication_and_conflicts() {
+        let (meta, key, chunks) = encrypt_file(b"xy", "x", "binary", &[], 1).unwrap();
+        let mut receiver = FileReassembler::new(&meta).unwrap();
+        let mut bad = chunks[0].clone();
+        bad.chunk_index = u32::MAX;
+        assert!(receiver.push(&key, &bad).is_err());
+        bad = chunks[0].clone();
+        bad.ciphertext.push(0);
+        assert!(receiver.push(&key, &bad).is_err());
+        bad = chunks[0].clone();
+        bad.ciphertext[0] ^= 1;
+        assert!(receiver.push(&key, &bad).is_err());
+        assert_eq!(receiver.received_chunks(), 0);
+        receiver.push(&key, &chunks[0]).unwrap();
+        // A malicious authenticated sender knows the content key, but cannot
+        // rewrite an already accepted slot with a different valid plaintext.
+        let cipher = ChaCha20Poly1305::new_from_slice(key.as_bytes()).unwrap();
+        bad.ciphertext = cipher
+            .encrypt(
+                &Nonce::from(bad.nonce),
+                Payload {
+                    msg: b"z",
+                    aad: &chunk_aad(&meta.content_hash, 0),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            receiver.push(&key, &bad),
+            Err(OmcpError::File("conflicting duplicate chunk"))
+        );
+        assert_eq!(receiver.received_chunks(), 1);
+        assert!(receiver.finish().is_err());
+        let mut encoded = chunks[0].encode();
+        encoded.push(0);
+        assert!(FileChunk::decode(&encoded).is_err());
+    }
+
+    #[test]
+    fn forged_maximum_ciphertext_length_is_truncated_without_addition_or_allocation() {
+        let mut bytes = [0; 20];
+        bytes[16..].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            FileChunk::decode(&bytes),
+            Err(OmcpError::Truncated {
+                need: u32::MAX as usize,
+                have: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn incremental_receiver_still_checks_whole_file_hash() {
+        let (mut meta, key, _) = encrypt_file(b"x", "x", "binary", &[], 1).unwrap();
+        meta.content_hash = [5; 32];
+        let cipher = ChaCha20Poly1305::new_from_slice(key.as_bytes()).unwrap();
+        let chunk = FileChunk {
+            chunk_index: 0,
+            nonce: [0; 12],
+            ciphertext: cipher
+                .encrypt(
+                    &Nonce::from([0; 12]),
+                    Payload {
+                        msg: b"x",
+                        aad: &chunk_aad(&meta.content_hash, 0),
+                    },
+                )
+                .unwrap(),
+        };
+        let mut receiver = FileReassembler::new(&meta).unwrap();
+        receiver.push(&key, &chunk).unwrap();
+        assert_eq!(receiver.finish(), Err(OmcpError::FileHashMismatch));
     }
 }

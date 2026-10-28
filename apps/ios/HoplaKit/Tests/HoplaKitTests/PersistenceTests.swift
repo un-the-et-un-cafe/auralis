@@ -42,3 +42,58 @@ final class ChatBackupSyncTests: XCTestCase {
         XCTAssertTrue(cloud.blobs.isEmpty)
     }
 }
+
+/// Simulates a Keychain that rejects writes while the rest of preferences remain writable.
+private final class RejectingSecretStore: AppStore {
+    var rejectPhrase = false
+    var rejectKey = false
+    private var phrase: String?
+    private var key: Data?
+    var recoveryPhrase: String? { get { phrase } set { if !rejectPhrase { phrase = newValue } } }
+    var storageKey: Data? { get { key } set { if !rejectKey { key = newValue } } }
+    var displayName: String?
+    var contacts: [Contact] = []
+    var onboarded = false
+    var privateNotifications = false
+    var chatPrivateOverride: [String: Bool] = [:]
+    var hideOnLockScreen = false
+    var burnChats: [String: Int] = [:]
+    var burnUnreadTtl: [String: Int] = [:]
+    var gatewayEnabled = false
+    var gatewayAllowMobile = false
+    var backupMethods: Set<String> = []
+    var lastCloudBackupMs: Int64 = 0
+    var backupRemindDeadlineMs: Int64 = 0
+}
+
+final class SecretPersistenceFailureTests: XCTestCase {
+    func testOnboardingCannotAdvanceAfterRejectedPhraseWriteAndCanRetry() {
+        let store = RejectingSecretStore()
+        store.rejectPhrase = true
+        let (repo, _) = makeRepo(store: store)
+        let flow = OnboardingFlow(repo: repo, iCloud: nil, drive: nil, keyStore: nil)
+        flow.getStarted(); flow.profileNext()
+        XCTAssertEqual(flow.state.step, .profile)
+        XCTAssertEqual(flow.state.error, "identity")
+        XCTAssertNil(store.recoveryPhrase)
+        XCTAssertFalse(store.onboarded)
+        // Core may already be loaded; retry must persist the same identity, not skip the write.
+        let id = repo.core.identity()?.peerIdHex
+        store.rejectPhrase = false
+        flow.profileNext()
+        XCTAssertEqual(flow.state.step, .secure)
+        XCTAssertNotNil(store.recoveryPhrase)
+        XCTAssertEqual(repo.core.identity()?.peerIdHex, id)
+    }
+
+    func testRejectedStorageKeyDoesNotOpenDatabaseWithAnUnpersistedKey() throws {
+        let store = RejectingSecretStore()
+        store.rejectKey = true
+        let core = FakeOmcpCore()
+        let repo = MeshRepository(core: core, store: store, dbPath: "/tmp/auralis-rejected-key.db")
+        XCTAssertThrowsError(try repo.saveIdentity(phrase: core.generateRecoveryPhrase(), name: "A"))
+        XCTAssertNil(core.identity())
+        XCTAssertNil(store.storageKey)
+        XCTAssertNil(store.recoveryPhrase)
+    }
+}

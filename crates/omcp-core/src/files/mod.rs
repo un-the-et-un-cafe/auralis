@@ -12,7 +12,7 @@ mod wrap;
 
 pub use chunks::{
     check_file_size, decrypt_and_reassemble, encrypt_file, wrapped_key_for, FileChunk,
-    DEFAULT_CHUNK_PLAINTEXT_LEN, MAX_FILE_BYTES,
+    FileReassembler, DEFAULT_CHUNK_PLAINTEXT_LEN, MAX_FILE_BYTES,
 };
 pub use meta::{FileMeta, CONTENT_TYPE_FILE_CHUNK, CONTENT_TYPE_FILE_META};
 pub use wrap::{

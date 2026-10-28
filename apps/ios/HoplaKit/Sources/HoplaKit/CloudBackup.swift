@@ -42,3 +42,21 @@ public final class InMemoryBackupKeyStore: BackupKeyStore {
     public func save(_ key: Data) throws { self.key = key }
     public func delete() throws { key = nil }
 }
+
+/// A prepared upload owns only a sealed blob and destination identifier, never a provider,
+/// repository or UI state.
+/// Prepare on the repository's owner, upload on a worker, then commit success on the owner.
+public struct PreparedCloudBackup: Sendable {
+    public let method: String
+    private let blob: Data
+
+    public init(store: CloudBackupStore, blob: Data) {
+        self.method = store.method
+        self.blob = blob
+    }
+
+    public func upload(to store: CloudBackupStore) throws {
+        guard store.method == method else { throw CoreError.invalid("backup destination") }
+        try store.upload(blob)
+    }
+}

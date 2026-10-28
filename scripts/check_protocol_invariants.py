@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Check protocol-bearing files against an explicitly reviewed Git baseline.
 
-This guards a UI-only fork from accidental wire/crypto drift. It is not a
-permanent ban on protocol evolution or an interoperability certification: after
-an intentional reviewed upgrade, supply its commit with --base.
+Preserve the immutable upstream comparison, allowing only exact per-file hashes
+with documented review rationale and regression evidence. This is a drift guard,
+not an independent audit or interoperability certification. Never regenerate the
+manifest automatically just to make CI pass.
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -70,28 +73,55 @@ def workspace_hashes(repo: Path) -> dict[str, str]:
     return hashes
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--repo", type=Path, default=Path(__file__).resolve().parents[1],
-        help="checkout to inspect (default: this script's repository)",
-    )
-    parser.add_argument(
-        "--base", default=DEFAULT_BASE,
-        help="reviewed baseline commit or ref (default: audited Hopla upstream)",
-    )
-    args = parser.parse_args()
-    repo = args.repo.resolve()
-    try:
-        commit = git(
-            repo, "rev-parse", "--verify", "--end-of-options", f"{args.base}^{{commit}}"
-        ).decode("ascii").strip()
-        expected = baseline_hashes(repo, commit)
-        actual = workspace_hashes(repo)
-    except (OSError, RuntimeError, tarfile.TarError) as error:
-        print(f"ERROR: protocol baseline could not be checked: {error}", file=sys.stderr)
-        return 2
+def apply_reviewed_changes(expected: dict[str, str], policy: object) -> dict[str, str]:
+    """Validate every exception against upstream; never accept globs or a new HEAD."""
+    if not isinstance(policy, dict) or set(policy) != {"schema", "upstream_commit", "changes"}:
+        raise RuntimeError("review manifest must contain schema, upstream_commit and changes")
+    if type(policy["schema"]) is not int or policy["schema"] != 1:
+        raise RuntimeError("unsupported review manifest schema")
+    if policy["upstream_commit"] != DEFAULT_BASE:
+        raise RuntimeError("review manifest must retain the immutable upstream commit")
+    if not isinstance(policy["changes"], list):
+        raise RuntimeError("review manifest changes must be a list")
+    accepted = expected.copy()
+    seen = set()
+    required = {"path", "upstream_sha256", "accepted_sha256", "rationale", "evidence"}
+    for entry in policy["changes"]:
+        if not isinstance(entry, dict) or set(entry) != required:
+            raise RuntimeError("each reviewed change needs path, upstream/accepted hashes, rationale and evidence")
+        path = entry["path"]
+        if not isinstance(path, str) or path not in expected or path in seen:
+            raise RuntimeError(f"unknown or duplicate protected path: {path!r}")
+        seen.add(path)
+        for key in ("upstream_sha256", "accepted_sha256"):
+            value = entry[key]
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RuntimeError(f"invalid {key}: {path}")
+        if entry["upstream_sha256"] != expected[path]:
+            raise RuntimeError(f"incorrect upstream hash: {path}")
+        if entry["accepted_sha256"] == expected[path]:
+            raise RuntimeError(f"redundant unchanged-file exception: {path}")
+        if not isinstance(entry["rationale"], str) or not entry["rationale"].strip():
+            raise RuntimeError(f"missing review rationale: {path}")
+        evidence = entry["evidence"]
+        if not isinstance(evidence, list) or not evidence or any(
+            not isinstance(item, str) or not item.strip() for item in evidence
+        ):
+            raise RuntimeError(f"missing regression evidence: {path}")
+        accepted[path] = entry["accepted_sha256"]
+    return accepted
 
+
+def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuntimeError(f"duplicate manifest key: {key}")
+        result[key] = value
+    return result
+
+
+def differences(expected: dict[str, str], actual: dict[str, str]) -> list[tuple[str, str]]:
     changed = []
     for name in sorted(expected.keys() | actual.keys()):
         if name not in expected:
@@ -100,15 +130,49 @@ def main() -> int:
             changed.append(("removed", name))
         elif expected[name] != actual[name]:
             changed.append(("modified", name))
+    return changed
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--repo", type=Path, default=Path(__file__).resolve().parents[1],
+        help="checkout to inspect (default: this script's repository)",
+    )
+    parser.add_argument(
+        "--upstream-only", action="store_true",
+        help="diagnostic: ignore reviewed exceptions and compare strictly with upstream",
+    )
+    args = parser.parse_args()
+    repo = args.repo.resolve()
+    try:
+        commit = git(
+            repo, "rev-parse", "--verify", "--end-of-options", f"{DEFAULT_BASE}^{{commit}}"
+        ).decode("ascii").strip()
+        expected = baseline_hashes(repo, commit)
+        upstream = expected.copy()
+        if not args.upstream_only:
+            manifest = repo / "scripts/protocol-review-manifest.json"
+            if manifest.is_symlink():
+                raise RuntimeError("review manifest must not be a symlink")
+            policy = json.loads(manifest.read_text(encoding="utf-8"), object_pairs_hook=strict_object)
+            expected = apply_reviewed_changes(expected, policy)
+        actual = workspace_hashes(repo)
+    except (OSError, RuntimeError, tarfile.TarError, ValueError) as error:
+        print(f"ERROR: protocol baseline could not be checked: {error}", file=sys.stderr)
+        return 2
+
+    changed = differences(expected, actual)
     if changed:
-        print(f"FAIL: {len(changed)} protocol-bearing files differ from {commit}:")
+        print(f"FAIL: {len(changed)} protected files differ from the explicit accepted hashes:")
         for kind, name in changed:
             print(f"  {kind}: {name}")
-        print("Review intentional protocol changes, then select an audited --base.")
+        print("Review the source diff, compatibility and regression evidence; do not auto-update hashes.")
         return 1
 
-    print(f"PASS: {len(expected)} protocol-bearing files match {commit} byte for byte.")
-    print("This checks source invariants, not physical-device interoperability.")
+    exceptions = len(differences(upstream, expected))
+    print(f"PASS: {len(expected)} protected files; upstream {commit}; {exceptions} explicit reviewed exceptions.")
+    print("This checks source invariants, not review approval or physical-device interoperability.")
     return 0
 
 

@@ -200,7 +200,7 @@
 "backup_now_change" = "Back up again / change password";
 "backup_delete" = "Delete cloud backup";
 "backup_delete_confirm" = "Delete this cloud backup? You’ll need another method to restore.";
-"backup_failed" = "Backup failed. It will be retried when you’re online.";
+"backup_failed" = "Backup failed. Check your connection and try again.";
 "backup_view_phrase" = "View recovery phrase";
 "backup_view_phrase_reason" = "Show your recovery phrase";
 "method_icloud" = "iCloud";

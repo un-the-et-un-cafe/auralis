@@ -46,4 +46,5 @@
     <string name="auralis_thread_empty_title">Un simple bonjour crée du lien</string>
     <string name="auralis_thread_empty_body">Votre premier message attendra ici si votre contact est hors de portée.</string>
     <string name="auralis_simulated_backup_warning">MODE TEST · La sauvegarde est simulée en mémoire. Rien n’est envoyé à Google Drive. Ces sauvegardes disparaissent à l’arrêt du processus de l’application. Ne comptez pas sur ce mode pour récupérer votre identité.</string>
+    <string name="auralis_send_failed">Impossible de mettre le message en attente. Votre brouillon est conservé. Réessayez.</string>
 </resources>

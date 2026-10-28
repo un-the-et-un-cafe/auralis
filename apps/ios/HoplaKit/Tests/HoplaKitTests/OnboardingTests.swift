@@ -150,4 +150,103 @@ final class OnboardingTests: XCTestCase {
         XCTAssertFalse(s.methods.contains(backupICloud))
         XCTAssertThrowsError(try s.changePassword(backupICloud, to: "short"))
     }
+    func testPreparedUploadDoesNotCommitUntilOwnerAcceptsSuccess() throws {
+        let cloud = InMemoryCloudBackupStore(method: backupICloud)
+        let (f, r) = flow(icloud: cloud)
+        f.getStarted(); f.profileNext()
+        let upload = try f.prepareBackup(backupICloud)
+        XCTAssertTrue(r.store.backupMethods.isEmpty)
+        XCTAssertEqual(r.store.lastCloudBackupMs, 0)
+        try upload.upload(to: cloud)
+        XCTAssertNotNil(cloud.blob)
+        XCTAssertFalse(f.state.iCloudDone)
+        XCTAssertTrue(r.store.backupMethods.isEmpty, "worker I/O never mutates repository state")
+        f.completeBackup(backupICloud, succeeded: true)
+        XCTAssertTrue(f.state.iCloudDone)
+        XCTAssertEqual(r.backupGate(), .ok)
+    }
+
+    func testFailedPreparedUploadDoesNotUnlockBackupGate() throws {
+        let (f, r) = flow()
+        f.getStarted(); f.profileNext()
+        _ = try f.prepareBackup(backupICloud)
+        f.completeBackup(backupICloud, succeeded: false)
+        XCTAssertFalse(f.state.iCloudDone)
+        XCTAssertEqual(f.state.error, "backup")
+        XCTAssertEqual(r.store.lastCloudBackupMs, 0)
+        XCTAssertEqual(r.backupGate(), .required)
+    }
+
+    func testPreparedUploadRejectsWrongDestination() throws {
+        let (f, _) = flow()
+        f.getStarted(); f.profileNext()
+        let upload = try f.prepareBackup(backupICloud)
+        let drive = InMemoryCloudBackupStore(method: backupDrive)
+        XCTAssertThrowsError(try upload.upload(to: drive))
+        XCTAssertNil(drive.blob)
+    }
+
+    func testLateBackupSearchCannotReplaceNewerNavigation() {
+        let (f, _) = flow()
+        f.getStarted()
+        f.acceptBackupSearch([(backupICloud, Data("Kblob".utf8))])
+        XCTAssertEqual(f.state.step, .profile)
+        XCTAssertNil(f.state.foundBackup)
+    }
+
+    func testCancelRestoreClearsTypedSecrets() {
+        let (f, _) = flow()
+        f.setRestorePassword("private password")
+        f.usePhraseInstead()
+        XCTAssertTrue(f.state.restorePassword.isEmpty)
+        f.setRestorePhrase("private recovery words")
+        f.backToWelcome()
+        XCTAssertTrue(f.state.restorePhrase.isEmpty)
+        f.usePhraseInstead()
+        XCTAssertTrue(f.state.restorePhrase.isEmpty)
+    }
+
+    func testUnavailableRecoveryWordsCannotEnterQuizOrCrash() {
+        let (f, _) = flow()
+        f.writeItDown()
+        XCTAssertEqual(f.state.step, .welcome)
+        XCTAssertEqual(f.state.error, "identity")
+        XCTAssertTrue(f.state.words.isEmpty)
+        f.startQuiz()
+        XCTAssertTrue(f.state.quiz.isEmpty)
+        f.setQuizInput(0, "anything")
+        XCTAssertFalse(f.submitQuiz())
+    }
+
+    func testCancelledWordDisplayClearsWordsAndQuiz() {
+        let (f, _) = flow()
+        f.getStarted(); f.profileNext(); f.writeItDown(); f.startQuiz()
+        f.backToSecure()
+        XCTAssertTrue(f.state.words.isEmpty)
+        XCTAssertTrue(f.state.quiz.isEmpty)
+        f.startQuiz()
+        XCTAssertEqual(f.state.step, .secure)
+    }
+
+    final class FailingDeleteKeyStore: BackupKeyStore {
+        var key: Data?
+        func load() throws -> Data? { key }
+        func save(_ key: Data) throws { self.key = key }
+        func delete() throws { throw CoreError.other("keychain unavailable") }
+    }
+
+    func testDeletedCloudBackupIsNotCountedWhenKeyCleanupFails() throws {
+        let cloud = InMemoryCloudBackupStore(method: backupICloud)
+        let keys = FailingDeleteKeyStore()
+        let (r, _) = makeRepo()
+        try r.saveIdentity(phrase: try r.core.generateRecoveryPhrase(), name: "A")
+        let s = BackupSettings(repo: r, stores: [cloud], keyStore: keys)
+        try s.backUp(backupICloud, password: nil)
+        XCTAssertEqual(s.gate, .ok)
+        XCTAssertThrowsError(try s.deleteCloudBackup(backupICloud))
+        XCTAssertNil(cloud.blob)
+        XCTAssertFalse(s.methods.contains(backupICloud))
+        XCTAssertEqual(s.gate, .required)
+    }
+
 }

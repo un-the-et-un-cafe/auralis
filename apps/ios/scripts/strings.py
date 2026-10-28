@@ -160,7 +160,7 @@ S = {
  "backup_add": ("Back up now", "Sauvegarder maintenant"), "backup_now_change": ("Back up again / change password", "Resauvegarder / changer le mot de passe"),
  "backup_delete": ("Delete cloud backup", "Supprimer la sauvegarde cloud"),
  "backup_delete_confirm": ("Delete this cloud backup? You’ll need another method to restore.", "Supprimer cette sauvegarde cloud ? Il vous faudra une autre méthode pour restaurer."),
- "backup_failed": ("Backup failed. It will be retried when you’re online.", "Échec de la sauvegarde. Nouvel essai une fois en ligne."),
+ "backup_failed": ("Backup failed. Check your connection and try again.", "Échec de la sauvegarde. Vérifiez la connexion et réessayez."),
  "backup_view_phrase": ("View recovery phrase", "Voir la phrase de récupération"),
  "backup_view_phrase_reason": ("Show your recovery phrase", "Afficher votre phrase de récupération"),
  "method_icloud": ("iCloud", "iCloud"), "method_drive": ("Google Drive", "Google Drive"), "method_written": ("Written down", "Notée"),

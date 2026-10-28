@@ -69,6 +69,7 @@ struct ChatsListView: View {
                         Image(systemName: "square.and.pencil").frame(minWidth: 44, minHeight: 44)
                     }
                     .accessibilityLabel(L("contact_add_title"))
+                    .accessibilityIdentifier("chats.addContact")
                 }
             }
             .navigationDestination(for: String.self) { ChatThreadView(contactId: $0) }
@@ -269,13 +270,17 @@ struct ChatThreadView: View {
         fileCandidate = nil
         do { try model.repo.checkFile(size: f.size) } catch { self.error = L("file_too_large_title"); return }
         let repo = model.repo, cid = contactId
+        let maxBytes = model.core.maxFileBytes()
         Task.detached(priority: .userInitiated) {
             let ok = f.url.startAccessingSecurityScopedResource()
             defer { if ok { f.url.stopAccessingSecurityScopedResource() } }
-            let data = try? Data(contentsOf: f.url, options: .mappedIfSafe)
+            let result = Result { try BoundedFileReader.read(f.url, maxBytes: maxBytes) }
             await MainActor.run {
-                guard let data else { self.error = L("file_read_error"); return }
-                do { try repo.sendFile(cid, name: f.name, mime: f.mime, bytes: data) } catch CoreError.fileTooLarge {
+                do {
+                    let data = try result.get()
+                    try repo.sendFile(cid, name: f.name, mime: f.mime, bytes: data)
+                    self.error = nil
+                } catch CoreError.fileTooLarge {
                     self.error = L("file_too_large_title")
                 } catch { self.error = L("file_read_error") }
             }

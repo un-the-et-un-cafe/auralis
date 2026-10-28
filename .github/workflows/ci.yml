@@ -53,6 +53,8 @@ jobs:
           rustup show active-toolchain
           rustup component add rustfmt clippy
           rustc --version --verbose
+      - name: Test source invariant guard
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Verify audited OMCP source invariants
         run: python3 scripts/check_protocol_invariants.py
       - name: Cargo fmt
@@ -89,13 +91,67 @@ jobs:
             apps/android/app/build/test-results/
           if-no-files-found: warn
           retention-days: 14
+      - name: Stage installable development APK and identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/auralis-android-debug"
+          cp apps/android/app/build/outputs/apk/debug/*.apk "$RUNNER_TEMP/auralis-android-debug/"
+          {
+            printf 'Auralis debug test build, not a release. Use synthetic test data only.\nCommit: %s\nRun: %s/%s/actions/runs/%s\n' \
+              "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Application ID: chat.auralis.app.debug\nMinimum Android API: 31\n'
+            printf 'The generated debug signing key can change between CI runs. Do not uninstall an existing app without backing up its data.\n'
+          } > "$RUNNER_TEMP/auralis-android-debug/BUILD_INFO.txt"
+          cd "$RUNNER_TEMP/auralis-android-debug"
+          sha256sum ./*.apk BUILD_INFO.txt > SHA256SUMS
       - name: Upload development APK (not a release)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: auralis-debug-apk-${{ github.sha }}
-          path: apps/android/app/build/outputs/apk/debug/*.apk
+          path: ${{ runner.temp }}/auralis-android-debug/
           if-no-files-found: error
           retention-days: 7
+
+  android-runtime:
+    name: android runtime (API ${{ matrix.api }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [31, 35]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require existing KVM access
+        run: |
+          mkdir -p apps/android/app/build/reports/emulator
+          { uname -a; id; if [[ -e /dev/kvm ]]; then stat /dev/kvm; fi; } | tee apps/android/app/build/reports/emulator/host.txt
+          test "$(uname -m)" = x86_64
+          test -c /dev/kvm && test ! -L /dev/kvm && test -r /dev/kvm && test -w /dev/kvm
+      - name: Set up Android build tools
+        uses: ./.github/actions/setup-android-build
+      - name: Build native core and instrumentation APKs
+        working-directory: apps/android
+        run: |
+          ./scripts/build-rust.sh
+          ./gradlew assembleDebug assembleDebugAndroidTest --no-daemon --console=plain
+      - name: Run real app instrumentation on an accelerated emulator
+        working-directory: apps/android
+        env:
+          API_LEVEL: ${{ matrix.api }}
+        run: ../../scripts/ci/run-android-emulator-tests.sh "$API_LEVEL"
+      - name: Upload runtime test reports and emulator diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auralis-android-runtime-api${{ matrix.api }}-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/
+            apps/android/app/build/outputs/androidTest-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   ios:
     name: ios
@@ -121,18 +177,23 @@ jobs:
         run: ./scripts/build-rust.sh
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Pick an available iPhone simulator
+      - name: Create a clean pinned iPhone simulator
         id: sim
         run: |
-          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
+          UDID=$(xcrun simctl create AuralisCI com.apple.CoreSimulator.SimDeviceType.iPhone-16 com.apple.CoreSimulator.SimRuntime.iOS-18-5)
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
-      - name: Build and test on simulator
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+      - name: Build and run bridge and real app UI tests
         env:
           SIMULATOR_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
             -destination "id=$SIMULATOR_UDID" \
             -resultBundlePath build/Auralis-tests.xcresult \
+            -derivedDataPath build/DerivedData \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 300 \
             CODE_SIGNING_ALLOWED=NO build test
       - name: Upload simulator test results
         if: ${{ always() }}
@@ -143,10 +204,39 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Stage installable Apple silicon simulator app
+        run: |
+          mkdir -p "$RUNNER_TEMP/auralis-ios-simulator"
+          tar -czf "$RUNNER_TEMP/auralis-ios-simulator/Auralis-simulator.app.tar.gz" \
+            -C build/DerivedData/Build/Products/Debug-iphonesimulator OpenMeshChat.app
+          {
+            printf 'Auralis simulator test build; NOT an iPhone IPA or release. Use synthetic test data only.\nCommit: %s\nRun: %s/%s/actions/runs/%s\n' \
+              "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+            printf 'Application ID: chat.auralis.app\nValidated runtime: iOS 18.5, iPhone 16, Apple silicon\n'
+            xcodebuild -version
+            lipo -archs build/DerivedData/Build/Products/Debug-iphonesimulator/OpenMeshChat.app/OpenMeshChat
+          } > "$RUNNER_TEMP/auralis-ios-simulator/BUILD_INFO.txt"
+          cd "$RUNNER_TEMP/auralis-ios-simulator"
+          shasum -a 256 ./*.tar.gz BUILD_INFO.txt > SHA256SUMS
+      - name: Upload simulator app (not an iPhone package)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auralis-ios-simulator-app-${{ github.sha }}
+          path: ${{ runner.temp }}/auralis-ios-simulator/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Stop and delete the disposable simulator
+        if: ${{ always() && steps.sim.outputs.udid != '' }}
+        env:
+          SIMULATOR_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          xcrun simctl shutdown "$SIMULATOR_UDID" || true
+          xcrun simctl delete "$SIMULATOR_UDID"
+
   required:
     name: required checks
     if: ${{ always() }}
-    needs: [workflows, rust, android, ios]
+    needs: [workflows, rust, android, android-runtime, ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -155,8 +245,9 @@ jobs:
           WORKFLOWS_RESULT: ${{ needs.workflows.result }}
           RUST_RESULT: ${{ needs.rust.result }}
           ANDROID_RESULT: ${{ needs.android.result }}
+          ANDROID_RUNTIME_RESULT: ${{ needs.android-runtime.result }}
           IOS_RESULT: ${{ needs.ios.result }}
         run: |
-          for result in "$WORKFLOWS_RESULT" "$RUST_RESULT" "$ANDROID_RESULT" "$IOS_RESULT"; do
+          for result in "$WORKFLOWS_RESULT" "$RUST_RESULT" "$ANDROID_RESULT" "$ANDROID_RUNTIME_RESULT" "$IOS_RESULT"; do
             test "$result" = success
           done

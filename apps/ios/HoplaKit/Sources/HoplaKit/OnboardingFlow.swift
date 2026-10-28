@@ -76,11 +76,25 @@ public final class OnboardingFlow {
 
     /// Fresh install: look for an existing backup ("Welcome back"). iCloud first (iOS default).
     public func detectBackup() {
-        for s in [iCloud, drive].compactMap({ $0 }) where s.available {
-            guard let blob = try? s.download(), let meta = core.backupInfo(blob) else { continue }
-            pendingBlob = blob
+        for store in [iCloud, drive].compactMap({ $0 }) where store.available {
+            guard let blob = try? store.download() else { continue }
+            acceptBackupSearch([(store.method, blob)])
+            if state.step != .welcome { return }
+        }
+    }
+
+    /// Only destination identifiers cross to the app's background provider workers.
+    public var availableBackupMethods: [String] {
+        [iCloud, drive].compactMap { $0 }.filter { $0.available }.map { $0.method }
+    }
+
+    public func acceptBackupSearch(_ candidates: [(method: String, blob: Data)]) {
+        guard state.step == .welcome else { return }
+        for candidate in candidates {
+            guard let meta = core.backupInfo(candidate.blob) else { continue }
+            pendingBlob = candidate.blob
             state.foundBackup = meta
-            state.foundMethod = s.method
+            state.foundMethod = candidate.method
             state.step = .restorePrompt
             return
         }
@@ -89,13 +103,14 @@ public final class OnboardingFlow {
     public func getStarted() { state.step = .profile }
     public func setName(_ n: String) { state.displayName = String(n.prefix(64)) }
 
-    /// Profile → Secure. Identity + phrase are generated here, in the background.
+    /// Profile → Secure. Identity persistence is required before leaving this step.
     public func profileNext() {
-        if core.identity() == nil {
-            do { try repo.saveIdentity(phrase: core.generateRecoveryPhrase(), name: name) } catch {
-                state.error = "identity"
-                return
-            }
+        do {
+            let phrase = core.identity() == nil ? try core.generateRecoveryPhrase() : try core.recoveryPhrase()
+            try repo.saveIdentity(phrase: phrase, name: name)
+        } catch {
+            state.error = "identity"
+            return
         }
         state.error = nil
         state.step = .secure
@@ -115,40 +130,46 @@ public final class OnboardingFlow {
         state.passwordTooShort = c.tooShort
     }
 
-    /// iCloud: CloudKit private DB record; "No password" = key in iCloud Keychain.
-    @discardableResult public func backupToICloud() -> Bool {
-        guard let iCloud, iCloud.available else { return false }
-        return seal(to: iCloud, allowKey: true) { $0.iCloudDone = true }
+    /// Prepare on the repository owner. No state is marked backed up until upload succeeds.
+    public func prepareBackup(_ method: String) throws -> PreparedCloudBackup {
+        let store = method == backupICloud ? iCloud : (method == backupDrive ? drive : nil)
+        guard let store, store.available else { throw CoreError.other("unavailable") }
+        let blob: Data
+        if method == backupICloud && !state.usePassword {
+            guard let keyStore else { throw CoreError.other("keychain") }
+            let key = try keyStore.load() ?? core.generateBackupKey()
+            try keyStore.save(key)
+            blob = try core.createBackup(key: key, deviceHint: deviceHint, nowMs: repo.now())
+        } else {
+            guard state.passwordOk else { throw CoreError.invalid("weak password") }
+            blob = try core.createBackup(password: state.password, deviceHint: deviceHint, nowMs: repo.now())
+        }
+        return PreparedCloudBackup(store: store, blob: blob)
     }
 
-    /// Google Drive appDataFolder; always password-protected.
-    @discardableResult public func backupToDrive() -> Bool {
-        guard let drive, drive.available else { return false }
-        return seal(to: drive, allowKey: false) { $0.driveDone = true }
+    public func completeBackup(_ method: String, succeeded: Bool) {
+        guard succeeded else { state.error = "backup"; return }
+        repo.store.lastCloudBackupMs = repo.now()
+        repo.markBackupMethod(method)
+        if method == backupICloud { state.iCloudDone = true }
+        if method == backupDrive { state.driveDone = true }
+        state.password = ""
+        state.passwordOk = false
+        state.passwordTooShort = false
+        state.error = nil
     }
 
-    private func seal(to s: CloudBackupStore, allowKey: Bool, done: (inout OnboardingState) -> Void) -> Bool {
+    @discardableResult public func backupToICloud() -> Bool { backup(to: backupICloud) }
+    @discardableResult public func backupToDrive() -> Bool { backup(to: backupDrive) }
+
+    private func backup(to method: String) -> Bool {
         do {
-            let blob: Data
-            if allowKey && !state.usePassword {
-                guard let keyStore else { return false }
-                let key = try keyStore.load() ?? core.generateBackupKey()
-                try keyStore.save(key)
-                blob = try core.createBackup(key: key, deviceHint: deviceHint, nowMs: repo.now())
-            } else {
-                guard state.passwordOk else { return false }
-                blob = try core.createBackup(password: state.password, deviceHint: deviceHint, nowMs: repo.now())
-            }
-            try s.upload(blob)
-            repo.store.lastCloudBackupMs = repo.now()
-            repo.markBackupMethod(s.method)
-            done(&state)
-            state.password = ""
-            state.passwordOk = false
-            state.error = nil
+            guard let store = method == backupICloud ? iCloud : drive else { return false }
+            try prepareBackup(method).upload(to: store)
+            completeBackup(method, succeeded: true)
             return true
         } catch {
-            state.error = "backup"
+            completeBackup(method, succeeded: false)
             return false
         }
     }
@@ -156,11 +177,19 @@ public final class OnboardingFlow {
     // MARK: write it down
 
     public func writeItDown() {
-        state.words = ((try? core.recoveryPhrase()) ?? "").split(separator: " ").map(String.init)
+        guard let phrase = try? core.recoveryPhrase(), core.validateRecoveryPhrase(phrase) else {
+            state.error = "identity"
+            return
+        }
+        let words = phrase.split(separator: " ").map(String.init)
+        guard words.count == 24 else { state.error = "identity"; return }
+        state.words = words
+        state.error = nil
         state.step = .writeDown
     }
 
     public func startQuiz() {
+        guard state.words.count == 24 else { state.error = "identity"; return }
         state.quiz = pickPositions().map { QuizField(position: $0) }
         state.step = .quiz
     }
@@ -179,6 +208,7 @@ public final class OnboardingFlow {
     public func setQuizInput(_ i: Int, _ input: String) {
         guard state.quiz.indices.contains(i) else { return }
         let pos = state.quiz[i].position
+        guard state.words.indices.contains(pos) else { return }
         state.quiz[i].input = input
         state.quiz[i].ok = input.trimmingCharacters(in: .whitespaces).lowercased() == state.words[pos].lowercased()
         state.quiz[i].error = false
@@ -240,7 +270,8 @@ public final class OnboardingFlow {
             }
             limiter.onSuccess()
             try repo.restoreFromBackup(r, name: name, method: method)
-            state.restorePassword = ""
+            clearRestoreSecrets()
+            state.restoreLockMs = 0
             state.error = nil
             state.step = .done
             return true
@@ -257,6 +288,7 @@ public final class OnboardingFlow {
     }
 
     public func usePhraseInstead() {
+        state.restorePassword = ""
         state.error = nil
         state.step = .restorePhrase
     }
@@ -274,13 +306,19 @@ public final class OnboardingFlow {
             return false
         }
         repo.markBackupMethod(backupWritten)
-        state.restorePhrase = ""
+        clearRestoreSecrets()
         state.error = nil
         state.step = .done
         return true
     }
 
+    private func clearRestoreSecrets() {
+        state.restorePassword = ""
+        state.restorePhrase = ""
+    }
+
     public func backToWelcome() {
+        clearRestoreSecrets()
         state.error = nil
         state.step = .welcome
     }

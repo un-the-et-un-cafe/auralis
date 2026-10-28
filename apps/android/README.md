@@ -131,6 +131,33 @@ Then check small screens, 200% font scaling, TalkBack, light/dark mode, system B
 scans, failed restore/permission flows, repeated cloud actions and two-device interoperability on
 real Android hardware. Unit/resource checks do not establish device rendering or radio behavior.
 
+### Runtime smoke gate
+
+Build the native libraries first, then run `./gradlew assembleDebugAndroidTest connectedDebugAndroidTest`
+on a **disposable, freshly installed** API 31 or API 35 emulator. `AppSmokeTest` launches the real
+`OmcpApplication` and `RustOmcpCore`: it covers interrupted onboarding, Remind me later, main tabs,
+system Back, denied Nearby/notification permissions, contact import from a real native peer QR,
+offline message queueing, draft retention across activity recreation, foreground backup-deadline
+expiry, and secure-window flags. It does not opt into simulated Drive or clear `FLAG_SECURE`.
+For an intentionally reused test device, clear only this test install before running:
+`adb shell pm clear chat.auralis.app.debug` (**deletes that install's data**).
+
+CI runs the same flow on API 31 at default settings and API 35 at 200% font scaling in dark mode.
+The checks inspect semantic accessibility nodes; screenshots remain blocked. They do not prove
+TalkBack announcements, process-death recovery, camera hardware, Google Drive, or radio delivery.
+
+Android 12+ system backup and device-transfer rules explicitly exclude every app storage domain;
+recovery remains the explicit encrypted backup / phrase flow. File selection enforces the core
+size cap while reading, even when a document provider reports an unknown or incorrect length.
+Drafts survive activity recreation only in memory, never in saved-state Bundles.
+
+**Remaining transport release blocker:** rejected or failed GATT operations now close the crypto
+session rather than skipping/replaying nonce-bearing PDUs. However, the core currently consumes
+the durable outbox when generating PDUs, before a transport acknowledgement. A radio failure can
+therefore leave a generated message or final file batch marked sent without delivery. A coordinated
+core/mobile acknowledgement-and-requeue contract and two-device failure-injection testing are
+required before claiming reliable delivery. Reconnection alone does not resolve this gap.
+
 ## Notifications (v0.1.2)
 - Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Auralis: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.
 - Push: `notify/PushReceiver.kt` defines a content-free `PushPayload` (only the opaque mailbox id; extra keys are rejected) (N3). `StubPushReceiver` stands in for FCM since there's no Firebase project yet, so no `FirebaseMessagingService` is registered.

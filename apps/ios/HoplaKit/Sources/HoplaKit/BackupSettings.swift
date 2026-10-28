@@ -22,6 +22,13 @@ public final class BackupSettings {
 
     /// (Re)upload to a cloud method. password nil = iCloud "No password" key mode.
     public func backUp(_ method: String, password: String?) throws {
+        guard let store = stores[method] else { throw CoreError.other("unavailable") }
+        try prepareBackup(method, password: password).upload(to: store)
+        completeBackup(method)
+    }
+
+    /// Repository/core work stays on its owner; only this sealed upload may run off-thread.
+    public func prepareBackup(_ method: String, password: String?) throws -> PreparedCloudBackup {
         guard let s = stores[method], s.available else { throw CoreError.other("unavailable") }
         let core = repo.core
         let blob: Data
@@ -34,7 +41,10 @@ public final class BackupSettings {
             try keyStore.save(key)
             blob = try core.createBackup(key: key, deviceHint: deviceHint, nowMs: repo.now())
         }
-        try s.upload(blob)
+        return PreparedCloudBackup(store: s, blob: blob)
+    }
+
+    public func completeBackup(_ method: String) {
         repo.store.lastCloudBackupMs = repo.now()
         repo.markBackupMethod(method)
     }
@@ -46,10 +56,20 @@ public final class BackupSettings {
 
     /// Deletes the remote record (and the iCloud Keychain key) and removes the method.
     public func deleteCloudBackup(_ method: String) throws {
-        guard let s = stores[method] else { return }
-        try s.delete()
-        if method == backupICloud { try keyStore?.delete() }
+        try prepareDeletion(method)()
+        try completeDeletion(method)
+    }
+
+    public func prepareDeletion(_ method: String) throws -> () throws -> Void {
+        guard let store = stores[method] else { throw CoreError.other("unavailable") }
+        return { try store.delete() }
+    }
+
+    public func completeDeletion(_ method: String) throws {
+        // The remote record is already gone. A Keychain cleanup failure must not leave a
+        // nonexistent backup counted as protection (or keep the 24-hour gate open).
         repo.markBackupMethod(method, add: false)
+        if method == backupICloud { try keyStore?.delete() }
     }
 
     /// Only call after LocalAuthentication succeeded.

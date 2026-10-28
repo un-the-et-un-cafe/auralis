@@ -154,4 +154,39 @@ class OnboardingViewModelTest {
         assertTrue(vm2.restoreFromPhrase())
         assertEquals(repo.core.identity()!!.peerIdHex, repo2.core.identity()!!.peerIdHex)
     }
+    @Test
+    fun `expired remind later cannot reopen the done screen or extend the deadline`() {
+        val vm = vm()
+        vm.getStarted(); vm.profileNext(); vm.remindLater(); vm.finish()
+        val deadline = store.backupRemindDeadlineMs
+        now = deadline
+        val required = vm()
+        required.getStarted(); required.profileNext()
+        assertFalse(required.canRemindLater)
+        required.remindLater()
+        assertEquals(OnboardingStep.Secure, required.state.value.step)
+        assertEquals(deadline, store.backupRemindDeadlineMs)
+        assertEquals(BackupGate.Required, repo.backupGate())
+    }
+
+    @Test
+    fun `required backup initialization preserves phrase and quiz across recreation`() {
+        val vm = vm()
+        vm.getStarted(); vm.profileNext(); vm.remindLater(); vm.finish()
+        now = store.backupRemindDeadlineMs
+        vm.resumeRequiredBackup()
+        assertEquals(OnboardingStep.Secure, vm.state.value.step)
+        vm.writeItDown()
+        val words = vm.state.value.words
+        vm.resumeRequiredBackup()
+        assertEquals(OnboardingStep.WriteDown, vm.state.value.step)
+        assertEquals(words, vm.state.value.words)
+        vm.startQuiz()
+        vm.setQuizInput(0, words[vm.state.value.quiz[0].position])
+        val quiz = vm.state.value.quiz
+        vm.resumeRequiredBackup()
+        assertEquals(OnboardingStep.Quiz, vm.state.value.step)
+        assertEquals(quiz, vm.state.value.quiz)
+    }
+
 }

@@ -1,6 +1,7 @@
 # Auralis build and release operations
 
-Auralis retains the upstream OMCP core, wire identifiers, native bridges and tests.
+Auralis retains the upstream OMCP formats, wire identifiers, native bridges and tests;
+explicit compatible core hardening is tracked by the source review manifest.
 Its app presentation is maintained separately. This pipeline creates **review
 artifacts**, not a production-readiness claim or a deployment service.
 
@@ -8,8 +9,8 @@ artifacts**, not a production-readiness claim or a deployment service.
 
 | Entry point | Gates and outputs |
 | --- | --- |
-| Pull request, push to `main`, or manual `CI` | Workflow lint; Rust formatting, Clippy and workspace tests; Android native bridge build, debug assembly, lint and JVM tests; SwiftPM tests, EN/FR string parity, native bridge build and iOS simulator build/tests. |
-| Manual **Package unsigned release candidates** | Explicit unsigned-artifact confirmation, then the **same full CI workflow** for the dispatched revision. Only after all gates pass: Android release tests/lint and unsigned APK/AAB; unsigned iOS device archive and OMCP FFI SDK. |
+| Pull request, push to `main`, or manual `CI` | Workflow lint; Rust formatting, Clippy and workspace tests; Android native bridge build, debug assembly, lint and JVM tests; real-app instrumentation on API 31 and 35 emulators; SwiftPM tests, EN/FR string parity, native bridge build and iOS bridge/UI simulator tests. Debug APK and Apple silicon simulator app are testing outputs. |
+| Manual **Package unsigned release candidates** | Explicit unsigned-artifact confirmation and exact reviewed SHA check, then the **same full CI workflow** for the dispatched revision. Only after all gates pass: Android release tests/lint and unsigned APK/AAB; unsigned iOS device archive and OMCP FFI SDK. |
 
 `required checks` fails if any constituent CI gate failed, was cancelled or was
 skipped. Configure it as a required check in the fork's branch protection after
@@ -17,9 +18,28 @@ its first successful run. Workflow files alone do **not** enable branch protecti
 If a merge queue is introduced, add and validate a `merge_group` trigger first.
 
 CI preserves the upstream Rust simulations, Android unit/bridge tests, HoplaKit
-SwiftPM tests and Xcode simulator bridge tests. Android device instrumentation,
-physical Bluetooth interoperability, real cloud backup and visual accessibility
-checks are **not** covered by these jobs.
+SwiftPM tests and Xcode simulator bridge tests, and adds actual native UI smoke
+tests. Android runs fresh AOSP x86_64 API 31 and API 35 images; API 35 uses dark
+mode and 200% font scale on its disposable emulator. iOS creates a new iPhone 16
+simulator on iOS 18.5 for the full `OpenMeshChat` test scheme. No real account,
+OAuth setup, sample conversations, simulated cloud provider or privacy bypass is
+injected. Tests use generated synthetic identities and test data only.
+
+These tests exercise selected onboarding, cancellation, navigation, persistence
+and permission/privacy behavior; they are not exhaustive accessibility or visual
+acceptance. Physical Bluetooth interoperability and real cloud backup are **not**
+covered. Merely adding the jobs is not a passing runtime result: retain the
+successful run and native reports for the exact reviewed SHA.
+
+The required Android runtime matrix first checks `/dev/kvm` is a non-symlink
+character device with existing read/write access for the runner, then checks
+`emulator -accel-check` and requires `-accel on`. Missing access fails the gate.
+There is no `chmod`, device ownership/ACL change, permissive SELinux setting, or
+software-CPU fallback. Diagnose a failing runner before proposing an explicitly
+authorized, narrowly scoped ephemeral runner configuration change. Never apply
+hosted-runner setup instructions to a user's computer. See
+[GitHub's KVM availability announcement](https://github.blog/changelog/2024-04-02-github-actions-hardware-accelerated-android-virtualization-now-available/)
+and [Android's acceleration reference](https://developer.android.com/studio/run/emulator-acceleration).
 
 ### Security and maintenance
 
@@ -44,9 +64,25 @@ checks are **not** covered by these jobs.
   pinned SHA-256 checksum, rather than using the runner's mutable `latest`
   SDK manager. This setup accepts the Android SDK licenses during the build.
   Rust uses the repository's `rust-toolchain.toml`; Cargo CI uses `--locked`.
+- Android runtime tooling is pinned to official emulator **37.2.12**, build
+  `16428233`, AOSP API 31 revision **5** and API 35 revision **2** archives, each
+  with SHA-256 verification. The downloaded bytes were checked against Google's
+  repository metadata on 2026-10-28 before recording these SHA-256 pins. Updating
+  any pin requires reviewing the official release and rerunning both runtime
+  jobs; do not replace them with `latest` to make a failing gate pass.
 - iOS uses the `macos-15` Apple silicon runner because the upstream Rust script
-  builds an arm64 simulator slice. It fails early on another architecture.
+  builds an arm64 simulator slice. It selects installed **Xcode 16.4** explicitly
+  using job-local `DEVELOPER_DIR` and fails if it is absent. **XcodeGen 2.46.0**
+  is downloaded from its [official release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.46.0)
+  and verified against its published SHA-256, not installed from mutable Homebrew.
   See [GitHub's runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+- The protocol source guard retains immutable upstream commit `233210d5` and
+  accepts only exact per-file hashes in `scripts/protocol-review-manifest.json`,
+  with original hash, rationale and regression evidence. It rejects unlisted
+  modifications, additions, removals, duplicate entries and symlinks. A manifest
+  entry records intended acceptance, not an independent security audit; reviewers
+  must inspect code and evidence before approving it. See the
+  [protocol audit](AURALIS_PROTOCOL_AUDIT.md).
 
 Do not add signing credentials to ordinary PR jobs. Future credential-bearing
 jobs should use protected environments, reviewers, least-privilege credentials,
@@ -59,8 +95,22 @@ and only trusted reviewed revisions. See
    and confirm its source is intended for packaging. The workflow does not bump
    versions, create tags, or choose a release channel.
 2. In the fork's **Actions**, select **Package unsigned release candidates** →
-   **Run workflow**, select the reviewed ref, and check `confirm_unsigned`.
-   The workflow must exist on the default branch to be available for dispatch.
+   **Run workflow**, select the reviewed ref, paste its full 40-character commit
+   into `expected_sha`, and check `confirm_unsigned`. If the ref moved, the run
+   fails rather than silently packaging different code. The workflow must exist
+   on the default branch to be available for dispatch.
+
+   Equivalent command, **only after packaging authorization**, with placeholders
+   replaced by the reviewed ref and SHA:
+
+   ```sh
+   gh workflow run release-unsigned.yml --repo un-the-et-un-cafe/auralis \
+     --ref <reviewed-branch-or-tag> \
+     -f expected_sha=<full-reviewed-commit-sha> -f confirm_unsigned=true
+   ```
+
+   This queues real hosted work; it is not a dry run. No workflow is dispatched
+   automatically by these instructions.
 3. Wait for **all** quality and packaging jobs to pass. A failed/missing job is
    not a release candidate; inspect the uploaded test reports and logs.
 4. Download the SHA-labelled artifacts from that run:
@@ -69,21 +119,60 @@ and only trusted reviewed revisions. See
    - `auralis-ios-unsigned-<sha>`: `Auralis-unsigned.xcarchive.tar.gz`,
      `OmcpFFI-sdk.tar.gz` (XCFramework plus Swift bindings), dependency records,
      `BUILD_INFO.txt`, and `SHA256SUMS`. Tar archives preserve bundle symlinks.
+   - The nested quality workflow also supplies `auralis-debug-apk-<sha>` and
+     `auralis-ios-simulator-app-<sha>` for installation testing, as described below.
 5. Check the commit and run URL in `BUILD_INFO.txt`. From each extracted artifact
    directory, verify its files with `sha256sum -c SHA256SUMS` (Linux) or
    `shasum -a 256 -c SHA256SUMS` (macOS).
 
-Unsigned review artifacts expire after **14 days**. Debug APKs expire after
-**7 days**; diagnostic reports after **14 days**. Download reviewed evidence
-before expiry. Artifacts and logs may be readable by people with repository
+Unsigned review artifacts expire after **14 days**. Debug APKs and simulator
+apps expire after **7 days**; diagnostic reports after **14 days**. Download
+reviewed evidence before expiry. Artifacts and logs may be readable by people with repository
 access; do not put private credentials or user data into them.
 
 Checksums detect corruption, not publisher identity. These manifests are not
-signed provenance or a complete cross-language SBOM. Hosted images, JDK patches,
-Android platform-tools, Homebrew/XcodeGen and Xcode can change independently;
+signed provenance or a complete cross-language SBOM. Hosted OS images, JDK patches
+and Android platform-tools can change independently;
 recorded tool versions and the Rust lockfile do **not** make builds bit-for-bit
 reproducible. Gradle dependency verification/locking and a complete SBOM remain
 release-hardening work.
+
+## Install testing artifacts, not unsigned device packages
+
+From the selected completed run's **Artifacts** section, download the SHA-named
+package. Confirm the overall run is green, not just one packaging job. With an
+already authorized GitHub CLI login, downloads are read-only:
+
+```sh
+gh run view <run-id> --repo un-the-et-un-cafe/auralis
+gh run download <run-id> --repo un-the-et-un-cafe/auralis \
+  --name auralis-debug-apk-<sha> --dir android-test-build
+gh run download <run-id> --repo un-the-et-un-cafe/auralis \
+  --name auralis-ios-simulator-app-<sha> --dir ios-simulator-build
+```
+
+Verify `BUILD_INFO.txt` and `SHA256SUMS` before installing. Use synthetic test data:
+these are development builds, not approved production binaries.
+
+- **Android:** the CI debug APK is signed with the runner's generated debug key
+  and can be installed on an explicitly selected Android 12+ test device/emulator
+  using `adb -s <serial> install -r app-debug.apk`. Its ID is
+  `chat.auralis.app.debug`, separate from release and Hopla. The debug key can
+  differ between runs. An update-signature mismatch is not permission to silently
+  uninstall: uninstalling destroys local identity and history. Back up and obtain
+  consent before replacing existing test data. The release `*-unsigned.apk` and
+  AAB are **not** this installable debug artifact.
+- **iOS simulator:** on Apple silicon macOS with Xcode and an iOS 18.5 simulator,
+  extract `Auralis-simulator.app.tar.gz`, choose/boot a disposable simulator, then
+  run `xcrun simctl install <udid> OpenMeshChat.app` and
+  `xcrun simctl launch <udid> chat.auralis.app`. Keep the app bundle intact; the tar
+  preserves its contents and symlinks. This build is arm64 simulator code, not an
+  iPhone build or TestFlight IPA. It provides no physical BLE evidence.
+
+CI retains Android HTML/XML reports and emulator/host/logcat diagnostics, and an
+iOS `.xcresult` containing bridge/UI results. Manual iOS archive builds also
+retain a separate archive result bundle. Inspect native test counts and failure
+attachments rather than treating successful compilation as executed tests.
 
 ## Signing and service configuration: not wired into these workflows
 
@@ -105,8 +194,9 @@ not secret names to add expecting this workflow to consume them.
   application ID and signing certificate. The build supports
   `GOOGLE_OAUTH_CLIENT_ID` as a Gradle property/environment variable, but these
   workflows do not inject it. Native OAuth client IDs are identifiers, not a
-  client secret. Debug builds without one may use simulated Drive behavior;
-  that is not evidence of live backup working.
+  client secret. Without one, normal builds report Drive backup unavailable.
+  Explicit debug-only simulated backup is never enabled by these workflows and
+  is not evidence of live backup working.
 
 ### iOS
 

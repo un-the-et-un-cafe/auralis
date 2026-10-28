@@ -9,6 +9,7 @@ import UIKit
 final class AppModel: ObservableObject {
     @Published private(set) var revision = 0
     @Published var onboarded: Bool
+    @Published private(set) var backupGate: BackupGate
     let repo: MeshRepository
     let iCloud = ICloudBackupStore()
     let drive = GoogleDrive.makeStore()
@@ -16,9 +17,12 @@ final class AppModel: ObservableObject {
     private(set) var ble: BleMeshTransport?
     private var burnTimer: Timer?
 
-    init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore()) {
-        repo = MeshRepository(core: core, store: store, dbPath: Self.localStorePath())
-        onboarded = store.onboarded && store.recoveryPhrase != nil
+    init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore(),
+         persistentStore: Bool = true,
+         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
+        repo = MeshRepository(core: core, store: store, dbPath: persistentStore ? Self.localStorePath() : nil, clock: clock)
+        onboarded = false
+        backupGate = repo.backupGate()
         repo.notifier = LocalNotifier()
         repo.fileSink = ReceivedFiles()
         // Chat backup (CB1–CB5) in iCloud: private DB, zone HoplaBackupV1 (REQUIREMENTS v0.1.4a).
@@ -29,15 +33,19 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.revision &+= 1
-                self.onboarded = self.repo.store.onboarded && self.repo.store.recoveryPhrase != nil
+                self.onboarded = self.repo.store.onboarded && self.repo.core.identity() != nil
+                self.refreshTimeSensitiveState()
             }
         }
-        repo.restore()
+        onboarded = repo.restore() && store.onboarded
         // Keep sent media: age limit on start (the size limit applies on every insert).
         _ = repo.core.evictKeptMedia(nowMs: Int64(Date().timeIntervalSince1970 * 1000))
         // Burn timers + unread expiry, decided in Rust; ≤ 250 ms so B1 (≤ 1 s) holds.
         burnTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.repo.tickBurn() }
+            Task { @MainActor in
+                self?.repo.tickBurn()
+                self?.refreshTimeSensitiveState()
+            }
         }
         if onboarded { startMesh() }
     }
@@ -73,6 +81,12 @@ final class AppModel: ObservableObject {
         repo.kick = t
         ble = t
         t.start()
+    }
+
+    /// Expiry must be observed even when no message/contact state changes while idle.
+    func refreshTimeSensitiveState() {
+        let next = repo.backupGate()
+        if backupGate != next { backupGate = next }
     }
 
     func touch() { revision &+= 1 }

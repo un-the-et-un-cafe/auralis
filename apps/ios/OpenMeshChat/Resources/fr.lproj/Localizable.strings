@@ -200,7 +200,7 @@
 "backup_now_change" = "Resauvegarder / changer le mot de passe";
 "backup_delete" = "Supprimer la sauvegarde cloud";
 "backup_delete_confirm" = "Supprimer cette sauvegarde cloud ? Il vous faudra une autre méthode pour restaurer.";
-"backup_failed" = "Échec de la sauvegarde. Nouvel essai une fois en ligne.";
+"backup_failed" = "Échec de la sauvegarde. Vérifiez la connexion et réessayez.";
 "backup_view_phrase" = "Voir la phrase de récupération";
 "backup_view_phrase_reason" = "Afficher votre phrase de récupération";
 "method_icloud" = "iCloud";

@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "upstream_commit": "233210d5b13f443798428d126266c520999ad387",
+  "changes": [
+    {
+      "path": "crates/omcp-core/src/ble/fragment.rs",
+      "upstream_sha256": "14bfbe17f220c1d5adb1ccd31beb9eb91202ff29e041a01133f6bfd81bda998a",
+      "accepted_sha256": "f81c24cbe4166545d405a84d5c6a9df058a36a6ec97bed44183aa7298069bafb",
+      "rationale": "Bound authenticated reassembly slots, bytes, concurrent IDs and outbound dimensions without changing fragment or envelope encoding.",
+      "evidence": [
+        "full_wire_count_is_supported_but_aggregate_slots_are_bounded_and_expire",
+        "full_v1_envelope_limit_round_trips_without_reducing_aad_allowance",
+        "sender_rejects_dimensions_before_consuming_a_nonce",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-core/src/files/chunks.rs",
+      "upstream_sha256": "67bb8f29fe97b20862ab93cf4975b902a2dc4ae90c9b817f39f76ce884108405",
+      "accepted_sha256": "072693b9e51216a67e82a5619ec7d286b4eea0e394f7df9370405bc559aaed04",
+      "rationale": "Replace count-sized receiver slots with bounded authenticated incremental buffers and bitmap; preserve chunk encryption/AAD and whole-file hash.",
+      "evidence": [
+        "maximum_file_and_one_byte_chunks_have_bounded_layout_without_allocating",
+        "incremental_one_byte_chunks_allow_reordering_and_idempotent_reconnect",
+        "incremental_receiver_still_checks_whole_file_hash",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-core/src/files/meta.rs",
+      "upstream_sha256": "d9f167fbb3879833b4575ee2ddecf5e3e6ad4d32b8c2425f90254bdca249be05",
+      "accepted_sha256": "c94b526a2a3275227470b8ef77bb541e9aeae5cd2e167a7b1dc73eed3eb07afb",
+      "rationale": "Reject impossible wrapped-key counts and oversized metadata before count-directed allocation; wire fields unchanged.",
+      "evidence": [
+        "forged_wrapped_key_count_fails_without_count_sized_allocation",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-core/src/files/mod.rs",
+      "upstream_sha256": "8715d7f401b2627c53721e155b6058c7aff7ffa96cb0a698c85b1790ccb19bed",
+      "accepted_sha256": "14cc9094cd41db6b3ce220fdc805b603ba977f3629e156c8da338b87cb91c827",
+      "rationale": "Export the reviewed incremental FileReassembler implementation; no protocol constants or encoding changes.",
+      "evidence": [
+        "cargo test --locked --workspace (220 tests passed)",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-ffi/src/files.rs",
+      "upstream_sha256": "fc25e1317e98b091294fbff4adb327e9004f4e63d36ab9cd6110d955e91be9ed",
+      "accepted_sha256": "f6ce74634e067daccaa1732f8f151f944294bb5cd7ee2a95b3905f242f83ba29",
+      "rationale": "Apply per-peer/node receiver admission and authenticated duplicate/collision handling using incremental reassembly.",
+      "evidence": [
+        "node_wide_file_budget_boundaries_do_not_require_large_allocations",
+        "reconnect_offer_is_idempotent_but_conflicting_or_cross_peer_ids_cannot_overwrite",
+        "invalid_layout_and_oversized_chunk_are_rejected_before_chunk_allocation",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-ffi/src/lib.rs",
+      "upstream_sha256": "007c6835f5da2c339446b50d01ba5451f5b111f25418d2289bcb8cb24a192c24",
+      "accepted_sha256": "a4daa68d26be08cfeeb4f36cd280844fa06cb482a30de41f0f07b9258b039ea6",
+      "rationale": "Bound active links and sequential handshake buffers, release failed sessions, and protect durable completed file IDs while preserving legitimate refetch paths.",
+      "evidence": [
+        "handshake_rejects_malformed_order_counts_and_oversized_chunks_and_releases_buffers",
+        "active_links_are_bounded_and_drop_shutdown_and_input_errors_release_slots",
+        "cargo test --locked --workspace (220 tests passed; golden-wire tests unchanged)",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-ffi/src/persist.rs",
+      "upstream_sha256": "bc523bd154ca7213f28764cef17e774d45b63b44552c7922299ba83095ff6612",
+      "accepted_sha256": "9d31f01b763cbd316f33e0165f587b6bd7e34bb253c1a6a132e092d2b8daf93e",
+      "rationale": "Validate durable peer/direction/file ownership; prevent completed replay from changing stored hash/path/state; allow hash-bound own-sent restored placeholders to refill.",
+      "evidence": [
+        "file_events_and_offers_cannot_overwrite_durable_transfer_ownership",
+        "cargo test -p omcp-ffi --locked (50 tests passed, including completed replay and own-sent restore/refetch)",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    },
+    {
+      "path": "crates/omcp-ffi/src/tests.rs",
+      "upstream_sha256": "3fc9835a54f7042f5d474bb539d2481d4d0ee2a2bb80bfbccb29daf5c2190880",
+      "accepted_sha256": "03a3d5f3db0171456514b00f2c3a82da04322a24d2f1bd4dab11da8c07ae765f",
+      "rationale": "Add adversarial bounds, admission cleanup, cancellation, durable ownership, replay and restore/refetch regressions; baseline tests retained.",
+      "evidence": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --locked --workspace --all-targets -- -D warnings",
+        "cargo test --locked --workspace (220 tests passed)",
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+      ]
+    }
+  ]
+}

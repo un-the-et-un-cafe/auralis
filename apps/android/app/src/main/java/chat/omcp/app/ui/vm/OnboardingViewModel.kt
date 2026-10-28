@@ -157,6 +157,11 @@ class OnboardingViewModel(
         _state.update { s.copy(step = OnboardingStep.Secure, error = null) }
     }
 
+    /** Enter an expired backup gate without resetting a retained phrase/quiz on rotation. */
+    fun resumeRequiredBackup() {
+        if (_state.value.step in setOf(OnboardingStep.Welcome, OnboardingStep.Profile, OnboardingStep.Done)) profileNext()
+    }
+
     // ---- Google Drive ----
     fun setDrivePassword(pw: String) {
         val c = core.checkBackupPassword(pw)
@@ -218,7 +223,11 @@ class OnboardingViewModel(
     }
 
     /** "Remind me later": 24 h of use with a persistent banner (O6). */
+    val canRemindLater: Boolean
+        get() = repo.appStore.backupRemindDeadlineMs == 0L || clock() < repo.appStore.backupRemindDeadlineMs
+
     fun remindLater() {
+        if (!canRemindLater) return
         repo.remindBackupLater(clock())
         _state.update { it.copy(step = OnboardingStep.Done) }
     }

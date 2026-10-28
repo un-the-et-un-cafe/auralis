@@ -3,13 +3,26 @@ description: Shared unsigned iOS build environment on an Apple silicon macOS run
 runs:
   using: composite
   steps:
-    - name: Install Rust targets and XcodeGen
+    - name: Select the reviewed Xcode version
+      shell: bash
+      run: |
+        DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer
+        test -d "$DEVELOPER_DIR"
+        echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+    - name: Install Rust targets and pinned XcodeGen
       shell: bash
       run: |
         test "$(uname -m)" = arm64
         rustup show active-toolchain
         rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-        command -v xcodegen || brew install xcodegen
+        TOOLS="$RUNNER_TEMP/auralis-xcodegen"
+        mkdir -p "$TOOLS"
+        curl --fail --location --retry 3 --max-time 180 \
+          https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip \
+          -o "$TOOLS/xcodegen.zip"
+        echo "4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  $TOOLS/xcodegen.zip" | shasum -a 256 --check
+        unzip -q "$TOOLS/xcodegen.zip" -d "$TOOLS"
+        echo "$TOOLS/xcodegen/bin" >> "$GITHUB_PATH"
         rustc --version --verbose
         xcodebuild -version
-        xcodegen --version
+        "$TOOLS/xcodegen/bin/xcodegen" --version
