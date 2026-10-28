@@ -9,6 +9,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
@@ -52,17 +56,17 @@ fun RestoredPill(compact: Boolean = false, onClick: (() -> Unit)? = null) {
             .clip(RoundedCornerShape(50))
             .border(1.dp, c.line, RoundedCornerShape(50))
             .background(c.surface2)
-            .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .then(if (onClick != null) Modifier.heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = if (compact) 5.dp else 8.dp, vertical = 2.dp)
             .semantics { contentDescription = label },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(if (compact) 9.dp else 12.dp), tint = c.ink2)
-        Text(label, fontSize = if (compact) 10.sp else 12.sp, color = c.ink2, modifier = Modifier.padding(start = 3.dp))
+        Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(if (compact) 12.dp else 16.dp), tint = c.ink2)
+        Text(label, fontSize = if (compact) 11.sp else 12.sp, color = c.ink2, modifier = Modifier.padding(start = 3.dp))
     }
 }
 
-/** Centred neutral in-chat notice: "{name} restored Hopla on a new device · {date}" (RS1, §5.95/§5.98). */
+/** Centred neutral in-chat notice: "{name} restored Auralis on a new device · {date}" (RS1, §5.95/§5.98). */
 @Composable
 fun RestoreNotice(name: String, atMs: Long, onClick: () -> Unit) {
     val c = LocalOmcpColors.current
@@ -71,10 +75,11 @@ fun RestoreNotice(name: String, atMs: Long, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Column(
             Modifier
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(22.dp))
                 .background(c.surface2)
                 .clickable(role = Role.Button, onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .heightIn(min = 64.dp)
+                .padding(horizontal = 18.dp, vertical = 14.dp)
                 .semantics { contentDescription = "$text. $link" },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -92,7 +97,7 @@ fun RestoreSheet(name: String, atMs: Long, onVerifyQr: () -> Unit, onBlock: (() 
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.restored_sheet_title, name)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(stringResource(R.string.restored_sheet_body, name, restoreDate(atMs)))
                 Text(stringResource(R.string.restored_sheet_safety, restoreDate(atMs)), color = c.ink2)
                 Text(stringResource(R.string.restored_sheet_old), color = c.ink2)
@@ -121,16 +126,17 @@ fun MissingMediaBubble(mine: Boolean, f: FileAttachment, peerName: String, onReq
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
         Column(
             Modifier
-                .fillMaxWidth(0.8f)
-                .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, c.line, RoundedCornerShape(14.dp))
+                .fillMaxWidth(0.9f)
+                .widthIn(max = 560.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, c.line, RoundedCornerShape(24.dp))
                 .background(c.surface2)
                 .then(if (f.state == FileAttachment.State.Missing) Modifier.clickable(role = Role.Button, onClick = onRequest) else Modifier)
-                .padding(12.dp)
+                .padding(18.dp)
                 .semantics { contentDescription = "${f.name}, $size, $tag. $status" },
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(tag, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = c.ink2)
+            Text(tag, style = MaterialTheme.typography.labelMedium, color = c.ink2)
             Text(f.name, style = MaterialTheme.typography.titleSmall)
             Text("${f.mime.substringBefore('/')} · $size", style = MaterialTheme.typography.labelSmall, color = c.ink3)
             Text(status, style = MaterialTheme.typography.bodySmall, color = c.ink2)
@@ -154,7 +160,7 @@ fun ResendDialog(peerName: String, fileName: String, onSend: (String?) -> Unit, 
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.media_resend_title, peerName)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(stringResource(R.string.media_resend_body, peerName))
                 Text("“$fileName”", color = c.ink2)
                 OutlinedTextField(value = text, onValueChange = { if (it.toByteArray().size <= 280) text = it }, label = { Text(stringResource(R.string.media_resend_label)) })

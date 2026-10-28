@@ -2,6 +2,17 @@ import XCTest
 @testable import HoplaKit
 
 final class NotificationTests: XCTestCase {
+    /// The local brand is independent of the fixed legacy OMCP APNs validation contract.
+    func testAuralisPresentationPreservesLegacyPushContract() {
+        XCTAssertEqual(NotificationPolicy.appName, "Auralis")
+        XCTAssertEqual(PushPayload.fallbackTitle, "Hopla")
+        let legacy: [AnyHashable: Any] = [
+            "mb": "legacy-omcp-mailbox",
+            "aps": ["alert": ["title": "Hopla", "body": "New message"], "mutable-content": 1] as [String: Any],
+        ]
+        XCTAssertEqual(PushPayload.from(userInfo: legacy)?.mailboxId, "legacy-omcp-mailbox")
+    }
+
     /// N1: default shows sender + preview.
     func testN1_defaultSenderAndPreview() throws {
         let (r, _) = makeRepo()
@@ -21,7 +32,7 @@ final class NotificationTests: XCTestCase {
         s.privateNotifications = true
         s.hideOnLockScreen = true
         let p = NotificationPolicy.content(s, chatId: "c1", sender: "Bob", text: "secret", genericBody: "New message")
-        XCTAssertEqual(p.title, "Hopla")
+        XCTAssertEqual(p.title, "Auralis")
         XCTAssertEqual(p.body, "New message")
         XCTAssertFalse(p.showAvatar)
         XCTAssertEqual(p.threadId, "hopla")
@@ -43,7 +54,7 @@ final class NotificationTests: XCTestCase {
         let s = InMemoryAppStore()
         s.privateNotifications = true
         let c = NotificationPolicy.callContent(s, chatId: "c", caller: "Bob", genericCall: "Incoming call")
-        XCTAssertEqual(c.title, "Hopla"); XCTAssertEqual(c.body, "Incoming call")
+        XCTAssertEqual(c.title, "Auralis"); XCTAssertEqual(c.body, "Incoming call")
         s.privateNotifications = false
         XCTAssertEqual(NotificationPolicy.callContent(s, chatId: "c", caller: "Bob", genericCall: "Incoming call").title, "Bob")
     }

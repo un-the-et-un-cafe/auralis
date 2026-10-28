@@ -1,7 +1,6 @@
 # Rust
 /target/
 **/target/
-Cargo.lock
 
 # OS / editor
 .DS_Store
@@ -38,3 +37,7 @@ apps/ios/*.xcodeproj/
 
 # Google OAuth client config (never commit)
 apps/ios/Config/Secrets.xcconfig
+
+# Python verification caches
+__pycache__/
+*.pyc

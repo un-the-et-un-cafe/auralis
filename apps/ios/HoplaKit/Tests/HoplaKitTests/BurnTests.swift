@@ -41,7 +41,7 @@ final class BurnTests: XCTestCase {
         let (r, _, c, n) = try setup()
         r.onReceived(IncomingText(contactId: c.id, text: "", createdMs: 1, envelopeId: "m2", burn: .onOpen()))
         r.onReceived(IncomingText(contactId: c.id, text: "searchable", createdMs: 2, envelopeId: "m3"))
-        XCTAssertEqual(n.posted[0].title, "Hopla"); XCTAssertEqual(n.posted[0].body, "New message")
+        XCTAssertEqual(n.posted[0].title, "Auralis"); XCTAssertEqual(n.posted[0].body, "New message")
         XCTAssertEqual(r.search("search").map(\.id), ["m3"])
         try r.send(c.id, text: "hidden burn", burnOnce: .onOpen())
         XCTAssertTrue(r.search("hidden").isEmpty)

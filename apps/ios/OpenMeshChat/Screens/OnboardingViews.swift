@@ -36,20 +36,57 @@ final class OnboardingVM: ObservableObject {
     }
 }
 
-/// Plain layouts on purpose: the v0.1.2 onboarding design is not approved yet.
+/// Auralis presentation over the unchanged onboarding state machine.
 /// Welcome → Profile → Secure your account → Done (O1: 4 screens).
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.omcpColors) private var c
     @StateObject private var vm = OnboardingVM()
 
     var body: some View {
         NavigationStack {
-            Form { content }
-                .disabled(vm.busy)
-                .overlay { if vm.busy { ProgressView() } }
-                .navigationTitle(title)
+            Group {
+                if vm.s.step == .welcome {
+                    welcome
+                } else {
+                    AuralisSettingsPage {
+                        onboardingHeading
+                        content
+                    }
+                        .auralisScreen()
+                        .navigationTitle(title)
+                }
+            }
+            .disabled(vm.busy)
+            .overlay {
+                if vm.busy {
+                    ProgressView().padding(24)
+                        .background(c.surface, in: RoundedRectangle(cornerRadius: 20))
+                }
+            }
         }
         .onAppear { vm.attach(model) }
+    }
+
+    @ViewBuilder private var onboardingHeading: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AuralisWordmark()
+            if let step = stepNumber {
+                Text(L("auralis_onboarding_step", step, 4)).font(.caption.weight(.semibold)).foregroundStyle(c.brand)
+                ProgressView(value: Double(step), total: 4).tint(c.brand)
+            }
+            Text(title).font(.largeTitle.weight(.bold)).tracking(-1)
+        }
+    }
+
+    private var stepNumber: Int? {
+        switch vm.s.step {
+        case .welcome: return 1
+        case .profile: return 2
+        case .secure, .writeDown, .quiz: return 3
+        case .done: return 4
+        case .restorePrompt, .restorePhrase: return nil
+        }
     }
 
     private var title: String {
@@ -64,7 +101,7 @@ struct OnboardingView: View {
 
     @ViewBuilder private var content: some View {
         switch vm.s.step {
-        case .welcome: welcome
+        case .welcome: EmptyView()
         case .profile: profile
         case .secure: secure
         case .writeDown: writeDown
@@ -74,31 +111,66 @@ struct OnboardingView: View {
         case .restorePhrase: restorePhrase
         }
         if let e = vm.s.error {
-            Section { Text(L("ob_error_" + e)).foregroundStyle(.red) }
+            AuralisSettingsSection { Text(L("ob_error_" + e)).foregroundStyle(.red) }
         }
     }
 
     private var welcome: some View {
-        Section {
-            Text(L("ob_welcome_body"))
-            Button(L("ob_get_started")) { vm.now { $0.getStarted() } }.bold()
-            Button(L("ob_restore_with_phrase")) { vm.now { $0.usePhraseInstead() } }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                AuralisWordmark()
+                AuralisMark().frame(width: 116, height: 116)
+                    .padding(.top, 24)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(L("auralis_welcome_title"))
+                        .font(.largeTitle.weight(.bold)).tracking(-1.2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(L("ob_welcome_body"))
+                        .font(.body).foregroundStyle(c.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                VStack(alignment: .leading, spacing: 18) {
+                    welcomeBenefit("point.3.connected.trianglepath.dotted", "auralis_benefit_mesh")
+                    welcomeBenefit("lock.shield", "auralis_benefit_private")
+                    welcomeBenefit("person.crop.circle.badge.checkmark", "auralis_benefit_identity")
+                }
+                .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                .background(c.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                VStack(spacing: 12) {
+                    Button(L("ob_get_started")) { vm.now { $0.getStarted() } }
+                        .buttonStyle(AuralisPrimaryButtonStyle())
+                    Button(L("ob_restore_with_phrase")) { vm.now { $0.usePhraseInstead() } }
+                        .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
+                }
+                if let e = vm.s.error { Text(L("ob_error_" + e)).foregroundStyle(c.danger) }
+            }
+            .padding(28)
+        }
+        .auralisScreen()
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private func welcomeBenefit(_ icon: String, _ key: String) -> some View {
+        Label {
+            Text(L(key)).font(.subheadline).foregroundStyle(c.ink)
+        } icon: {
+            Image(systemName: icon).foregroundStyle(c.brand).frame(width: 24)
         }
     }
 
     private var profile: some View {
-        Section(footer: Text(L("ob_profile_footer"))) {
+        AuralisSettingsSection(footer: L("ob_profile_footer")) {
             TextField(L("ob_display_name"), text: Binding(get: { vm.s.displayName }, set: { v in vm.now { $0.setName(v) } }))
                 .textContentType(.nickname)
-            Button(L("ob_next")) { vm.run { $0.profileNext() } }.bold()
+            Button(L("ob_next")) { vm.run { $0.profileNext() } }.buttonStyle(AuralisPrimaryButtonStyle())
         }
     }
 
     @ViewBuilder private var secure: some View {
-        Section(footer: Text(L("ob_secure_honest"))) {
+        AuralisSettingsSection(footer: L("ob_secure_honest")) {
             Text(L("ob_secure_body"))
         }
-        Section(header: Text(L("ob_icloud")), footer: Text(L(vm.s.usePassword ? "ob_icloud_pw_footer" : "ob_icloud_nopw_footer"))) {
+        AuralisSettingsSection(L("ob_icloud"), footer: L(vm.s.usePassword ? "ob_icloud_pw_footer" : "ob_icloud_nopw_footer")) {
             if vm.s.iCloudDone {
                 Label(L("ob_backup_done"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else if !vm.s.iCloudAvailable {
@@ -110,7 +182,7 @@ struct OnboardingView: View {
                     .disabled(vm.s.usePassword && !vm.s.passwordOk)
             }
         }
-        Section(header: Text(L("ob_drive"))) {
+        AuralisSettingsSection(L("ob_drive")) {
             if vm.s.driveDone {
                 Label(L("ob_backup_done"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else if !vm.s.driveAvailable {
@@ -120,17 +192,17 @@ struct OnboardingView: View {
                 Button(L("ob_backup_drive")) { vm.run { $0.backupToDrive() } }.disabled(!vm.s.passwordOk)
             }
         }
-        Section(header: Text(L("ob_write_down"))) {
+        AuralisSettingsSection(L("ob_write_down")) {
             if vm.s.writtenDone {
                 Label(L("ob_backup_done"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
                 Button(L("ob_show_words")) { vm.now { $0.writeItDown() } }
             }
         }
-        Section {
-            Button(L("ob_continue")) { vm.now { _ = $0.secureNext() } }.bold().disabled(!vm.s.anyBackupDone)
+        AuralisSettingsSection(footer: L("ob_remind_footer")) {
+            Button(L("ob_continue")) { vm.now { _ = $0.secureNext() } }.buttonStyle(AuralisPrimaryButtonStyle()).disabled(!vm.s.anyBackupDone)
             Button(L("ob_remind_later")) { vm.now { $0.remindLater() } }
-        } footer: { Text(L("ob_remind_footer")) }
+        }
     }
 
     private var passwordField: some View {
@@ -143,19 +215,17 @@ struct OnboardingView: View {
     }
 
     @ViewBuilder private var writeDown: some View {
-        Section(footer: Text(L("ob_words_footer"))) {
-            ForEach(Array(vm.s.words.enumerated()), id: \.offset) { i, w in
-                Text("\(i + 1). \(w)").font(.body.monospaced())
-            }
+        AuralisSettingsSection(footer: L("ob_words_footer")) {
+            AuralisRecoveryWords(words: vm.s.words)
         }
-        Section {
-            Button(L("ob_wrote_it_down")) { vm.now { $0.startQuiz() } }.bold()
+        AuralisSettingsSection {
+            Button(L("ob_wrote_it_down")) { vm.now { $0.startQuiz() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToSecure() } }
         }
     }
 
     @ViewBuilder private var quiz: some View {
-        Section(header: Text(L("ob_quiz_title"))) {
+        AuralisSettingsSection(L("ob_quiz_title")) {
             ForEach(Array(vm.s.quiz.enumerated()), id: \.offset) { i, f in
                 VStack(alignment: .leading) {
                     TextField(L("ob_quiz_word", f.position + 1), text: Binding(get: { f.input }, set: { v in vm.now { $0.setQuizInput(i, v) } }))
@@ -164,40 +234,40 @@ struct OnboardingView: View {
                 }
             }
         }
-        Section {
-            Button(L("ob_check")) { vm.now { _ = $0.submitQuiz() } }.bold()
+        AuralisSettingsSection {
+            Button(L("ob_check")) { vm.now { _ = $0.submitQuiz() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToSecure() } }
         }
     }
 
     @ViewBuilder private var done: some View {
-        Section(footer: Text(L("my_qr_privacy"))) {
+        AuralisSettingsSection(footer: L("my_qr_privacy")) {
             Text(L("ob_done_body"))
             if let qr = try? model.core.qrPayload() { QrCodeImage(payload: qr).frame(width: 220, height: 220).frame(maxWidth: .infinity) }
         }
-        Section {
-            Button(L("ob_start_chatting")) { vm.now { $0.finish() } }.bold()
+        AuralisSettingsSection {
+            Button(L("ob_start_chatting")) { vm.now { $0.finish() } }.buttonStyle(AuralisPrimaryButtonStyle())
         }
     }
 
     @ViewBuilder private var restorePrompt: some View {
-        Section(footer: Text(L("ob_restore_honest"))) {
+        AuralisSettingsSection(footer: L("ob_restore_honest")) {
             Text(L("ob_restore_found", vm.s.foundMethod == backupICloud ? "iCloud" : "Google Drive"))
             if vm.s.foundBackup?.needsPassword == true {
                 SecureField(L("ob_backup_password"), text: Binding(get: { vm.s.restorePassword }, set: { v in vm.now { $0.setRestorePassword(v) } }))
             }
             if vm.s.restoreLockMs > 0 { Text(L("ob_restore_locked", Int(vm.s.restoreLockMs / 1000))).foregroundStyle(.orange) }
-            Button(L("ob_restore")) { vm.run { $0.restoreFromCloud() } }.bold()
+            Button(L("ob_restore")) { vm.run { $0.restoreFromCloud() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_use_phrase")) { vm.now { $0.usePhraseInstead() } }
             Button(L("ob_start_fresh")) { vm.now { $0.backToWelcome() } }
         }
     }
 
     @ViewBuilder private var restorePhrase: some View {
-        Section(footer: Text(L("ob_phrase_footer"))) {
+        AuralisSettingsSection(footer: L("ob_phrase_footer")) {
             TextEditor(text: Binding(get: { vm.s.restorePhrase }, set: { v in vm.now { $0.setRestorePhrase(v) } }))
                 .frame(minHeight: 120).textInputAutocapitalization(.never).autocorrectionDisabled()
-            Button(L("ob_restore")) { vm.now { _ = $0.restoreFromPhrase() } }.bold()
+            Button(L("ob_restore")) { vm.now { _ = $0.restoreFromPhrase() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToWelcome() } }
         }
     }
@@ -206,11 +276,13 @@ struct OnboardingView: View {
 /// Persistent banner while "Remind me later" is running, then a blocking sheet (O6).
 struct BackupReminderBanner: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.omcpColors) private var c
     var body: some View {
         NavigationLink { BackupSettingsView() } label: {
-            Label(L("backup_banner"), systemImage: "exclamationmark.shield").font(.footnote)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                .background(Color.orange.opacity(0.15))
+            Label(L("backup_banner"), systemImage: "exclamationmark.shield").font(.footnote.weight(.medium))
+                .foregroundStyle(c.warn)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).padding(14)
+                .background(c.warnSoft, in: RoundedRectangle(cornerRadius: 18))
         }
     }
 }
@@ -231,30 +303,33 @@ struct BackupRequiredView: View {
 /// Settings › Backup and restore.
 struct BackupSettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.scenePhase) private var scenePhase
     @State private var password = ""
     @State private var usePassword = false
     @State private var phrase: [String] = []
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete: String?
+    @State private var isVisible = false
+    @State private var revealRequest: UUID?
 
     private var settings: BackupSettings { model.makeBackupSettings() }
 
     var body: some View {
         let s = settings
-        Form {
-            Section(footer: Text(L("ob_secure_honest"))) {
+        AuralisSettingsPage {
+            AuralisSettingsSection(footer: L("ob_secure_honest")) {
                 LabeledContent(L("backup_status"), value: s.methods.isEmpty ? L("backup_none") : s.methods.sorted().map { L("method_" + $0) }.joined(separator: ", "))
                 if s.lastCloudBackupMs > 0 {
                     LabeledContent(L("backup_last"), value: Date(timeIntervalSince1970: Double(s.lastCloudBackupMs) / 1000).formatted(date: .abbreviated, time: .shortened))
                 }
             }
-            Section(header: Text(L("backup_password_section"))) {
+            AuralisSettingsSection(L("backup_password_section")) {
                 Toggle(L("ob_use_password"), isOn: $usePassword)
                 if usePassword { SecureField(L("ob_backup_password"), text: $password).textContentType(.newPassword) }
             }
             ForEach([backupICloud, backupDrive], id: \.self) { m in
-                Section(header: Text(L("method_" + m))) {
+                AuralisSettingsSection(L("method_" + m)) {
                     if !s.available(m) {
                         Text(L(m == backupICloud ? "ob_icloud_unavailable" : "ob_drive_unavailable")).foregroundStyle(.secondary)
                     } else {
@@ -266,17 +341,26 @@ struct BackupSettingsView: View {
                     }
                 }
             }
-            Section(header: Text(L("ob_write_down"))) {
+            AuralisSettingsSection(L("ob_write_down")) {
                 if phrase.isEmpty {
                     Button(L("backup_view_phrase")) { reveal() }
                 } else {
-                    ForEach(Array(phrase.enumerated()), id: \.offset) { i, w in Text("\(i + 1). \(w)").font(.body.monospaced()) }
+                    AuralisRecoveryWords(words: phrase)
                     Button(L("ob_wrote_it_down")) { s.markWritten(); phrase = []; model.touch() }
                 }
             }
-            if let error { Section { Text(error).foregroundStyle(.red) } }
+            if let error { AuralisSettingsSection { Text(error).foregroundStyle(.red) } }
         }
+        .disabled(busy)
+        .overlay { if busy { ProgressView().padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20)) } }
         .navigationTitle(L("backup_title"))
+        .onAppear { isVisible = true }
+        .onDisappear { isVisible = false; phrase = []; revealRequest = nil }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { phrase = [] }
+            // Face ID can briefly make the scene inactive. Only backgrounding cancels its result.
+            if phase == .background { revealRequest = nil }
+        }
         .confirmationDialog(L("backup_delete_confirm"), isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button(L("backup_delete"), role: .destructive) {
                 if let m = confirmDelete { work { try s.deleteCloudBackup(m) } }
@@ -285,6 +369,7 @@ struct BackupSettingsView: View {
     }
 
     private func work(_ f: @escaping () throws -> Void) {
+        guard !busy else { return }
         busy = true
         DispatchQueue.global().async {
             let e: String? = (try? f()) == nil ? L("backup_failed") : nil
@@ -300,9 +385,16 @@ struct BackupSettingsView: View {
 
     /// Biometric or device passcode required.
     private func reveal() {
+        guard !busy, revealRequest == nil else { return }
+        let request = UUID()
+        revealRequest = request
         let ctx = LAContext()
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: L("backup_view_phrase_reason")) { ok, _ in
-            DispatchQueue.main.async { if ok { phrase = (try? settings.revealPhrase()) ?? [] } }
+            DispatchQueue.main.async {
+                guard isVisible, revealRequest == request else { return }
+                revealRequest = nil
+                if ok { phrase = (try? settings.revealPhrase()) ?? [] }
+            }
         }
     }
 }

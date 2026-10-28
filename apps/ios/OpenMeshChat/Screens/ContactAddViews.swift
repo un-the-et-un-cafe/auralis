@@ -7,21 +7,25 @@ import SwiftUI
 struct ContactAddView: View {
     @Environment(\.omcpColors) private var c
     var body: some View {
-        List {
-            Section { Text(L("contact_add_subtitle")).font(.subheadline).foregroundStyle(c.ink2) }
-            Section {
+        AuralisSettingsPage {
+            VStack(alignment: .leading, spacing: 12) {
+                AuralisMark().frame(width: 64, height: 64)
+                Text(L("auralis_contact_heading")).font(.largeTitle.weight(.bold)).tracking(-1)
+                Text(L("contact_add_subtitle")).foregroundStyle(c.ink2)
+            }
+            AuralisCard {
                 NavigationLink { QrScanView() } label: {
-                    Label { row("contact_add_scan_qr", "contact_add_scan_qr_desc") } icon: { Image(systemName: "qrcode.viewfinder") }
+                    AuralisActionRow(icon: "qrcode.viewfinder", title: L("contact_add_scan_qr"), detail: L("contact_add_scan_qr_desc"))
                 }
+                Divider().overlay(c.line)
                 NavigationLink { MyQrView() } label: {
-                    Label { row("contact_add_my_qr", "contact_add_my_qr_desc") } icon: { Image(systemName: "qrcode") }
+                    AuralisActionRow(icon: "qrcode", title: L("contact_add_my_qr"), detail: L("contact_add_my_qr_desc"))
                 }
             }
+            Label(L("my_qr_privacy"), systemImage: "hand.raised")
+                .font(.footnote).foregroundStyle(c.ink2)
         }
         .navigationTitle(L("contact_add_title"))
-    }
-    private func row(_ t: String, _ d: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) { Text(L(t)); Text(L(d)).font(.caption).foregroundStyle(c.ink2) }
     }
 }
 
@@ -47,17 +51,25 @@ struct MyQrView: View {
     @State private var savedBrightness: CGFloat = 0.5
     var body: some View {
         let id = model.core.identity()
-        ScrollView {
-            VStack(spacing: 16) {
-                if let qr = try? model.core.qrPayload() { QrCodeImage(payload: qr).frame(width: 260, height: 260) }
-                Text(id?.displayName ?? "").font(.title3.bold())
-                if let p = id?.peerIdHex {
-                    Text("omcp1:\(p.prefix(4))…\(p.suffix(4))").font(.footnote.monospaced())
-                    Button(L("my_qr_copy")) { UIPasteboard.general.string = p }
+        AuralisSettingsPage {
+            AuralisWordmark()
+            AuralisCard {
+                VStack(spacing: 18) {
+                    Text(id?.displayName ?? "").font(.title2.weight(.semibold))
+                    if let qr = try? model.core.qrPayload() {
+                        QrCodeImage(payload: qr).frame(maxWidth: 260).aspectRatio(1, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                    }
+                    if let p = id?.peerIdHex {
+                        Text("omcp1:\(p.prefix(4))…\(p.suffix(4))").font(.footnote.monospaced())
+                        Button(L("my_qr_copy")) { UIPasteboard.general.string = p }.frame(minHeight: 44)
+                    }
                 }
-                Text(L("my_qr_brightness")).font(.footnote).multilineTextAlignment(.center)
-                Text(L("my_qr_privacy")).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            }.padding()
+                .frame(maxWidth: .infinity)
+            }
+            Text(L("my_qr_brightness")).font(.subheadline)
+            Label(L("my_qr_privacy"), systemImage: "lock.shield")
+                .font(.footnote).foregroundStyle(.secondary)
         }
         .navigationTitle(L("my_qr_title"))
         .onAppear { savedBrightness = UIScreen.main.brightness; UIScreen.main.brightness = 1 }
@@ -85,7 +97,7 @@ struct QrScanView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 QrCameraView(onCode: handle, onDenied: { denied = true }).ignoresSafeArea()
-                RoundedRectangle(cornerRadius: 16).stroke(notOmcp ? Color.red : .white, lineWidth: 3)
+                RoundedRectangle(cornerRadius: 28).stroke(notOmcp ? Color.red : Color(hex: 0x84E4CA), lineWidth: 3)
                     .frame(width: 240, height: 240).frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityLabel(L("viewfinder_a11y"))
                 Text(L("scan_hint")).foregroundStyle(.white).padding().background(.black.opacity(0.5), in: Capsule()).padding(.top, 24)
@@ -151,46 +163,62 @@ struct ContactPreviewSheet: View {
     var body: some View {
         let ct = preview.contact
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(ct.displayName).font(.title2.bold())
-                    Text("omcp1:\(ct.id.prefix(4))…\(ct.id.suffix(4))").font(.footnote.monospaced()).foregroundStyle(c.ink2)
-                    if let old = preview.mismatchWith {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(L("sn_mismatch_title")).bold()
-                            Text(L("sn_mismatch_body", old.displayName)).font(.footnote)
-                        }.padding().background(c.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                    } else {
-                        Text(L("unverified")).font(.caption.bold()).padding(6).background(c.warnSoft, in: Capsule())
+            AuralisSettingsPage {
+                AuralisCard {
+                    HStack(spacing: 16) {
+                        AuralisAvatar(name: ct.displayName, size: 64)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(ct.displayName).font(.title2.weight(.semibold))
+                            Text("omcp1:\(ct.id.prefix(4))…\(ct.id.suffix(4))")
+                                .font(.footnote.monospaced()).foregroundStyle(c.ink2)
+                            Text(L("unverified")).font(.caption.weight(.semibold)).foregroundStyle(c.warn)
+                        }
                     }
-                    Text(L("sn_section")).font(.headline)
-                    SafetyNumberGrid(groups: ct.safetyNumber, differs: preview.mismatchWith.map { Set(zip($0.safetyNumber, ct.safetyNumber).enumerated().filter { $0.element.0 != $0.element.1 }.map(\.offset)) } ?? [])
-                    Text(L("sn_compare", ct.displayName)).font(.footnote).foregroundStyle(c.ink2)
+                }
+                if let old = preview.mismatchWith {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(L("sn_mismatch_title"), systemImage: "exclamationmark.shield").font(.headline)
+                        Text(L("sn_mismatch_body", old.displayName)).font(.subheadline)
+                    }
+                    .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                    .foregroundStyle(c.danger).background(c.dangerSoft, in: RoundedRectangle(cornerRadius: 24))
+                }
+                AuralisSettingsSection(L("sn_section"), footer: L("sn_compare", ct.displayName)) {
+                    SafetyNumberGrid(groups: ct.safetyNumber, differs: preview.mismatchWith.map {
+                        Set(zip($0.safetyNumber, ct.safetyNumber).enumerated()
+                            .filter { $0.element.0 != $0.element.1 }.map(\.offset))
+                    } ?? [])
+                }
+                VStack(spacing: 12) {
                     if preview.mismatchWith == nil {
-                        Button { onAction(.verifyAndChat) } label: { Text(L("sn_verify_chat")).frame(maxWidth: .infinity) }
-                            .buttonStyle(.borderedProminent)
-                        Button { onAction(.chatWithoutVerifying) } label: { Text(L("sn_chat_unverified")).frame(maxWidth: .infinity) }
-                            .buttonStyle(.bordered)
+                        Button(L("sn_verify_chat")) { onAction(.verifyAndChat) }
+                            .buttonStyle(AuralisPrimaryButtonStyle())
+                        Button(L("sn_chat_unverified")) { onAction(.chatWithoutVerifying) }
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     } else {
-                        Button(L("sn_scan_again"), action: onCancel).buttonStyle(.borderedProminent)
-                        Button(L("sn_dont_trust"), role: .destructive, action: onCancel)
+                        Button(L("sn_scan_again"), action: onCancel).buttonStyle(AuralisPrimaryButtonStyle())
+                        Button(L("sn_dont_trust"), role: .destructive, action: onCancel).frame(minHeight: 44)
                     }
-                    Button(L("cancel"), action: onCancel).frame(maxWidth: .infinity)
-                }.padding()
+                    Button(L("cancel"), action: onCancel).frame(maxWidth: .infinity, minHeight: 44)
+                }
             }
+            .navigationTitle(L("contact_add_title"))
         }
     }
 }
 
 struct SafetyNumberGrid: View {
     @Environment(\.omcpColors) private var c
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let groups: [String]
     var differs: Set<Int> = []
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: dynamicTypeSize.isAccessibilitySize ? 1 : 3), spacing: 8) {
             ForEach(Array(groups.enumerated()), id: \.offset) { i, g in
                 Text(g).font(.body.monospaced())
                     .underline(differs.contains(i)).foregroundStyle(differs.contains(i) ? c.danger : c.ink)
+                    .padding(.vertical, 12).frame(maxWidth: .infinity)
+                    .background(c.surface2, in: RoundedRectangle(cornerRadius: 10))
                     .accessibilityLabel(L("sn_group_a11y", i + 1, g.map(String.init).joined(separator: " ")))
             }
         }
@@ -214,6 +242,9 @@ struct QrCameraView: UIViewControllerRepresentable {
         var onCode: ((String) -> Void)?
         var onDenied: (() -> Void)?
         private let session = AVCaptureSession()
+        private let sessionQueue = DispatchQueue(label: "auralis.camera")
+        private var configured = false
+        private var isVisible = false
         private var layer: AVCaptureVideoPreviewLayer?
 
         override func viewDidLoad() {
@@ -238,7 +269,21 @@ struct QrCameraView: UIViewControllerRepresentable {
             l.frame = view.bounds
             view.layer.addSublayer(l)
             layer = l
-            DispatchQueue.global().async { self.session.startRunning() }
+            configured = true
+            if isVisible { setRunning(true) }
+        }
+
+        private func setRunning(_ running: Bool) {
+            sessionQueue.async {
+                if running && !self.session.isRunning { self.session.startRunning() }
+                else if !running && self.session.isRunning { self.session.stopRunning() }
+            }
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
+            isVisible = true
+            if configured { setRunning(true) }
         }
 
         override func viewDidLayoutSubviews() {
@@ -248,7 +293,8 @@ struct QrCameraView: UIViewControllerRepresentable {
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            session.stopRunning()
+            isVisible = false
+            setRunning(false)
         }
 
         func metadataOutput(_ o: AVCaptureMetadataOutput, didOutput objs: [AVMetadataObject], from c: AVCaptureConnection) {

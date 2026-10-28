@@ -1,0 +1,15 @@
+name: Set up iOS build tools
+description: Shared unsigned iOS build environment on an Apple silicon macOS runner.
+runs:
+  using: composite
+  steps:
+    - name: Install Rust targets and XcodeGen
+      shell: bash
+      run: |
+        test "$(uname -m)" = arm64
+        rustup show active-toolchain
+        rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+        command -v xcodegen || brew install xcodegen
+        rustc --version --verbose
+        xcodebuild -version
+        xcodegen --version

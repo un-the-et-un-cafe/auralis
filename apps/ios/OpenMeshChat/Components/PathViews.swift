@@ -21,13 +21,13 @@ struct PathChip: View {
         HStack(spacing: 6) {
             Circle().fill(fg).frame(width: micro ? 5 : 7, height: micro ? 5 : 7)
             Text(label)
-                .font(.system(size: micro ? 10 : 12, weight: .semibold))
+                .font(micro ? .caption2.weight(.semibold) : .caption.weight(.semibold))
                 .foregroundStyle(fg)
         }
         .padding(.horizontal, micro ? 7 : 10)
-        .padding(.vertical, micro ? 2 : 5)
+        .padding(.vertical, micro ? 4 : 8)
         .background(bg, in: Capsule())
-        .accessibilityLabel("Delivery path: \(label)")
+        .accessibilityLabel(L("auralis_delivery_a11y", label))
     }
 }
 
@@ -55,7 +55,7 @@ struct PathBanner: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(bg)
-        .accessibilityLabel("Delivery path: \(text)")
+        .accessibilityLabel(L("auralis_delivery_a11y", text))
     }
 }
 
@@ -63,16 +63,16 @@ struct EmptyStateView: View {
     @Environment(\.omcpColors) private var c
     let title: String
     let bodyText: String
+    var icon: String = "sparkles"
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text(title).font(.title2.weight(.bold)).multilineTextAlignment(.center)
-            Text(bodyText)
-                .font(.body)
-                .foregroundStyle(c.ink2)
-                .multilineTextAlignment(.center)
+        AuralisSettingsPage {
+            AuralisWordmark()
+            AuralisCard {
+                Image(systemName: icon).font(.largeTitle).foregroundStyle(c.brand).accessibilityHidden(true)
+                Text(title).font(.largeTitle.weight(.bold)).tracking(-1)
+                Text(bodyText).font(.body).foregroundStyle(c.ink2)
+            }
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

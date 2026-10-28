@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auralis_backup_intro">Your identity, kept in your hands. Choose how you can return to your conversations.</string>
+    <string name="auralis_backup_delete_body">Remove the encrypted identity backup from Google Drive? Keep your 24 recovery words somewhere safe first.</string>
+    <string name="auralis_backup_working">Working securely…</string>
+    <string name="auralis_security_intro">Know who you are talking to. Keep this conversation on your terms.</string>
+    <string name="auralis_security_verify_body">Compare every group with your contact through a trusted channel before marking this conversation verified.</string>
+    <string name="auralis_security_mark_verified">Mark verified</string>
+    <string name="auralis_security_mark_unverified">Mark unverified</string>
+    <string name="auralis_security_session">Encryption &amp; session</string>
+    <string name="auralis_security_session_body">End-to-end · Noise hybrid\n%1$s</string>
+    <string name="auralis_security_future">Session reset and blocking are not implemented in this beta. These controls will appear when they work.</string>
+    <string name="auralis_security_notifications">Notifications for this chat</string>
+    <string name="auralis_security_no_contact">Open a conversation to view its safety number and privacy controls.</string>
+    <string name="auralis_storage_intro">Keep useful copies. Make room for what comes next.</string>
+    <string name="auralis_storage_usage_title">On this device</string>
+    <string name="auralis_gateway_intro">A wider network, with clear boundaries.</string>
+    <string name="auralis_gateway_unavailable">Gateway forwarding is not connected in this beta. These settings save your policy only; they do not relay Internet traffic yet.</string>
+    <string name="auralis_gateway_preferences">Gateway preferences</string>
+    <string name="auralis_gateway_save">Save gateway preference</string>
+    <string name="auralis_gateway_save_desc">Remember your choice for gateway support. No Internet traffic is relayed in this build.</string>
+    <string name="auralis_gateway_disclosure_title">Choose your gateway policy</string>
+    <string name="auralis_gateway_disclosure_body">When gateway transport is available, it will relay encrypted envelopes and may use battery and data. This build saves your preference only.</string>
+    <string name="auralis_gateway_disclosure_confirm">Save preference</string>
+    <string name="auralis_gateway_metered">Mobile-data preference</string>
+    <string name="auralis_gateway_metered_body">Allow mobile data when gateway transport becomes available? Your saved daily cap will still apply.</string>
+    <string name="auralis_gateway_wifi_only">Keep Wi‑Fi only</string>
+    <string name="auralis_gateway_cap_value">%1$d MB / day</string>
+    <string name="auralis_gateway_cap_note">Policy limit from the OMCP core. Live gateway usage is not measured in this build.</string>
+    <string name="auralis_gateway_store_forward">Store-and-forward</string>
+    <string name="auralis_gateway_store_forward_note">Relay storage is not implemented in this beta. Your own queued messages still wait for a direct mesh connection.</string>
+    <string name="auralis_gateway_paths">Reading your delivery path</string>
+    <string name="auralis_gateway_mesh_desc">A local Bluetooth connection.</string>
+    <string name="auralis_gateway_gateway_desc">A neighbour’s Internet connection, when supported.</string>
+    <string name="auralis_gateway_mixed_desc">More than one type of path in the conversation.</string>
+    <string name="auralis_gateway_queued_desc">No path yet. Your message stays queued.</string>
+    <string name="auralis_restore_step">Step %1$d of %2$d</string>
+</resources>

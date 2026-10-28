@@ -5,7 +5,7 @@ import chat.omcp.app.data.AppStore
 /** Lock-screen visibility, mapped to NotificationCompat.VISIBILITY_* by the Android layer. */
 /**
  * PUBLIC: lock screen shows the notification as is (already generic when private).
- * PRIVATE: lock screen shows the public version "Hopla · New message" (never blank).
+ * PRIVATE: lock screen shows the public version "Auralis · New message" (never blank).
  */
 enum class LockVisibility { PUBLIC, PRIVATE }
 
@@ -58,7 +58,7 @@ object NotificationPolicy {
     }
 
     /**
-     * Incoming call (decision item 1). Private: "Hopla · Incoming call", no caller name.
+     * Incoming call (decision item 1). Private: "Auralis · Incoming call", no caller name.
      * No calls exist yet; this is the policy the call stack will use.
      */
     fun callContent(store: AppStore, chatId: String, caller: String, appName: String, genericCall: String): NotificationContent {

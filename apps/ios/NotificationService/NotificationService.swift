@@ -6,7 +6,7 @@ import UserNotifications
 ///
 /// STUB (M6): fetching the mailbox from the gateway and decrypting with the Rust core needs the
 /// identity shared through an App Group keychain and the gateway mailbox API (M4). Until then
-/// the extension validates the payload and shows the generic "Hopla · New message", which is
+/// the extension validates the payload and shows the generic "Auralis · New message", which is
 /// also exactly what Private notifications show. Malformed payloads (anything beyond the mailbox
 /// id and the fixed generic alert) are suppressed to the same generic text.
 final class NotificationService: UNNotificationServiceExtension {
@@ -16,7 +16,8 @@ final class NotificationService: UNNotificationServiceExtension {
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         handler = contentHandler
         let content = UNMutableNotificationContent()
-        content.title = PushPayload.fallbackTitle
+        // Keep the incoming APNs wire fallback unchanged; display our app brand locally.
+        content.title = NotificationPolicy.appName
         content.body = NSLocalizedString("notif_new_message", comment: "")
         content.threadIdentifier = "hopla"
         content.categoryIdentifier = "omcp.message.hidden"

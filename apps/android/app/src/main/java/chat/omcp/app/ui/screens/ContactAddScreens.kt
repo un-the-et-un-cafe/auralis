@@ -6,6 +6,13 @@ import android.content.Intent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.heightIn
+import chat.omcp.app.ui.components.AuralisActionCard
+import chat.omcp.app.ui.components.AuralisPanel
+import chat.omcp.app.ui.components.AuralisSectionLabel
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -77,11 +84,12 @@ fun ContactAddScreen(
     val scan = androidx.activity.compose.rememberLauncherForActivityResult(ScanContract()) { r ->
         r.contents?.let(vm::onScanned)
     }
+    val scanPrompt = stringResource(R.string.auralis_scan_prompt)
     val launchScan = {
         scan.launch(
             ScanOptions()
                 .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                .setPrompt("Point at their Hopla QR code. It scans automatically.")
+                .setPrompt(scanPrompt)
                 .setBeepEnabled(false)
                 .setOrientationLocked(false),
         )
@@ -98,12 +106,12 @@ fun ContactAddScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
                 stringResource(R.string.contact_add_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = LocalOmcpColors.current.ink2,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
             )
             if (s.notOmcp) {
                 Callout(
@@ -115,21 +123,16 @@ fun ContactAddScreen(
             if (s.qrStale) {
                 Callout(stringResource(R.string.qr_stale), CalloutKind.Warn, Modifier.padding(horizontal = 16.dp))
             }
-            HorizontalDivider()
             Row(R.string.contact_add_scan_qr, R.string.contact_add_scan_qr_desc, Icons.Default.QrCodeScanner) { launchScan() }
             Row(R.string.contact_add_my_qr, R.string.contact_add_my_qr_desc, Icons.Default.QrCode, onMyQr)
             if (nfc) {
                 // TODO(M5.1): NFC HCE exchange of the same omcp:1: payload.
-                Row(R.string.contact_add_nfc, R.string.contact_add_nfc_desc, Icons.Default.Contactless) {}
+                Callout(stringResource(R.string.auralis_nfc_unavailable))
             }
-            Text(
-                stringResource(R.string.advanced),
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(start = 16.dp, top = 12.dp),
-            )
+            AuralisSectionLabel(stringResource(R.string.advanced))
             Row(R.string.contact_add_peer_id, R.string.contact_add_peer_id_desc, Icons.Default.Tag) { pasteOpen = !pasteOpen }
             if (pasteOpen) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AuralisPanel {
                     OutlinedTextField(pasted, { pasted = it }, label = { Text("omcp:1:…") }, modifier = Modifier.fillMaxWidth())
                     Button(onClick = { vm.onScanned(pasted) }) { Text(stringResource(R.string.cta_continue)) }
                 }
@@ -165,7 +168,7 @@ fun ContactAddScreen(
                     Button(onClick = { vm.verifyAndChat()?.let(onOpenChat) }, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.verify_and_chat))
                     }
-                    OutlinedButton(onClick = { vm.chatWithoutVerifying()?.let(onOpenChat) }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), onClick = { vm.chatWithoutVerifying()?.let(onOpenChat) }) {
                         Text(stringResource(R.string.chat_without_verifying))
                     }
                 }
@@ -177,28 +180,23 @@ fun ContactAddScreen(
 
 @Composable
 private fun Row(title: Int, desc: Int, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = { Text(stringResource(title)) },
-        supportingContent = { Text(stringResource(desc)) },
-        leadingContent = { Icon(icon, contentDescription = null) },
-        trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) },
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-    )
+    AuralisActionCard(stringResource(title), stringResource(desc), icon, onClick)
 }
 
 /** Inline QR block reused by onboarding Done and My QR. */
 @Composable
 fun MyQrBlock(payload: String, name: String, peerIdHex: String) {
     val ctx = LocalContext.current
-    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(MaterialTheme.colorScheme.surface).padding(20.dp)) {
+        Text(stringResource(R.string.auralis_your_contact_card), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         QrImage(payload)
         Text(name, style = MaterialTheme.typography.titleMedium)
         Text(shortPeerId(peerIdHex), fontFamily = FontFamily.Monospace, color = LocalOmcpColors.current.ink2)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), onClick = {
                 ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, payload), null))
             }) { Text(stringResource(R.string.share)) }
-            OutlinedButton(onClick = {
+            OutlinedButton(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), onClick = {
                 ctx.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("PeerID", payload))
             }) { Text(stringResource(R.string.copy_peer_id)) }
         }
@@ -230,7 +228,7 @@ fun MyQrScreen(vm: ContactAddViewModel, onBack: () -> Unit, onScanTheirs: () -> 
         Column(
             Modifier.fillMaxSize().padding(padding).padding(24.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             val id = vm.identity
             if (id != null) MyQrBlock(vm.qrPayload, id.displayName, id.peerIdHex)

@@ -4,7 +4,7 @@ import UserNotifications
 
 /// Raises on-device notifications (mesh/local delivery) per `NotificationPolicy`.
 /// Default ON with sender + preview. Private (global or per-chat override, both ways): only
-/// "Hopla" / "New message", no avatar. Hide on lock screen: category with
+/// "Auralis" / "New message", no avatar. Hide on lock screen: category with
 /// `hiddenPreviewsBodyPlaceholder` = "New message" and no title shown when hidden.
 final class LocalNotifier: Notifier {
     static let categoryMessage = "omcp.message"

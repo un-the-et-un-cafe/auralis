@@ -14,7 +14,7 @@ import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import chat.omcp.app.ui.OmcpRoot
+import chat.omcp.app.ui.AuralisApp
 import chat.omcp.app.ui.theme.OmcpTheme
 
 class MainActivity : FragmentActivity() {
@@ -38,7 +38,7 @@ class MainActivity : FragmentActivity() {
         }
         setContent {
             OmcpTheme {
-                OmcpRoot(
+                AuralisApp(
                     repo = app.repository,
                     cloud = app.cloudBackup,
                     secureWindow = ::setSecure,

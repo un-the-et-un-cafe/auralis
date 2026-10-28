@@ -22,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import chat.omcp.app.core.PathKind
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
@@ -51,31 +53,33 @@ fun ChatRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .heightIn(min = 88.dp)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(
             modifier = Modifier
-                .size(48.dp)
-                .clip(if (model.isGroup) RoundedCornerShape(12.dp) else CircleShape)
-                .background(c.surface2),
+                .size(52.dp)
+                .clip(if (model.isGroup) RoundedCornerShape(16.dp) else RoundedCornerShape(20.dp))
+                .background(c.brandSoft),
             contentAlignment = Alignment.Center,
         ) {
-            Text(model.initials, style = MaterialTheme.typography.titleMedium)
+            Text(model.initials.ifEmpty { "·" }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(model.title, style = MaterialTheme.typography.titleMedium)
+                Text(model.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 if (model.verified) {
                     VerifiedBadge()
                 } else if (model.restoredUnverified) {
                     RestoredPill(compact = true)
                 }
             }
-            Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+            Text(model.preview, color = c.ink2, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(model.time, color = c.ink3, style = MaterialTheme.typography.labelSmall)
@@ -89,7 +93,7 @@ fun ChatRow(
                             .padding(horizontal = 7.dp, vertical = 2.dp),
                     ) {
                         Text(
-                            "${model.unread}",
+                            if (model.unread > 99) "99+" else "${model.unread}",
                             color = MaterialTheme.colorScheme.onPrimary,
                             style = MaterialTheme.typography.labelSmall,
                         )

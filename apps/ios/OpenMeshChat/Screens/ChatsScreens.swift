@@ -4,47 +4,80 @@ import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Auralis people-first inbox; names and previews are repository-backed, never demo content.
 struct ChatsListView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.omcpColors) private var c
+    @State private var search = ""
 
     var body: some View {
         let _ = model.revision
         let contacts = model.repo.contacts
+        let visible = contacts.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) }
         let status = model.core.pathStatus()
         NavigationStack {
-            VStack(spacing: 0) {
-                if model.repo.backupGate() == .banner { BackupReminderBanner() }
-                HStack(spacing: 8) {
-                    PathChip(kind: status.aggregatePath, label: L("status_nearby", status.nearbyPeers))
-                    if status.queuedCount > 0 { PathChip(kind: .queued, label: L("status_queued", status.queuedCount)) }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                if contacts.isEmpty {
-                    Spacer()
-                    VStack(spacing: 12) {
-                        Text(L("chats_empty_title")).font(.title2.weight(.semibold))
-                        Text(L("chats_empty_body")).font(.subheadline).foregroundStyle(c.ink2).multilineTextAlignment(.center)
-                    }.padding(.horizontal, 32)
-                    Spacer()
-                } else {
-                    List(contacts) { contact in
-                        NavigationLink(value: contact.id) { ChatRowView(contact: contact, last: model.repo.messages[contact.id]?.last) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if model.repo.backupGate() == .banner { BackupReminderBanner() }
+                    VStack(alignment: .leading, spacing: 14) {
+                        AuralisWordmark()
+                        Text(L("auralis_chats_heading")).font(.largeTitle.weight(.bold)).tracking(-1)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { statusChips(status) }
+                            VStack(alignment: .leading, spacing: 8) { statusChips(status) }
+                        }
                     }
-                    .listStyle(.plain)
+                    if contacts.isEmpty {
+                        AuralisCard {
+                            Image(systemName: "bubble.left.and.bubble.right")
+                                .font(.largeTitle).foregroundStyle(c.brand).accessibilityHidden(true)
+                            Text(L("chats_empty_title")).font(.title2.weight(.semibold))
+                            Text(L("chats_empty_body")).foregroundStyle(c.ink2)
+                            NavigationLink { ContactAddView() } label: {
+                                Label(L("contact_add_title"), systemImage: "plus")
+                            }
+                            .buttonStyle(AuralisPrimaryButtonStyle())
+                        }
+                    } else {
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(c.ink3).accessibilityHidden(true)
+                            TextField(L("auralis_find_person"), text: $search)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        }
+                        .padding(16).background(c.surface, in: RoundedRectangle(cornerRadius: 18))
+                        if visible.isEmpty {
+                            Text(L("auralis_search_empty")).foregroundStyle(c.ink2).padding(.vertical, 24)
+                        }
+                        LazyVStack(spacing: 10) {
+                            ForEach(visible) { contact in
+                                NavigationLink(value: contact.id) {
+                                    ChatRowView(contact: contact, last: model.repo.messages[contact.id]?.last)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
+                .padding(24)
             }
-            .background(c.bg)
+            .auralisScreen()
             .navigationTitle(L("tab_chats"))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { ContactAddView() } label: { Image(systemName: "plus") }
-                        .accessibilityLabel(L("contact_add_title"))
+                    NavigationLink { ContactAddView() } label: {
+                        Image(systemName: "square.and.pencil").frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel(L("contact_add_title"))
                 }
             }
             .navigationDestination(for: String.self) { ChatThreadView(contactId: $0) }
         }
+    }
+
+    @ViewBuilder private func statusChips(_ status: MeshStatus) -> some View {
+        PathChip(kind: status.aggregatePath, label: L("status_nearby", status.nearbyPeers))
+        if status.queuedCount > 0 { PathChip(kind: .queued, label: L("status_queued", status.queuedCount)) }
     }
 }
 
@@ -73,7 +106,7 @@ struct ChatRowView: View {
     let last: ChatMessage?
 
     private var preview: String {
-        guard let last else { return "" }
+        guard let last else { return L("auralis_start_conversation") }
         if last.status == .system { return contact.restoredUnverified ? L("restored_preview", contact.displayName) : "" }
         if last.burn != nil { return L("burn_preview") }
         if let f = last.file { return f.name }
@@ -81,16 +114,25 @@ struct ChatRowView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text(String(contact.displayName.prefix(2)).uppercased())
-                .font(.headline).frame(width: 48, height: 48).background(c.surface2).clipShape(Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) { Text(contact.displayName).font(.headline); VerifiedBadge(contact: contact) }
-                Text(preview).font(.subheadline).foregroundStyle(c.ink2).lineLimit(1)
+        HStack(spacing: 16) {
+            AuralisAvatar(name: contact.displayName)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(contact.displayName).font(.headline).foregroundStyle(c.ink)
+                    VerifiedBadge(contact: contact)
+                    Spacer(minLength: 0)
+                    if let last {
+                        Text(Date(timeIntervalSince1970: Double(last.timeMs) / 1000), style: .time)
+                            .font(.caption2).foregroundStyle(c.ink3)
+                    }
+                }
+                Text(preview).font(.subheadline).foregroundStyle(c.ink2).lineLimit(2)
             }
-            Spacer(minLength: 0)
         }
-        .frame(minHeight: 56)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
+        .background(c.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 22))
     }
 }
 
@@ -104,6 +146,7 @@ struct ChatThreadView: View {
     @State private var fileCandidate: (name: String, size: UInt64, mime: String, url: URL)?
     @State private var previewURL: URL?
     @State private var showImporter = false
+    @State private var chooseAnotherAfterDismiss = false
     @State private var error: String?
 
     var body: some View {
@@ -112,12 +155,27 @@ struct ChatThreadView: View {
         let msgs = model.repo.messages[contactId] ?? []
         let queued = model.core.queuedFor(contactId)
         VStack(spacing: 0) {
-            PathBanner(kind: queued > 0 ? .queued : .mesh, text: L(queued > 0 ? "path_queued" : "path_mesh"))
+            PathBanner(kind: queued > 0 ? .queued : model.core.pathStatus().aggregatePath,
+                       text: L("auralis_route_" + (queued > 0 ? PathKind.queued : model.core.pathStatus().aggregatePath).rawValue))
             restoreBanners(contact: contact, msgs: msgs)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(msgs) { m in bubble(m) }
-                }.padding(16)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        if msgs.isEmpty {
+                            Label(L("auralis_thread_empty"), systemImage: "lock.shield")
+                                .font(.footnote).foregroundStyle(c.ink2)
+                                .frame(maxWidth: .infinity).padding(.vertical, 24)
+                        }
+                        ForEach(msgs) { m in bubble(m).id(m.id) }
+                    }.padding(20)
+                }
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: msgs.count) { previousCount, newCount in
+                    // Never pull someone out of older history for an inbound message or burn expiry.
+                    if newCount > previousCount, let last = msgs.last, last.mine {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
             }
             if let error { Text(error).font(.caption).foregroundStyle(c.danger).padding(.horizontal) }
             composer
@@ -142,10 +200,12 @@ struct ChatThreadView: View {
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             fileCandidate = (url.lastPathComponent, size, mime, url)
         }
-        .sheet(isPresented: Binding(get: { fileCandidate != nil }, set: { if !$0 { fileCandidate = nil } })) {
+        .sheet(isPresented: Binding(get: { fileCandidate != nil }, set: { if !$0 { fileCandidate = nil } }), onDismiss: {
+            if chooseAnotherAfterDismiss { chooseAnotherAfterDismiss = false; showImporter = true }
+        }) {
             if let f = fileCandidate {
                 FileConfirmSheet(name: f.name, size: f.size, contactName: contact?.displayName ?? "", queued: queued > 0,
-                                 onSend: { send(file: f) }, onChooseAnother: { fileCandidate = nil; showImporter = true })
+                                 onSend: { send(file: f) }, onChooseAnother: { chooseAnotherAfterDismiss = true; fileCandidate = nil })
                     .presentationDetents([.medium, .large])
             }
         }
@@ -156,20 +216,42 @@ struct ChatThreadView: View {
     }
 
     private var composer: some View {
-        HStack {
-            Button { showImporter = true } label: { Image(systemName: "paperclip") }
+        VStack(alignment: .leading, spacing: 10) {
+            if burnNext {
+                Label(L("send_burn"), systemImage: "flame.fill")
+                    .font(.caption.weight(.semibold)).foregroundStyle(c.warn)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Button { showImporter = true } label: {
+                    Image(systemName: "plus").font(.title3).frame(width: 44, height: 44)
+                }
                 .accessibilityLabel(L("attach_file"))
-            TextField(L("composer_placeholder"), text: $draft)
-                .padding(10).background(c.surface2, in: RoundedRectangle(cornerRadius: 10))
-            Button { send() } label: { Image(systemName: burnNext ? "flame.fill" : "paperplane.fill") }
-                .foregroundStyle(burnNext ? .orange : c.brand)
+                TextField(L("composer_placeholder"), text: $draft, axis: .vertical)
+                    .lineLimit(1...5).padding(.vertical, 12).padding(.horizontal, 14)
+                    .background(c.surface2, in: RoundedRectangle(cornerRadius: 20))
+                Button { burnNext.toggle() } label: {
+                    Image(systemName: burnNext ? "flame.fill" : "flame")
+                        .foregroundStyle(burnNext ? c.warn : c.ink2).frame(width: 44, height: 44)
+                }
+                .accessibilityLabel(L(burnNext ? "burn_toggle_off" : "burn_toggle_on"))
+                .accessibilityAddTraits(burnNext ? .isSelected : [])
+                Button { send() } label: {
+                    Image(systemName: "arrow.up").font(.headline)
+                        .foregroundStyle(c.bg).frame(width: 44, height: 44)
+                        .background(c.brand, in: Circle())
+                }
+                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                 .contextMenu {
-                    Button { burnNext.toggle() } label: { Label(L(burnNext ? "burn_toggle_off" : "burn_toggle_on"), systemImage: "flame") }
+                    Button { burnNext.toggle() } label: {
+                        Label(L(burnNext ? "burn_toggle_off" : "burn_toggle_on"), systemImage: "flame")
+                    }
                 }
                 .accessibilityLabel(L(burnNext ? "send_burn" : "send"))
-                .accessibilityHint(L("burn_long_press_hint"))
+            }
         }
-        .padding(8).background(c.surface)
+        .padding(12).background(c.surface)
+        .overlay(alignment: .top) { Rectangle().fill(c.line).frame(height: 1) }
     }
 
     private func send() {
@@ -292,9 +374,9 @@ struct ChatThreadView: View {
                 }
                 else { Text(m.text) }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 16).padding(.vertical, 12)
             .background(m.mine ? c.brandSoft : c.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             Text(L(m.mine ? (m.status == .queued ? "msg_queued" : "msg_sent") : "msg_received")).font(.caption2).foregroundStyle(c.ink3)
         }
         .frame(maxWidth: .infinity, alignment: m.mine ? .trailing : .leading)
@@ -359,19 +441,19 @@ struct FileBubble: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: "doc").accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.fill").font(.title2).foregroundStyle(tint).accessibilityHidden(true)
                 Text(file.name).font(.subheadline.bold()).lineLimit(1)
                 Spacer()
                 switch file.state {
                 case .queued, .sending, .paused, .receiving:
-                    Button(action: onCancel) { Image(systemName: "xmark.circle") }
+                    Button(action: onCancel) { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
                         .accessibilityLabel(L(mine ? "file_cancel_a11y" : "file_cancel_receive_a11y", file.name))
                 case .integrityFailed:
                     Button(L("file_delete"), role: .destructive, action: onCancel)
                 case .received where file.localPath != nil:
-                    Button(action: onOpen) { Image(systemName: "arrow.up.forward.square") }
+                    Button(action: onOpen) { Image(systemName: "arrow.up.forward.square").frame(minWidth: 44, minHeight: 44) }
                         .accessibilityLabel(L("file_open_a11y", file.name))
                 default:
                     EmptyView()
@@ -383,7 +465,7 @@ struct FileBubble: View {
             if file.state == .received { Text(L("file_integrity_checked")).font(.caption2).foregroundStyle(c.ink3) }
             if file.state == .paused { Text(L("file_paused_meta")).font(.caption2).foregroundStyle(c.ink3) }
         }
-        .frame(minWidth: 220)
+        .frame(maxWidth: 300, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { if file.state == .received { onOpen() } }
     }
@@ -391,32 +473,44 @@ struct FileBubble: View {
 
 /// Full-screen burn viewer: shown once; closing burns it. Secure layer is window-wide.
 struct BurnViewer: View {
+    @Environment(\.omcpColors) private var c
     let content: BurnContent
     let onClose: () -> Void
+
     var body: some View {
-        VStack(spacing: 16) {
-            HStack { Spacer(); Button(L("close"), action: onClose) }.padding()
-            Spacer()
-            if content.mime?.hasPrefix("image/") == true, let img = UIImage(data: content.bytes) {
-                Image(uiImage: img).resizable().scaledToFit()
-            } else {
-                Text(content.text).font(.title3).padding()
+        VStack(spacing: 24) {
+            HStack {
+                Label(L("burn_title"), systemImage: "flame.fill").font(.headline).foregroundStyle(c.warn)
+                Spacer()
+                Button(L("close"), action: onClose).frame(minWidth: 44, minHeight: 44)
             }
+            Spacer(minLength: 0)
+            ScrollView {
+                if content.mime?.hasPrefix("image/") == true, let img = UIImage(data: content.bytes) {
+                    Image(uiImage: img).resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 24))
+                } else {
+                    Text(content.text).font(.title3).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(24).background(c.surface, in: RoundedRectangle(cornerRadius: 24))
+                }
+            }
+            Spacer(minLength: 0)
             if let at = content.burnAtMs {
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     let left = max(0, Int((Double(at) / 1000 - Date().timeIntervalSince1970).rounded(.up)))
-                    Text(L("burn_countdown", left)).font(.caption).onChange(of: left) { _, v in if v == 0 { onClose() } }
+                    Text(L("burn_countdown", left)).font(.headline.monospacedDigit()).foregroundStyle(c.warn)
+                        .onChange(of: left) { _, v in if v == 0 { onClose() } }
                 }
             }
-            Spacer()
-            Text(L("burn_honest")).font(.caption).foregroundStyle(.secondary).padding()
+            Text(L("burn_honest")).font(.footnote).foregroundStyle(c.ink2)
         }
+        .padding(24).background(c.bg.ignoresSafeArea())
     }
 }
 
 /// Design §5.23 file-picker-confirm (+ too-large). The cap comes from the Rust core.
 struct FileConfirmSheet: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.omcpColors) private var c
     let name: String
     let size: UInt64
@@ -430,24 +524,27 @@ struct FileConfirmSheet: View {
         let check = FilePolicy.check(size: size, core: model.core)
         let mb = String(format: "%.1f", Double(size) / 1_000_000)
         NavigationStack {
-            Form {
-                Section {
+            AuralisSettingsPage {
+                AuralisSettingsSection {
                     Label(name, systemImage: "doc").foregroundStyle(check == .ok ? c.ink : c.danger)
                     LabeledContent(L("file_size"), value: L("file_size_of_max", mb, FilePolicy.label(max)))
                     LabeledContent(L("file_route")) { PathChip(kind: queued ? .queued : .mesh, label: L(queued ? "path_queued" : "path_mesh")) }
                 }
                 if check == .ok {
-                    Section { Text(queued ? L("file_queue_hint", contactName) : L("file_mesh_hint", contactName)).font(.footnote) }
-                    Button(L(queued ? "file_queue" : "send"), action: onSend).bold()
+                    AuralisSettingsSection { Text(queued ? L("file_queue_hint", contactName) : L("file_mesh_hint", contactName)).font(.footnote) }
+                    Button(L(queued ? "file_queue" : "send"), action: onSend).buttonStyle(AuralisPrimaryButtonStyle())
                 } else {
-                    Section(header: Text(L("file_too_large_title"))) {
+                    AuralisSettingsSection(L("file_too_large_title")) {
                         Text(L("file_too_large_body", mb, FilePolicy.label(max), FilePolicy.label(max))).font(.footnote)
                     }
-                    Button(L("file_choose_another"), action: onChooseAnother).bold()
+                    Button(L("file_choose_another"), action: onChooseAnother).buttonStyle(AuralisPrimaryButtonStyle())
                 }
             }
             .navigationTitle(L("file_send_title", contactName))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button(L("cancel")) { dismiss() } }
+            }
         }
     }
 }
@@ -460,11 +557,11 @@ struct ChatInfoView: View {
     var body: some View {
         let _ = model.revision
         let store = model.store
-        Form {
+        AuralisSettingsPage {
             if let contact = model.repo.contact(contactId) {
-                Section { NavigationLink(L("security_centre")) { SecurityCentreView(contact: contact) } }
+                AuralisSettingsSection { NavigationLink(L("security_centre")) { SecurityCentreView(contact: contact) } }
             }
-            Section(header: Text(L("notif_title")), footer: Text(L("notif_private_footer"))) {
+            AuralisSettingsSection(L("notif_title"), footer: L("notif_private_footer")) {
                 Picker(L("notif_private"), selection: Binding<Int>(
                     get: { store.chatPrivateOverride[contactId].map { $0 ? 1 : 0 } ?? -1 },
                     set: { v in NotificationPolicy.setChatPrivate(store, chatId: contactId, v == -1 ? nil : v == 1); model.touch() })) {
@@ -473,7 +570,7 @@ struct ChatInfoView: View {
                     Text(L("notif_private_off")).tag(0)
                 }
             }
-            Section(header: Text(L("burn_title")), footer: Text(L("burn_honest"))) {
+            AuralisSettingsSection(L("burn_title"), footer: L("burn_honest")) {
                 Picker(L("burn_title"), selection: Binding<Int>(
                     get: { store.burnChats[contactId] ?? -1 },
                     set: { v in try? model.repo.setChatBurn(contactId, option: v, unreadTtl: store.burnUnreadTtl[contactId] ?? BurnSpec.unread7d) })) {

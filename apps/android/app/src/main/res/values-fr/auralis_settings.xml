@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auralis_backup_intro">Votre identité reste entre vos mains. Choisissez comment retrouver vos conversations.</string>
+    <string name="auralis_backup_delete_body">Supprimer la sauvegarde chiffrée de votre identité sur Google Drive ? Conservez d’abord vos 24 mots de récupération en lieu sûr.</string>
+    <string name="auralis_backup_working">Opération sécurisée en cours…</string>
+    <string name="auralis_security_intro">Sachez à qui vous parlez. Gardez le contrôle de cette conversation.</string>
+    <string name="auralis_security_verify_body">Comparez chaque groupe avec votre contact par un canal de confiance avant de marquer cette conversation comme vérifiée.</string>
+    <string name="auralis_security_mark_verified">Marquer comme vérifié</string>
+    <string name="auralis_security_mark_unverified">Retirer la vérification</string>
+    <string name="auralis_security_session">Chiffrement et session</string>
+    <string name="auralis_security_session_body">De bout en bout · Noise hybride\n%1$s</string>
+    <string name="auralis_security_future">La réinitialisation de session et le blocage ne sont pas disponibles dans cette bêta. Ces commandes apparaîtront lorsqu’elles fonctionneront.</string>
+    <string name="auralis_security_notifications">Notifications de cette conversation</string>
+    <string name="auralis_security_no_contact">Ouvrez une conversation pour afficher son numéro de sécurité et ses réglages de confidentialité.</string>
+    <string name="auralis_storage_intro">Gardez les copies utiles. Faites de la place pour la suite.</string>
+    <string name="auralis_storage_usage_title">Sur cet appareil</string>
+    <string name="auralis_gateway_intro">Un réseau plus vaste, avec des limites claires.</string>
+    <string name="auralis_gateway_unavailable">Le relais Internet n’est pas connecté dans cette bêta. Ces réglages enregistrent seulement vos préférences ; aucun trafic Internet n’est relayé.</string>
+    <string name="auralis_gateway_preferences">Préférences de passerelle</string>
+    <string name="auralis_gateway_save">Enregistrer la préférence de passerelle</string>
+    <string name="auralis_gateway_save_desc">Mémoriser votre choix pour la prise en charge des passerelles. Cette version ne relaie aucun trafic Internet.</string>
+    <string name="auralis_gateway_disclosure_title">Choisir vos règles de passerelle</string>
+    <string name="auralis_gateway_disclosure_body">Lorsqu’il sera disponible, le transport par passerelle relaiera des enveloppes chiffrées et pourra consommer de la batterie et des données. Cette version enregistre seulement votre préférence.</string>
+    <string name="auralis_gateway_disclosure_confirm">Enregistrer la préférence</string>
+    <string name="auralis_gateway_metered">Préférence de données mobiles</string>
+    <string name="auralis_gateway_metered_body">Autoriser les données mobiles lorsque le transport par passerelle sera disponible ? Votre limite quotidienne restera applicable.</string>
+    <string name="auralis_gateway_wifi_only">Garder le Wi‑Fi uniquement</string>
+    <string name="auralis_gateway_cap_value">%1$d Mo / jour</string>
+    <string name="auralis_gateway_cap_note">Limite définie par le cœur OMCP. Cette version ne mesure pas l’utilisation réelle de la passerelle.</string>
+    <string name="auralis_gateway_store_forward">Stocker et retransmettre</string>
+    <string name="auralis_gateway_store_forward_note">Le stockage de relais n’est pas disponible dans cette bêta. Vos propres messages en attente attendent toujours une connexion mesh directe.</string>
+    <string name="auralis_gateway_paths">Comprendre le chemin de livraison</string>
+    <string name="auralis_gateway_mesh_desc">Une connexion Bluetooth locale.</string>
+    <string name="auralis_gateway_gateway_desc">La connexion Internet d’un voisin, si elle est prise en charge.</string>
+    <string name="auralis_gateway_mixed_desc">Plusieurs types de chemin dans la conversation.</string>
+    <string name="auralis_gateway_queued_desc">Aucun chemin pour l’instant. Votre message reste en attente.</string>
+    <string name="auralis_restore_step">Étape %1$d sur %2$d</string>
+</resources>

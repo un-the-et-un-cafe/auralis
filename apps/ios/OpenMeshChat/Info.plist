@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Hopla</string>
+	<string>Auralis</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -29,15 +29,15 @@
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Hopla uses Bluetooth so you can chat with people nearby, even without Internet.</string>
+	<string>Auralis uses Bluetooth so you can chat with people nearby, even without Internet.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Hopla uses Bluetooth so people nearby can find and message you.</string>
+	<string>Auralis uses Bluetooth so people nearby can find and message you.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Local network access is used for future LAN livestream relay (v0.2).</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Hopla uses the camera to scan contact QR codes.</string>
+	<string>Auralis uses the camera to scan contact QR codes.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Hopla asks for Face ID before showing your recovery phrase.</string>
+	<string>Auralis asks for Face ID before showing your recovery phrase.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

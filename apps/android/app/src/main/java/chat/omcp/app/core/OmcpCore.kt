@@ -13,7 +13,7 @@ data class Contact(
     /** 12 groups of 5 digits. */
     val safetyNumber: List<String>,
     val verified: Boolean,
-    /** "Restored" badge: the contact restored Hopla on a new device in the last 7 days (RS1). */
+    /** "Restored" badge: the contact restored Auralis on a new device in the last 7 days (RS1). */
     val restoredBadge: Boolean = false,
     val restoredAtMs: Long? = null,
     /** "Restored, not verified" until re-verified by QR in person (RS2, design §5.98). */
@@ -158,7 +158,7 @@ data class StoredMessageInfo(
 
 class WrongBackupPasswordException : Exception("wrong backup password")
 
-/** Blob format `v` is newer than this build understands (§5.88 "Update Hopla"). */
+/** Blob format `v` is newer than this build understands (§5.88 "Update Auralis"). */
 class BackupTooNewException : Exception("backup format too new")
 
 /** Blob can't be parsed or decrypted for a reason other than the password. */

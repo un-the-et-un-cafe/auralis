@@ -13,16 +13,16 @@ export IPHONEOS_DEPLOYMENT_TARGET=17.0
 cd "$ROOT"
 
 for t in $TARGETS; do
-  cargo rustc -p omcp-ffi --lib $flag --target "$t" --crate-type staticlib
+  cargo rustc --locked -p omcp-ffi --lib $flag --target "$t" --crate-type staticlib
 done
 
 # Bindings from a host build of the same crate (library mode).
-cargo build -p omcp-ffi
+cargo build --locked -p omcp-ffi
 HOSTLIB="$ROOT/target/debug/libomcp_ffi.dylib"; [ -f "$HOSTLIB" ] || HOSTLIB="$ROOT/target/debug/libomcp_ffi.so"
 GEN="$IOS/build/uniffi"
 rm -rf "$GEN" "$IOS/Generated/OmcpFFI" "$IOS/build/OmcpFFI.xcframework"
 mkdir -p "$GEN/include" "$IOS/Generated/OmcpFFI"
-cargo run -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- generate --library "$HOSTLIB" \
+cargo run --locked -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- generate --library "$HOSTLIB" \
   --language swift --config "$ROOT/crates/omcp-ffi/uniffi.toml" --out-dir "$GEN"
 cp "$GEN/OmcpFFI.swift" "$IOS/Generated/OmcpFFI/"
 cp "$GEN/omcp_ffiFFI.h" "$GEN/include/"
