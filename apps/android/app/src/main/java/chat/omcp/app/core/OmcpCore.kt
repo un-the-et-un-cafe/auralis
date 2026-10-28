@@ -108,12 +108,14 @@ data class LinkResult(
     val fileProgress: List<FileProgressInfo> = emptyList(),
     val files: List<ReceivedFileInfo> = emptyList(),
     val fileFailures: List<FileFailureInfo> = emptyList(),
-    /** More file chunks wait: call [CoreLink.flush] again once the GATT queue is empty. */
+    /** Queued work remains; flush only after the outstanding batch has been committed. */
     val morePending: Boolean = false,
     val restoreNotices: List<RestoreNoticeInfo> = emptyList(),
     val mediaRequests: List<MediaRequestInfo> = emptyList(),
     val resendAsks: List<MediaRequestInfo> = emptyList(),
     val mediaUpdates: List<MediaUpdateInfo> = emptyList(),
+    /** Commit only after every outgoing PDU receives successful OS acceptance. */
+    val batchToken: String? = null,
 )
 
 enum class NetworkType { Offline, Wifi, Cellular }
@@ -170,6 +172,10 @@ interface CoreLink {
     fun onPdu(pdu: ByteArray): LinkResult
     fun sendText(text: String): LinkResult
     fun flush(): LinkResult
+    /** Local durable commit, not a receipt from the peer. */
+    fun commitOutgoing(token: String): LinkResult
+    /** Closes the crypto session but retains uncommitted durable work. */
+    fun abortOutgoing(token: String)
     fun isEstablished(): Boolean
     fun close()
 }

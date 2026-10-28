@@ -156,7 +156,7 @@
     <string name="file_state_received">%1$s Mo · Reçu</string>
     <string name="file_integrity_checked">Intégrité vérifiée</string>
     <string name="file_state_sending">Envoi · %1$s sur %2$s Mo</string>
-    <string name="file_state_sent">%1$s Mo · Envoyé</string>
+    <string name="file_state_sent">%1$s Mo · Remis au Bluetooth</string>
     <string name="file_state_receiving">Réception · %1$s sur %2$s Mo</string>
     <string name="file_state_paused">En pause · hors de portée · %1$s sur %2$s Mo</string>
     <string name="file_paused_meta">En attente du mesh · reprise automatique</string>
@@ -303,4 +303,5 @@
     <string name="storage_keep_size">Jusqu’à</string>
     <string name="storage_days">%1$d jours</string>
     <string name="storage_usage">%1$d éléments · %2$s utilisés</string>
+    <string name="message_transport_accepted">Remis au Bluetooth · Non confirmé</string>
 </resources>

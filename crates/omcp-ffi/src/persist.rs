@@ -162,6 +162,14 @@ pub(crate) fn is_view_once_media(mime: Option<&str>) -> bool {
 }
 
 impl NodeState {
+    /// Drop queued plaintext as soon as burn content is shredded, including an
+    /// unacknowledged send. Pending batch metadata can no longer resurrect it.
+    pub(crate) fn discard_queued(&mut self, id: &[u8; 16]) {
+        for queue in self.queues.values_mut() {
+            queue.retain(|q| q.envelope_id != *id);
+        }
+    }
+
     pub(crate) fn db(&self) -> &Store {
         &self.db
     }
@@ -460,6 +468,7 @@ impl NodeState {
         let mut due = self.burn_in.tick(now_ms);
         due.extend(self.burn_out.tick(now_ms));
         for id in &due {
+            self.discard_queued(id);
             self.db.delete_burn(id)?;
         }
         for m in self.db.all_messages()? {

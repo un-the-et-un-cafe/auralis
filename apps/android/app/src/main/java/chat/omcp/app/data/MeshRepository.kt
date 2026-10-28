@@ -431,7 +431,7 @@ class MeshRepository(
         }
     }
 
-    /** Called by the transport when [count] queued texts to [contactId] went out. */
+    /** Called only after local durable commit of OS-accepted PDUs; not peer delivery. */
     fun markFlushed(contactId: String, count: Int) {
         if (count > 0) {
             _messages.update { all ->

@@ -272,6 +272,7 @@ private fun chat.omcp.ffi.StoredFileState.label() = when (this) {
 
 private fun LinkOutput.toResult() = LinkResult(
     outgoing = outgoing,
+    batchToken = batchToken,
     received = received.map {
         IncomingText(it.contactId, it.text, it.createdMs.toLong(), it.envelopeIdHex, it.burn?.toApp(), it.mime)
     },
@@ -296,6 +297,8 @@ private class RustLink(private val link: MeshLink) : CoreLink {
     override fun onPdu(pdu: ByteArray) = link.onPdu(pdu).toResult()
     override fun sendText(text: String) = link.sendText(text).toResult()
     override fun flush() = link.flush().toResult()
+    override fun commitOutgoing(token: String) = link.commitOutgoing(token).toResult()
+    override fun abortOutgoing(token: String) = link.abortOutgoing(token)
     override fun isEstablished() = link.isEstablished()
     override fun close() {
         link.shutdown()

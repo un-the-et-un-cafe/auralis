@@ -31,14 +31,18 @@ impl SeenCache {
     /// Returns `true` if this `envelope_id` was already seen within TTL (should not
     /// be gossiped again). Records the id when first seen.
     pub fn check_and_insert(&mut self, envelope_id: [u8; 16], now: Instant) -> bool {
-        self.evict_expired(now);
-        if let Some(first) = self.entries.get(&envelope_id) {
-            if now.duration_since(*first) < self.ttl {
-                return true;
-            }
+        if self.contains(&envelope_id, now) {
+            return true;
         }
         self.entries.insert(envelope_id, now);
         false
+    }
+
+    /// Query without consuming an ID, so fallible local processing can finish
+    /// before the caller records success. Expired entries are evicted as usual.
+    pub fn contains(&mut self, envelope_id: &[u8; 16], now: Instant) -> bool {
+        self.evict_expired(now);
+        self.entries.contains_key(envelope_id)
     }
 
     /// Number of live entries (after optional eviction).
@@ -69,6 +73,18 @@ mod tests {
         let id = [1u8; 16];
         assert!(!cache.check_and_insert(id, now));
         assert!(cache.check_and_insert(id, now));
+    }
+
+    #[test]
+    fn querying_does_not_consume_a_failed_processing_attempt() {
+        let mut cache = SeenCache::new(Duration::from_secs(60));
+        let now = Instant::now();
+        let id = [7u8; 16];
+        assert!(!cache.contains(&id, now));
+        assert!(!cache.contains(&id, now));
+        assert!(!cache.check_and_insert(id, now));
+        assert!(cache.contains(&id, now));
+        assert!(!cache.contains(&id, now + Duration::from_secs(61)));
     }
 
     #[test]

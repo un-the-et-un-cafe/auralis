@@ -143,7 +143,8 @@ its ordered journey deliberately retains state to check process relaunch. See
 - APNs token is stored locally only (no gateway registration yet).
 - Calls don't exist yet; `NotificationPolicy.callContent` is the policy the call stack will use.
 - NFC, PeerID entry, Nearby: not in this beta. File transfer has no end-to-end ack yet (sender
-  shows "Sent" once the last chunk is on the link).
+  shows "Sent" only after all PDUs in the final batch are accepted by the OS transport
+  and the durable queue commit succeeds; this does not prove peer receipt).
 - The core’s encrypted local store reloads contacts and message history; the Swift repository
   keeps its current UI projection in memory. No storage format was changed by this rewrite.
 - The strict, legacy APNs wire fallback still uses the literal title `Hopla`. The extension and

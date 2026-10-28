@@ -272,3 +272,13 @@ macro_rules! fixed {
 }
 fixed!(b16, 16);
 fixed!(b32, 32);
+
+/// Content-free receive replay tombstone. The natural key binds peer and ID;
+/// keeping both inside the sealed row permits authenticated contact re-keying.
+#[derive(Serialize, Deserialize)]
+pub(super) struct ReceivedRec {
+    #[serde(with = "b32")]
+    pub peer: [u8; 32],
+    #[serde(with = "b16")]
+    pub id: [u8; 16],
+}

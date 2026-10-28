@@ -107,7 +107,8 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
             },
             mediaRequests: o.mediaRequests.map(request),
             resendAsks: o.resendAsks.map(request),
-            mediaUpdates: o.mediaUpdates.map { MediaUpdateInfo(contactId: $0.contactId, msgId: $0.msgIdHex, state: fileState($0.state)) })
+            mediaUpdates: o.mediaUpdates.map { MediaUpdateInfo(contactId: $0.contactId, msgId: $0.msgIdHex, state: fileState($0.state)) },
+            batchToken: o.batchToken)
     }
 
     public func generateRecoveryPhrase() throws -> String { try call { try OmcpFFI.generateRecoveryPhrase() } }
@@ -362,6 +363,12 @@ final class RustLink: CoreLink {
     func onPdu(_ pdu: Data) throws -> LinkResult { try wrap { try link.onPdu(pdu: pdu) } }
     func sendText(_ text: String) throws -> LinkResult { try wrap { try link.sendText(text: text) } }
     func flush() throws -> LinkResult { try wrap { try link.flush() } }
+    func commitOutgoing(_ token: String) throws -> LinkResult {
+        try wrap { try link.commitOutgoing(token: token) }
+    }
+    func abortOutgoing(_ token: String) throws {
+        do { try link.abortOutgoing(token: token) } catch { throw CoreError.other("\(error)") }
+    }
     var isEstablished: Bool { link.isEstablished() }
     func close() { link.shutdown() }
 }

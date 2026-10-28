@@ -144,15 +144,20 @@ including struct/tag/allocation overhead; extreme local requests should use
 larger chunks. This does not constrain the incremental receiver's wire count
 range. The default 64 KiB / 50 MB sender remains within that budget.
 
-## Cleanup is not delivery confirmation
+## Transport acceptance is not peer delivery
 
-These changes do **not** repair the existing send-confirmation gap: generating
-outgoing PDUs currently dequeues text and can mark/remove a final file batch
-before the platform confirms transport writes. Closing a failed link prevents
-nonce-desynchronized continued writes, but cannot by itself promise replay of
-that already-dequeued batch or peer delivery. A coordinated FFI/native
-transport-confirmation contract is a separate release requirement; it must not
-be implied by passing the interrupted-mid-file reconnect regression.
+[Durable local transport acceptance](TRANSPORT_ACCEPTANCE.md) now retains queued
+text and final-file work until every PDU in an opaque batch is accepted by the
+native transport and a local database transaction commits. Pending flushes do
+not reseal ciphertext. One owner per peer and a 16-message batch bound accompany
+the existing two-file-chunks-per-flush limit. Abort/shutdown preserves uncommitted
+logical work for a fresh session. Native OS acceptance still does not prove peer
+receipt; crashes between OS acceptance and database commit may replay work.
+
+Receiver replay protection is bounded to retained message records plus the most
+recent 16,384 encrypted peer/message-ID tombstones. See the linked contract for
+schema-v3 downgrade limitations, burn metadata retention, eviction behavior,
+callback assumptions and verification requirements.
 
 ## Regression gates
 

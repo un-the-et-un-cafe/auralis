@@ -4,14 +4,26 @@ fn node(name: &str) -> Arc<OmcpNode> {
     OmcpNode::from_phrase(generate_recovery_phrase().unwrap(), name.into()).unwrap()
 }
 
+/// Simulate OS queue acceptance, not a remote protocol receipt.
+fn accept(link: &MeshLink, mut out: LinkOutput) -> LinkOutput {
+    if let Some(token) = out.batch_token.clone() {
+        let committed = link.commit_outgoing(token).unwrap();
+        out.flushed += committed.flushed;
+        out.file_progress.extend(committed.file_progress);
+        out.more_pending = committed.more_pending;
+    }
+    out
+}
+
 /// Deliver every PDU in `out` to `to`, ping-ponging until quiet.
 fn pump(from: &MeshLink, to: &MeshLink, out: LinkOutput) -> Vec<ReceivedText> {
+    let out = accept(from, out);
     let mut got = Vec::new();
     let mut queue = vec![(false, out.outgoing)];
     while let Some((dir_back, pdus)) = queue.pop() {
         for p in pdus {
             let (dst, back) = if dir_back { (from, true) } else { (to, false) };
-            let o = dst.on_pdu(p).unwrap();
+            let o = accept(dst, dst.on_pdu(p).unwrap());
             got.extend(o.received);
             if !o.outgoing.is_empty() {
                 queue.push((!back, o.outgoing));
@@ -83,6 +95,24 @@ fn end_to_end_text_both_directions() {
     assert_eq!(got[0].text, "hi back");
     la.shutdown();
     assert_eq!(a.path_status().nearby_peers, 0);
+}
+
+#[test]
+fn outgoing_text_does_not_populate_inbound_control_replay_cache() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    assert!(a.inner.lock().seen.is_empty());
+    assert!(b.inner.lock().seen.is_empty());
+    let out = la
+        .send_text("durable text, not a control-cache entry".into())
+        .unwrap();
+    assert!(!out.outgoing.is_empty());
+    assert!(a.inner.lock().seen.is_empty());
+    assert_eq!(pump(&la, &lb, out).len(), 1);
+    // User messages are protected by durable authenticated-peer/message IDs,
+    // not raw outgoing envelope IDs in this transient inbound control cache.
+    assert!(a.inner.lock().seen.is_empty());
+    assert!(b.inner.lock().seen.is_empty());
 }
 
 #[test]
@@ -216,6 +246,7 @@ fn pump_all(
     lb: &MeshLink,
     out: LinkOutput,
 ) -> (Vec<ReceivedText>, Vec<OpenedEvent>) {
+    let out = accept(la, out);
     // Like `pump`, but also collects OPENED events from both sides.
     let mut got = Vec::new();
     let mut opened = Vec::new();
@@ -224,7 +255,7 @@ fn pump_all(
     while let Some((back, pdus)) = queue.pop() {
         for p in pdus {
             let dst = if back { la } else { lb };
-            let o = dst.on_pdu(p).unwrap();
+            let o = accept(dst, dst.on_pdu(p).unwrap());
             got.extend(o.received);
             opened.extend(o.opened);
             if !o.outgoing.is_empty() {
@@ -338,7 +369,7 @@ fn opened_from_wrong_peer_is_ignored_and_not_counted_as_flushed() {
         .queue_message(bob_id, "t".into(), Some(spec(BurnMode::Timer, 60, 604_800)))
         .unwrap();
     let out = la.flush().unwrap();
-    assert_eq!(out.flushed, 1);
+    assert_eq!(out.flushed, 0); // only commit reports transport acceptance
     let _ = pump_all(&la, &lb, out);
     b.open_burn(id, 0).unwrap().unwrap();
     assert_eq!(
@@ -393,7 +424,7 @@ fn icloud_key_backup_roundtrip_and_no_plaintext() {
 fn pump_files(from: &MeshLink, to: &MeshLink) -> (Vec<ReceivedFile>, Vec<FileFailure>, u32) {
     let (mut files, mut fails, mut flushes) = (Vec::new(), Vec::new(), 0);
     loop {
-        let out = from.flush().unwrap();
+        let out = accept(from, from.flush().unwrap());
         flushes += 1;
         let more = out.more_pending;
         for p in out.outgoing {
@@ -602,7 +633,7 @@ fn wrong_storage_key_and_other_identity_are_refused() {
         OmcpNode::open(other, "B".into(), path, SKEY.to_vec()),
         Err(FfiError::Storage { .. })
     ));
-    assert_eq!(storage_schema_version(), 2);
+    assert_eq!(storage_schema_version(), 3);
     assert_eq!(generate_storage_key().unwrap().len(), 32);
 }
 
@@ -765,13 +796,14 @@ fn outgoing_file_and_received_file_reference_survive_restart() {
 
 /// Pump in both directions until quiet, collecting every output.
 fn pump_out(la: &MeshLink, lb: &MeshLink, out: LinkOutput) -> Vec<LinkOutput> {
+    let out = accept(la, out);
     let mut outs = Vec::new();
     let mut queue = vec![(false, out.outgoing.clone())];
     outs.push(out);
     while let Some((back, pdus)) = queue.pop() {
         for p in pdus {
             let dst = if back { la } else { lb };
-            let o = dst.on_pdu(p).unwrap();
+            let o = accept(dst, dst.on_pdu(p).unwrap());
             if !o.outgoing.is_empty() {
                 queue.push((!back, o.outgoing.clone()));
             }
@@ -1911,4 +1943,640 @@ fn restored_own_sent_file_placeholder_remains_hash_verified_and_refetchable() {
     );
     assert_eq!(after.file.as_ref().unwrap().state, st::FILE_RECEIVED);
     assert_eq!(after.file.as_ref().unwrap().hash, before.file.unwrap().hash);
+}
+
+// ---- durable local transport acceptance (not peer delivery) ----
+
+#[test]
+fn pending_batches_keep_work_and_nonces_until_acceptance() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let peer = b.identity().peer_id_hex;
+    let out = la.send_text("durable before radio".into()).unwrap();
+    let token = out.batch_token.clone().unwrap();
+    assert_eq!(out.flushed, 0);
+    assert_eq!(a.queued_for(peer.clone()), 1);
+    assert_eq!(
+        a.stored_messages(peer.clone()).unwrap()[0].status,
+        MessageStatus::Queued
+    );
+    let nonce = match &la.lock().role {
+        Role::Up(up) => up.app_send,
+        _ => panic!(),
+    };
+    for _ in 0..3 {
+        let pending = la.flush().unwrap();
+        assert!(pending.outgoing.is_empty() && pending.batch_token.is_none());
+    }
+    assert_eq!(
+        match &la.lock().role {
+            Role::Up(up) => up.app_send,
+            _ => panic!(),
+        },
+        nonce
+    );
+    // Local acceptance does not require, or pretend to prove, peer receipt.
+    let committed = la.commit_outgoing(token.clone()).unwrap();
+    assert_eq!(committed.flushed, 1);
+    assert_eq!(a.queued_for(peer.clone()), 0);
+    assert!(b
+        .stored_messages(a.identity().peer_id_hex)
+        .unwrap()
+        .is_empty());
+    assert_eq!(la.commit_outgoing(token.clone()).unwrap().flushed, 0);
+    let next = la.send_text("next batch".into()).unwrap();
+    assert_eq!(la.commit_outgoing(token.clone()).unwrap().flushed, 0);
+    assert_eq!(a.queued_for(peer.clone()), 1);
+    assert!(la.abort_outgoing(token).is_err());
+    la.commit_outgoing(next.batch_token.unwrap()).unwrap();
+    assert_eq!(a.queued_for(peer), 0);
+}
+
+#[test]
+fn first_middle_final_transport_failure_replays_logical_text_on_new_session() {
+    for fraction in [0, 1, 2] {
+        let (a, b, la, lb) = paired();
+        pump(&la, &lb, la.start().unwrap());
+        let text = "x".repeat(1600);
+        let out = la.send_text(text.clone()).unwrap();
+        let n = match fraction {
+            0 => 0,
+            1 => out.outgoing.len() / 2,
+            _ => out.outgoing.len() - 1,
+        };
+        for p in out.outgoing.iter().take(n) {
+            assert!(lb.on_pdu(p.clone()).unwrap().received.is_empty());
+        }
+        la.abort_outgoing(out.batch_token.clone().unwrap()).unwrap();
+        assert!(!la.is_established());
+        assert_eq!(a.queued_for(b.identity().peer_id_hex), 1);
+        assert!(la.commit_outgoing(out.batch_token.unwrap()).is_err());
+        lb.shutdown();
+        let la2 = a.open_initiator_link(b.identity().peer_id_hex).unwrap();
+        let lb2 = b.open_responder_link().unwrap();
+        let got = pump(&la2, &lb2, la2.start().unwrap());
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].text, text);
+        assert_eq!(a.queued_for(b.identity().peer_id_hex), 0);
+    }
+}
+
+#[test]
+fn handshake_and_incoming_data_before_os_callback_do_not_drop_replies() {
+    let (a, b, la, lb) = paired();
+    a.queue_text(b.identity().peer_id_hex, "queued Alice".into())
+        .unwrap();
+    b.queue_text(a.identity().peer_id_hex, "queued Bob".into())
+        .unwrap();
+    let first = la.start().unwrap();
+    let mut reply = LinkOutput::default();
+    for p in first.outgoing {
+        let o = lb.on_pdu(p).unwrap();
+        if !o.outgoing.is_empty() {
+            reply = o;
+        }
+    }
+    assert!(reply.batch_token.is_some());
+    let mut got = Vec::new();
+    for p in reply.outgoing {
+        let o = la.on_pdu(p).unwrap();
+        assert!(o.outgoing.is_empty());
+        got.extend(o.received);
+    }
+    assert_eq!(got[0].text, "queued Bob");
+    assert!(
+        la.commit_outgoing(first.batch_token.unwrap())
+            .unwrap()
+            .more_pending
+    );
+    lb.commit_outgoing(reply.batch_token.unwrap()).unwrap();
+    let got = pump(&la, &lb, la.flush().unwrap());
+    assert_eq!(got[0].text, "queued Alice");
+    assert_eq!(
+        a.path_status().queued_count + b.path_status().queued_count,
+        0
+    );
+}
+
+#[test]
+fn pending_incoming_text_does_not_hide_a_queued_reply() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let first = la.send_text("first".into()).unwrap();
+    b.queue_text(a.identity().peer_id_hex, "inbound while waiting".into())
+        .unwrap();
+    let incoming = accept(&lb, lb.flush().unwrap());
+    for p in incoming.outgoing {
+        assert!(la.on_pdu(p).unwrap().outgoing.is_empty());
+    }
+    a.queue_text(b.identity().peer_id_hex, "later durable reply".into())
+        .unwrap();
+    assert!(
+        la.commit_outgoing(first.batch_token.unwrap())
+            .unwrap()
+            .more_pending
+    );
+    // The first batch must be accepted by the peer in sequence before batch 2.
+    for p in first.outgoing {
+        lb.on_pdu(p).unwrap();
+    }
+    let got = pump(&la, &lb, la.flush().unwrap());
+    assert_eq!(got[0].text, "later durable reply");
+}
+
+#[test]
+fn one_peer_backlog_owner_and_wrong_link_tokens_cannot_steal_work() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let la2 = a.open_initiator_link(b.identity().peer_id_hex).unwrap();
+    let lb2 = b.open_responder_link().unwrap();
+    pump(&la2, &lb2, la2.start().unwrap());
+    a.queue_text(b.identity().peer_id_hex, "one owner".into())
+        .unwrap();
+    let first = la.flush().unwrap();
+    assert!(la2.flush().unwrap().outgoing.is_empty());
+    assert!(la2
+        .commit_outgoing(first.batch_token.clone().unwrap())
+        .is_err());
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 1);
+    la.abort_outgoing(first.batch_token.unwrap()).unwrap();
+    let got = pump(&la2, &lb2, la2.flush().unwrap());
+    assert_eq!(got.len(), 1);
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 0);
+}
+
+#[test]
+fn cancelled_file_and_burned_message_are_not_resurrected_by_late_commit() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let peer = b.identity().peer_id_hex;
+    let id = a
+        .queue_message(
+            peer.clone(),
+            "ephemeral".into(),
+            Some(spec(BurnMode::OnOpen, 0, 604_800)),
+        )
+        .unwrap();
+    let offer = a
+        .queue_file(
+            peer.clone(),
+            "cancel.txt".into(),
+            "text/plain".into(),
+            vec![42; 4],
+        )
+        .unwrap();
+    let out = la.flush().unwrap();
+    assert!(out.file_progress.is_empty());
+    assert!(a.cancel_file(offer.transfer_id_hex));
+    assert!(a.tick_burn(u64::MAX).contains(&id));
+    assert_eq!(
+        a.queued_for(peer.clone()),
+        0,
+        "shredded plaintext leaves RAM before ACK"
+    );
+    let committed = la.commit_outgoing(out.batch_token.unwrap()).unwrap();
+    assert_eq!(committed.flushed, 0);
+    assert!(committed.file_progress.is_empty());
+    assert!(a.stored_messages(peer.clone()).unwrap().is_empty());
+    assert_eq!(a.queued_for(peer.clone()), 0);
+    assert_eq!(a.files_pending_for(peer), 0);
+}
+
+fn persisted_pair(dir: &std::path::Path) -> (String, Vec<u8>, Arc<OmcpNode>, Arc<OmcpNode>) {
+    let phrase = generate_recovery_phrase().unwrap();
+    let key = generate_storage_key().unwrap();
+    let a = OmcpNode::open(
+        phrase.clone(),
+        "Alice".into(),
+        dir.join("a.db").to_string_lossy().into(),
+        key.clone(),
+    )
+    .unwrap();
+    let b = node("Bob");
+    a.add_contact_from_qr(b.qr_payload()).unwrap();
+    b.add_contact_from_qr(a.qr_payload()).unwrap();
+    (phrase, key, a, b)
+}
+
+#[test]
+fn database_failure_rolls_back_acceptance_and_closes_session_without_loss() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_phrase, _key, a, b) = persisted_pair(dir.path());
+    let (la, lb, _) = link(&a, &b);
+    a.queue_text(b.identity().peer_id_hex, "atomic one".into())
+        .unwrap();
+    a.queue_text(b.identity().peer_id_hex, "atomic two".into())
+        .unwrap();
+    let out = la.flush().unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("a.db")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER reject_ack BEFORE DELETE ON outbox BEGIN SELECT RAISE(ABORT,'test'); END;",
+    )
+    .unwrap();
+    assert!(matches!(
+        la.commit_outgoing(out.batch_token.clone().unwrap()),
+        Err(FfiError::Storage { .. })
+    ));
+    assert!(!la.is_established());
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 2);
+    assert!(a
+        .stored_messages(b.identity().peer_id_hex)
+        .unwrap()
+        .iter()
+        .all(|m| m.status == MessageStatus::Queued));
+    assert!(la.commit_outgoing(out.batch_token.unwrap()).is_err());
+    db.execute_batch("DROP TRIGGER reject_ack").unwrap();
+    lb.shutdown();
+    let (la2, lb2, outs) = link(&a, &b);
+    assert_eq!(outs.iter().map(|o| o.received.len()).sum::<usize>(), 2);
+    assert!(la2.is_established() && lb2.is_established());
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 0);
+}
+
+#[test]
+fn crash_before_commit_replays_same_id_after_restart_but_after_commit_does_not() {
+    for commit in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (phrase, key, a, b) = persisted_pair(dir.path());
+        let (la, lb, _) = link(&a, &b);
+        let out = la.send_text("crash boundary".into()).unwrap();
+        let id = a.stored_messages(b.identity().peer_id_hex).unwrap()[0]
+            .id_hex
+            .clone();
+        if commit {
+            la.commit_outgoing(out.batch_token.unwrap()).unwrap();
+        }
+        drop(la);
+        drop(lb);
+        drop(a);
+        let a = OmcpNode::open(
+            phrase,
+            "Alice".into(),
+            dir.path().join("a.db").to_string_lossy().into(),
+            key,
+        )
+        .unwrap();
+        assert_eq!(
+            a.queued_for(b.identity().peer_id_hex),
+            if commit { 0 } else { 1 }
+        );
+        let (_, _, outs) = link(&a, &b);
+        let got: Vec<_> = outs.into_iter().flat_map(|o| o.received).collect();
+        assert_eq!(got.len(), if commit { 0 } else { 1 });
+        if !commit {
+            assert_eq!(got[0].envelope_id_hex, id);
+        }
+    }
+}
+
+#[test]
+fn final_file_batch_retains_durable_work_until_commit_and_replay_is_not_redelivered() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let peer = b.identity().peer_id_hex;
+    let offer = a
+        .queue_file(
+            peer.clone(),
+            "final.txt".into(),
+            "text/plain".into(),
+            vec![7; 33],
+        )
+        .unwrap();
+    let out = la.flush().unwrap();
+    assert_eq!(a.files_pending_for(peer.clone()), 1);
+    assert!(out.file_progress.is_empty());
+    let mut received = Vec::new();
+    for p in out.outgoing {
+        received.extend(lb.on_pdu(p).unwrap().files);
+    }
+    assert_eq!(received.len(), 1);
+    b.set_received_file_path(
+        offer.transfer_id_hex.clone(),
+        Some("private/final.txt".into()),
+    )
+    .unwrap();
+    la.abort_outgoing(out.batch_token.unwrap()).unwrap();
+    lb.shutdown();
+    let (la2, lb2, outs) = link(&a, &b);
+    assert!(outs.iter().all(|o| o.files.is_empty()));
+    assert_eq!(a.files_pending_for(peer), 0);
+    assert_eq!(
+        b.stored_messages(a.identity().peer_id_hex).unwrap()[0]
+            .file
+            .as_ref()
+            .unwrap()
+            .local_path
+            .as_deref(),
+        Some("private/final.txt")
+    );
+    assert!(la2.is_established() && lb2.is_established());
+}
+
+#[test]
+fn text_batch_bound_drains_backlog_without_unbounded_pending_state() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    for i in 0..(TEXTS_PER_FLUSH + 3) {
+        a.queue_text(b.identity().peer_id_hex, format!("{i}"))
+            .unwrap();
+    }
+    let first = la.flush().unwrap();
+    assert_eq!(
+        la.lock().pending.as_ref().unwrap().queued.len(),
+        TEXTS_PER_FLUSH
+    );
+    assert_eq!(pump(&la, &lb, first).len(), TEXTS_PER_FLUSH);
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 3);
+    assert_eq!(pump(&la, &lb, la.flush().unwrap()).len(), 3);
+}
+
+#[test]
+fn authenticated_user_replay_after_receiver_restart_and_deletion_is_suppressed() {
+    for burn in [None, Some(spec(BurnMode::OnOpen, 0, 604_800))] {
+        let dir = tempfile::tempdir().unwrap();
+        let phrase = generate_recovery_phrase().unwrap();
+        let a = node("Alice");
+        let b = open_node(&phrase, "Bob", dir.path());
+        a.add_contact_from_qr(b.qr_payload()).unwrap();
+        b.add_contact_from_qr(a.qr_payload()).unwrap();
+        let (la, lb, _) = link(&a, &b);
+        let id = a
+            .queue_message(
+                b.identity().peer_id_hex,
+                "only once in retained window".into(),
+                burn,
+            )
+            .unwrap();
+        let out = la.flush().unwrap();
+        let mut received = Vec::new();
+        for p in out.outgoing {
+            received.extend(lb.on_pdu(p).unwrap().received);
+        }
+        assert_eq!(received.len(), 1);
+        if burn.is_some() {
+            assert!(b.tick_burn(u64::MAX).contains(&id));
+        } else {
+            b.inner
+                .lock()
+                .db()
+                .delete_message(&parse_msg_id(&id).unwrap())
+                .unwrap();
+        }
+        la.abort_outgoing(out.batch_token.unwrap()).unwrap();
+        drop(lb);
+        drop(b);
+        let b = open_node(&phrase, "Bob", dir.path());
+        let (_, _, outs) = link(&a, &b);
+        assert!(outs.iter().all(|o| o.received.is_empty()));
+        assert!(b
+            .stored_messages(a.identity().peer_id_hex)
+            .unwrap()
+            .is_empty());
+        assert!(!b.burn_is_live(id));
+    }
+}
+
+#[test]
+fn received_message_and_tombstone_failure_roll_back_together_and_allow_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (phrase, key, b, a) = persisted_pair(dir.path());
+    let (la, lb, _) = link(&a, &b);
+    let id = a
+        .queue_message(
+            b.identity().peer_id_hex,
+            "receive transaction".into(),
+            Some(spec(BurnMode::OnOpen, 0, 604_800)),
+        )
+        .unwrap();
+    let out = la.flush().unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("a.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_receipt BEFORE INSERT ON received BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+    let mut failed = false;
+    for p in out.outgoing {
+        failed |= lb.on_pdu(p).is_err();
+    }
+    assert!(failed && !lb.is_established());
+    assert!(b
+        .stored_messages(a.identity().peer_id_hex)
+        .unwrap()
+        .is_empty());
+    assert!(!b.burn_is_live(id.clone()));
+    assert!(!b
+        .inner
+        .lock()
+        .db()
+        .received_before(
+            &parse_id(&a.identity().peer_id_hex).unwrap(),
+            &parse_msg_id(&id).unwrap()
+        )
+        .unwrap());
+    la.abort_outgoing(out.batch_token.unwrap()).unwrap();
+    db.execute_batch("DROP TRIGGER reject_receipt").unwrap();
+    drop(lb);
+    drop(b);
+    let b = OmcpNode::open(
+        phrase,
+        "Alice".into(),
+        dir.path().join("a.db").to_string_lossy().into(),
+        key,
+    )
+    .unwrap();
+    let (_, _, outs) = link(&a, &b);
+    assert_eq!(outs.iter().map(|o| o.received.len()).sum::<usize>(), 1);
+    assert!(b.burn_is_live(id));
+}
+
+#[test]
+fn send_text_queue_failure_cannot_leave_an_unqueued_visible_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, _, a, b) = persisted_pair(dir.path());
+    let (la, _lb, _) = link(&a, &b);
+    let db = rusqlite::Connection::open(dir.path().join("a.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_queue BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+    assert!(matches!(
+        la.send_text("must persist first".into()),
+        Err(FfiError::Storage { .. })
+    ));
+    assert!(a
+        .stored_messages(b.identity().peer_id_hex)
+        .unwrap()
+        .is_empty());
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 0);
+    assert!(la.is_established()); // no nonce was consumed
+    db.execute_batch("DROP TRIGGER reject_queue").unwrap();
+    assert!(la.send_text("retry".into()).unwrap().batch_token.is_some());
+}
+
+#[test]
+fn first_middle_final_file_pdu_failure_keeps_final_batch_durable() {
+    for fraction in [0, 1, 2] {
+        let (a, b, la, lb) = paired();
+        pump(&la, &lb, la.start().unwrap());
+        let peer = b.identity().peer_id_hex;
+        let bytes = vec![9; FILE_CHUNK_BYTES + 7];
+        a.queue_file(
+            peer.clone(),
+            "failed-final.bin".into(),
+            "binary".into(),
+            bytes.clone(),
+        )
+        .unwrap();
+        let out = la.flush().unwrap();
+        let n = match fraction {
+            0 => 0,
+            1 => out.outgoing.len() / 2,
+            _ => out.outgoing.len() - 1,
+        };
+        for p in out.outgoing.iter().take(n) {
+            assert!(lb.on_pdu(p.clone()).unwrap().files.is_empty());
+        }
+        la.abort_outgoing(out.batch_token.unwrap()).unwrap();
+        lb.shutdown();
+        assert_eq!(a.files_pending_for(peer.clone()), 1);
+        let (_, _, outs) = link(&a, &b);
+        let received: Vec<_> = outs.into_iter().flat_map(|o| o.files).collect();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].bytes, bytes);
+        assert_eq!(a.files_pending_for(peer), 0);
+    }
+}
+
+#[test]
+fn opened_while_batch_pending_immediately_shreds_queued_plaintext_without_ack() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let id = a
+        .queue_message(
+            b.identity().peer_id_hex,
+            "do not retain after opened".into(),
+            Some(spec(BurnMode::OnOpen, 0, 604_800)),
+        )
+        .unwrap();
+    let pending = la.flush().unwrap();
+    for p in pending.outgoing {
+        lb.on_pdu(p).unwrap();
+    }
+    b.open_burn(id.clone(), now_ms()).unwrap().unwrap();
+    let receipt = accept(&lb, lb.flush().unwrap());
+    let mut opened = Vec::new();
+    for p in receipt.outgoing {
+        let out = la.on_pdu(p).unwrap();
+        assert!(out.outgoing.is_empty());
+        opened.extend(out.opened);
+    }
+    assert_eq!(opened.len(), 1);
+    assert!(opened[0].shredded);
+    assert_eq!(a.queued_for(b.identity().peer_id_hex), 0);
+    assert!(!a.burn_is_live(id));
+    la.abort_outgoing(pending.batch_token.unwrap()).unwrap();
+    assert!(a.inner.lock().queues.values().all(|q| q.is_empty()));
+}
+
+#[test]
+fn failed_opened_persistence_does_not_consume_control_replay_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_, _, a, b) = persisted_pair(dir.path());
+    let (la, lb, _) = link(&a, &b);
+    let id = a
+        .queue_message(
+            b.identity().peer_id_hex,
+            "retry OPENED storage".into(),
+            Some(spec(BurnMode::OnOpen, 0, 604_800)),
+        )
+        .unwrap();
+    let pending = la.flush().unwrap();
+    for p in pending.outgoing {
+        lb.on_pdu(p).unwrap();
+    }
+    b.open_burn(id.clone(), now_ms()).unwrap().unwrap();
+    let receipt = lb.flush().unwrap();
+    let db = rusqlite::Connection::open(dir.path().join("a.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_shred BEFORE DELETE ON burn_keys BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+    let mut failed = false;
+    for p in receipt.outgoing {
+        failed |= la.on_pdu(p).is_err();
+    }
+    assert!(failed && !la.is_established());
+    assert!(a.inner.lock().queues.values().all(|q| q.is_empty()));
+    lb.abort_outgoing(receipt.batch_token.unwrap()).unwrap();
+    db.execute_batch("DROP TRIGGER reject_shred").unwrap();
+    let (_, _, outs) = link(&a, &b);
+    assert_eq!(outs.iter().map(|o| o.opened.len()).sum::<usize>(), 1);
+    assert!(!a.burn_is_live(id));
+    assert!(a
+        .stored_messages(b.identity().peer_id_hex)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn opened_cannot_shred_a_burn_message_sent_by_the_receipt_sender() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let id = b
+        .queue_message(
+            a.identity().peer_id_hex,
+            "Bob cannot remotely erase Alice's receipt".into(),
+            Some(spec(BurnMode::OnOpen, 0, 604_800)),
+        )
+        .unwrap();
+    pump(&lb, &la, lb.flush().unwrap());
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let fake = Queued {
+        envelope_id: random_id16().unwrap(),
+        created_ms: now_ms(),
+        control: true,
+        inner: Zeroizing::new(
+            core_burn::encode_app(
+                None,
+                &AppContent::Opened(core_burn::OpenedReceipt {
+                    msg_id: parse_msg_id(&id).unwrap(),
+                    opened_ms: now_ms(),
+                }),
+            )
+            .unwrap(),
+        ),
+    };
+    {
+        let mut node = b.inner.lock();
+        node.persist_queued(&peer, &fake).unwrap();
+        node.queues.entry(peer).or_default().push_back(fake);
+    }
+    let outs = pump_out(&lb, &la, lb.flush().unwrap());
+    assert!(outs.iter().all(|o| o.opened.is_empty()));
+    assert!(a.burn_is_live(id.clone()));
+    let records = a.stored_messages(b.identity().peer_id_hex).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id_hex, id);
+    assert!(!records[0].mine);
+}
+
+#[test]
+fn idle_media_request_starts_kept_file_reply_without_an_external_kick() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let offer = b
+        .queue_file(
+            a.identity().peer_id_hex,
+            "kept.txt".into(),
+            "text/plain".into(),
+            b"kept bytes".to_vec(),
+        )
+        .unwrap();
+    let original = pump_out(&lb, &la, lb.flush().unwrap());
+    assert_eq!(original.iter().map(|o| o.files.len()).sum::<usize>(), 1);
+    // Model the supported hash-bound missing-media placeholder without changing
+    // the live transport. No external kick/flush of Bob is permitted below.
+    {
+        let node = a.inner.lock();
+        node.update_message(&parse_msg_id(&offer.transfer_id_hex).unwrap(), |m| {
+            m.file.as_mut().unwrap().state = st::FILE_MISSING
+        })
+        .unwrap();
+    }
+    a.request_media(offer.transfer_id_hex).unwrap();
+    let outs = pump_out(&la, &lb, la.flush().unwrap());
+    let files: Vec<_> = outs.into_iter().flat_map(|o| o.files).collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].bytes, b"kept bytes");
 }

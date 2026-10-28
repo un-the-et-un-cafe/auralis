@@ -120,7 +120,7 @@
 "burn_toggle_on" = "Autodestruction après lecture";
 "burn_toggle_off" = "Ne pas détruire";
 "msg_queued" = "En attente";
-"msg_sent" = "Envoyé";
+"msg_sent" = "Remis au Bluetooth · Réception non confirmée";
 "msg_received" = "Reçu";
 "burn_title" = "Autodestruction après lecture";
 "burn_preview" = "🔥 Message";
@@ -153,7 +153,7 @@
 "file_state_received" = "%@ Mo · Reçu";
 "file_integrity_checked" = "Intégrité vérifiée";
 "file_state_sending" = "Envoi · %@ sur %@ Mo";
-"file_state_sent" = "%@ Mo · Envoyé";
+"file_state_sent" = "%@ Mo · Remis au Bluetooth";
 "file_state_receiving" = "Réception · %@ sur %@ Mo";
 "file_state_paused" = "En pause · hors de portée · %@ sur %@ Mo";
 "file_paused_meta" = "En attente du mesh · reprise automatique";

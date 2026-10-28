@@ -17,17 +17,36 @@ final class RustBridgeTests: XCTestCase {
         return (core, repo)
     }
 
-    /// Feed PDUs back and forth until both sides are quiet; collect what each side received.
-    func pump(_ a: CoreLink, _ b: CoreLink, _ first: LinkResult, into ra: MeshRepository, _ rb: MeshRepository) throws {
-        var queue: [(toB: Bool, pdus: [Data])] = [(true, first.outgoing)]
+    /// Simulate OS acceptance after all PDUs in a batch, including receive-before-callback
+    /// interleavings. Commit only retires sender work; this pump separately models peer receipt.
+    func pump(_ a: CoreLink, _ b: CoreLink, _ first: LinkResult, into ra: MeshRepository, _ rb: MeshRepository,
+              observe: ((Bool, LinkResult) -> Void)? = nil) throws {
+        func apply(_ output: LinkResult, toB: Bool) {
+            let repo = toB ? rb : ra
+            output.received.forEach(repo.onReceived)
+            output.opened.forEach(repo.onOpened)
+            repo.applyFileEvents(output)
+            if let peer = output.peerContactId { repo.markFlushed(peer, count: output.flushed) }
+            observe?(toB, output)
+        }
+        apply(first, toB: false)
+        var queue: [(toB: Bool, output: LinkResult)] = first.outgoing.isEmpty ? [] : [(true, first)]
         while !queue.isEmpty {
-            let (toB, pdus) = queue.removeFirst()
-            for p in pdus {
-                let out = try (toB ? b : a).onPdu(p)
-                let repo = toB ? rb : ra
-                out.received.forEach(repo.onReceived)
-                out.opened.forEach(repo.onOpened)
-                if !out.outgoing.isEmpty { queue.append((!toB, out.outgoing)) }
+            let (toB, output) = queue.removeFirst()
+            let sender = toB ? a : b
+            let receiver = toB ? b : a
+            for pdu in output.outgoing {
+                let received = try receiver.onPdu(pdu)
+                apply(received, toB: toB)
+                if !received.outgoing.isEmpty { queue.append((!toB, received)) }
+            }
+            let token = try XCTUnwrap(output.batchToken)
+            let committed = try sender.commitOutgoing(token)
+            apply(committed, toB: !toB)
+            if committed.morePending {
+                let next = try sender.flush()
+                apply(next, toB: !toB)
+                if !next.outgoing.isEmpty { queue.append((toB, next)) }
             }
         }
     }
@@ -135,12 +154,14 @@ final class RustBridgeTests: XCTestCase {
         while more {
             let out = try la.flush()
             flushes += 1
-            more = out.morePending
             ra.applyFileEvents(out)
             for p in out.outgoing {
                 XCTAssertLessThanOrEqual(p.count, 512)
                 rb.applyFileEvents(try lb.onPdu(p))
             }
+            let committed = try la.commitOutgoing(XCTUnwrap(out.batchToken))
+            ra.applyFileEvents(committed)
+            more = committed.morePending
         }
         XCTAssertGreaterThanOrEqual(flushes, 2)
         XCTAssertEqual(sink.bytes, data)
@@ -179,6 +200,95 @@ final class RustBridgeTests: XCTestCase {
         // OPENED receipt flows back and shreds the sender copy.
         try pump(lb, la, try lb.flush(), into: rb, ra)
         XCTAssertFalse(ca.burnIsLive(burnId))
+    }
+
+    func testTextBatchAbortAfterPartialTransportAcceptanceReplaysOnNewSession() throws {
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let peer = try ra.addContact(qr: cb.qrPayload(), action: .chatWithoutVerifying)
+        let sender = try rb.addContact(qr: ca.qrPayload(), action: .chatWithoutVerifying)
+        var la = try ca.openInitiatorLink(peer.id)
+        var lb = try cb.openResponderLink()
+        try pump(la, lb, la.start(), into: ra, rb)
+        let text = Array(repeating: "queued until OS acceptance", count: 100).joined(separator: " ")
+        try ra.send(peer.id, text: text)
+        let batch = try la.flush()
+        let token = try XCTUnwrap(batch.batchToken)
+        XCTAssertGreaterThan(batch.outgoing.count, 2)
+        XCTAssertEqual(batch.flushed, 0)
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+        XCTAssertTrue(try la.flush().outgoing.isEmpty, "pending flush must not reencrypt")
+        _ = try lb.onPdu(batch.outgoing[0])
+        try la.abortOutgoing(token)
+        XCTAssertFalse(la.isEstablished)
+        XCTAssertThrowsError(try la.commitOutgoing(token))
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+        lb.close()
+        la = try ca.openInitiatorLink(peer.id)
+        lb = try cb.openResponderLink()
+        try pump(la, lb, la.start(), into: ra, rb)
+        XCTAssertEqual(ca.queuedFor(peer.id), 0)
+        XCTAssertEqual(rb.messages[sender.id]?.map(\.text), [text])
+    }
+
+    func testCommitTokenCannotRetireDifferentBatchAndDoesNotClaimPeerDelivery() throws {
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let peer = try ra.addContact(qr: cb.qrPayload(), action: .chatWithoutVerifying)
+        _ = try rb.addContact(qr: ca.qrPayload(), action: .chatWithoutVerifying)
+        let la = try ca.openInitiatorLink(peer.id)
+        let lb = try cb.openResponderLink()
+        try pump(la, lb, la.start(), into: ra, rb)
+        let first = try la.sendText("OS acceptance is not peer delivery")
+        XCTAssertEqual(first.flushed, 0, "sendText also enters the durable queue first")
+        let token = try XCTUnwrap(first.batchToken)
+        XCTAssertThrowsError(try la.commitOutgoing("wrong-token"))
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+        // A transport may accept bytes that never reach the remote app. No peer receipt is inferred.
+        let committed = try la.commitOutgoing(token)
+        XCTAssertEqual(committed.flushed, 1)
+        XCTAssertEqual(ca.queuedFor(peer.id), 0)
+        XCTAssertTrue(rb.messages.isEmpty)
+        let duplicate = try la.commitOutgoing(token)
+        XCTAssertEqual(duplicate.flushed, 0)
+        try ra.send(peer.id, text: "next batch remains queued")
+        let next = try la.flush()
+        let nextToken = try XCTUnwrap(next.batchToken)
+        XCTAssertNotEqual(token, nextToken)
+        _ = try? la.commitOutgoing(token) // Either latest-idempotent or rejected; never commits next.
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+        try la.abortOutgoing(nextToken)
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+    }
+
+    func testHandshakeResponseBeforeWriteAcceptanceDoesNotLoseQueuedReply() throws {
+        let (ca, ra) = try node("Ana")
+        let (cb, rb) = try node("Ben")
+        let peer = try ra.addContact(qr: cb.qrPayload(), action: .chatWithoutVerifying)
+        let sender = try rb.addContact(qr: ca.qrPayload(), action: .chatWithoutVerifying)
+        try ra.send(peer.id, text: "after handshake acceptance")
+        let la = try ca.openInitiatorLink(peer.id)
+        let lb = try cb.openResponderLink()
+        let first = try la.start()
+        var reply: LinkResult?
+        for pdu in first.outgoing {
+            let out = try lb.onPdu(pdu)
+            if !out.outgoing.isEmpty { reply = out }
+        }
+        let response = try XCTUnwrap(reply)
+        for pdu in response.outgoing {
+            let out = try la.onPdu(pdu)
+            XCTAssertTrue(out.outgoing.isEmpty, "start batch still awaits its final OS callback")
+        }
+        XCTAssertTrue(la.isEstablished)
+        XCTAssertTrue(try la.flush().outgoing.isEmpty)
+        XCTAssertEqual(ca.queuedFor(peer.id), 1)
+        let committed = try la.commitOutgoing(XCTUnwrap(first.batchToken))
+        _ = try lb.commitOutgoing(XCTUnwrap(response.batchToken))
+        XCTAssertTrue(committed.morePending)
+        try pump(la, lb, la.flush(), into: ra, rb)
+        XCTAssertEqual(rb.messages[sender.id]?.map(\.text), ["after handshake acceptance"])
+        XCTAssertEqual(ca.queuedFor(peer.id), 0)
     }
 
     /// O2 + O3 + O4 with the real Argon2id / XChaCha20-Poly1305 sealing.
@@ -252,14 +362,8 @@ final class RustBridgeTests: XCTestCase {
         // v0.1.4a: the restored device has a new X25519 key, so it dials first.
         la = try c2.openInitiatorLink(bOnA.id)
         lb = try cb.openResponderLink()
-        var queue: [(toB: Bool, pdus: [Data])] = [(true, try la.start().outgoing)]
-        while !queue.isEmpty {
-            let (toB, pdus) = queue.removeFirst()
-            for p in pdus {
-                let out = try (toB ? lb : la).onPdu(p)
-                if toB { notices += out.restoreNotices; rb.applyFileEvents(out) }
-                if !out.outgoing.isEmpty { queue.append((!toB, out.outgoing)) }
-            }
+        try pump(la, lb, try la.start(), into: r2, rb) { toB, output in
+            if toB { notices += output.restoreNotices }
         }
         XCTAssertEqual(notices.count, 1)
         let c = try XCTUnwrap(rb.contact(aOnB.id))

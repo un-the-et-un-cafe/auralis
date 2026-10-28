@@ -120,7 +120,7 @@
 "burn_toggle_on" = "Burn after read";
 "burn_toggle_off" = "Don’t burn";
 "msg_queued" = "Queued";
-"msg_sent" = "Sent";
+"msg_sent" = "Sent to Bluetooth · Receipt unconfirmed";
 "msg_received" = "Received";
 "burn_title" = "Burn after read";
 "burn_preview" = "🔥 Message";
@@ -153,7 +153,7 @@
 "file_state_received" = "%@ MB · Received";
 "file_integrity_checked" = "Integrity checked";
 "file_state_sending" = "Sending · %@ of %@ MB";
-"file_state_sent" = "%@ MB · Sent";
+"file_state_sent" = "%@ MB · Sent to Bluetooth";
 "file_state_receiving" = "Receiving · %@ of %@ MB";
 "file_state_paused" = "Paused · out of range · %@ of %@ MB";
 "file_paused_meta" = "Waiting for mesh · resumes automatically";

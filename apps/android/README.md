@@ -151,12 +151,26 @@ recovery remains the explicit encrypted backup / phrase flow. File selection enf
 size cap while reading, even when a document provider reports an unknown or incorrect length.
 Drafts survive activity recreation only in memory, never in saved-state Bundles.
 
-**Remaining transport release blocker:** rejected or failed GATT operations now close the crypto
-session rather than skipping/replaying nonce-bearing PDUs. However, the core currently consumes
-the durable outbox when generating PDUs, before a transport acknowledgement. A radio failure can
-therefore leave a generated message or final file batch marked sent without delivery. A coordinated
-core/mobile acknowledgement-and-requeue contract and two-device failure-injection testing are
-required before claiming reliable delivery. Reconnection alone does not resolve this gap.
+**Transport acceptance, not peer delivery:** every Rust PDU batch has a token. Android
+commits it only after all central writes or peripheral notifications report successful OS
+callbacks. Until that durable commit, text and final-file work remain replayable; any
+submission, callback, or commit failure aborts the crypto session instead of skipping or
+reusing nonce-bearing PDUs. Sender progress/status changes only after commit. The UI says
+“Sent to Bluetooth · Not confirmed”: no protocol peer-delivery receipt is invented.
+
+The queue captures an operation ticket when a callback enters the app, before serial
+execution, so already-queued duplicate/late callbacks cannot consume a newer operation.
+Central callbacks also retain their connection object. Android peripheral callbacks expose
+only a device address, so reconnect is fenced while an old notification callback is still
+outstanding. Active peripheral connections plus retired fences are capped at eight.
+If Android never supplies a retired callback, that peer cannot reconnect until the transport
+restarts. Arbitrarily delayed duplicate OS callbacks arriving after a newer submission are
+not distinguishable by Android's API; the transport relies on the platform's per-operation
+callback contract. Real two-device radio/failure-injection testing remains required. OS
+acceptance does not prove that a peer received or persisted the bytes, and a process crash
+before local commit can replay work. Durable receiver replay guards suppress supported
+logical-message/file duplicates within the core’s bounded retention and restore limits;
+this is not an exactly-once delivery guarantee.
 
 ## Notifications (v0.1.2)
 - Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Auralis: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.

@@ -44,17 +44,8 @@ class ChatBackupBridgeTest {
         val la: CoreLink = a.core.openInitiatorLink(bId)
         val lb: CoreLink = b.core.openResponderLink()
         val first = la.start()
-        apply(a, first)
-        var pending = listOf(true to first.outgoing)
-        while (pending.isNotEmpty()) {
-            val next = mutableListOf<Pair<Boolean, List<ByteArray>>>()
-            for ((srcA, pdus) in pending) for (p in pdus) {
-                val (dst, l) = if (srcA) b to lb else a to la
-                val r = l.onPdu(p)
-                apply(dst, r)
-                if (r.outgoing.isNotEmpty()) next += !srcA to r.outgoing
-            }
-            pending = next
+        drainBatches(la, lb, first) { sourceA, result ->
+            apply(if (sourceA) a else b, result)
         }
         la.close(); lb.close()
     }

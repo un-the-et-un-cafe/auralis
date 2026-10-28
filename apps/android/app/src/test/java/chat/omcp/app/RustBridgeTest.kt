@@ -1,6 +1,7 @@
 package chat.omcp.app
 
 import chat.omcp.app.core.CoreLink
+import chat.omcp.app.core.LinkResult
 import chat.omcp.app.core.IncomingText
 import chat.omcp.app.core.RustOmcpCore
 import chat.omcp.app.core.WrongBackupPasswordException
@@ -30,17 +31,9 @@ class RustBridgeTest {
         assumeTrue("host libomcp_ffi not built", File(dir, "libomcp_ffi.so").exists())
     }
 
-    private fun pump(a: CoreLink, b: CoreLink, first: List<ByteArray>): List<IncomingText> {
+    private fun pump(a: CoreLink, b: CoreLink, first: LinkResult): List<IncomingText> {
         val got = mutableListOf<IncomingText>()
-        var toB = first
-        var toA = emptyList<ByteArray>()
-        while (toB.isNotEmpty() || toA.isNotEmpty()) {
-            val nextA = mutableListOf<ByteArray>()
-            toB.forEach { p -> assertTrue(p.size <= 512); b.onPdu(p).also { got += it.received; nextA += it.outgoing } }
-            val nextB = mutableListOf<ByteArray>()
-            (toA + nextA).forEach { p -> a.onPdu(p).also { got += it.received; nextB += it.outgoing } }
-            toA = emptyList(); toB = nextB
-        }
+        drainBatches(a, b, first) { _, result -> got += result.received }
         return got
     }
 
@@ -56,10 +49,10 @@ class RustBridgeTest {
         alice.queueText(b.id, "queued before link")
         val la = alice.openInitiatorLink(b.id)
         val lb = bob.openResponderLink()
-        val got = pump(la, lb, la.start().outgoing)
+        val got = pump(la, lb, la.start())
         assertTrue(la.isEstablished() && lb.isEstablished())
         assertEquals(listOf("queued before link"), got.map { it.text })
-        val back = pump(lb, la, lb.sendText("bonjour").outgoing)
+        val back = pump(lb, la, lb.sendText("bonjour"))
         assertEquals("bonjour", back.single().text)
         assertEquals(1, alice.pathStatus().nearbyPeers)
         la.close(); lb.close()
@@ -74,7 +67,7 @@ class RustBridgeTest {
         bob.addContactFromQr(alice.qrPayload())
         val la = alice.openInitiatorLink(b.id)
         val lb = bob.openResponderLink()
-        pump(la, lb, la.start().outgoing)
+        pump(la, lb, la.start())
         val data = ByteArray(200_000) { (it % 251).toByte() }
         val offer = alice.queueFile(b.id, "flyer.jpg", "image/jpeg", data)
         assertEquals(4, offer.chunks)
@@ -91,7 +84,8 @@ class RustBridgeTest {
                 r.fileProgress.forEach(repo::onFileProgress)
                 r.files.forEach(repo::onFileReceived)
             }
-        } while (out.morePending)
+            val committed = la.commitOutgoing(requireNotNull(out.batchToken))
+        } while (committed.morePending)
         assertTrue(flushes >= 2)
         val m = repo.messages.value.values.flatten().single()
         assertEquals(chat.omcp.app.data.FileAttachment.State.Received, m.file!!.state)
@@ -103,6 +97,101 @@ class RustBridgeTest {
         } catch (_: IllegalArgumentException) {
         }
         la.close(); lb.close()
+    }
+
+    @Test
+    fun queuedTextIsConsumedOnlyByTheMatchingTransportCommit() {
+        val alice = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Alice") }
+        val bob = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Bob") }
+        val contact = alice.addContactFromQr(bob.qrPayload())
+        bob.addContactFromQr(alice.qrPayload())
+        val a = alice.openInitiatorLink(contact.id)
+        val b = bob.openResponderLink()
+        pump(a, b, a.start())
+        val out = a.sendText("durable until OS acceptance")
+        val token = requireNotNull(out.batchToken)
+        assertEquals(0, out.flushed)
+        assertEquals(1, alice.queuedFor(contact.id))
+        assertEquals("Queued", alice.storedMessages(contact.id).single().status)
+        assertTrue(a.flush().outgoing.isEmpty())
+        org.junit.Assert.assertThrows(Exception::class.java) { a.commitOutgoing("wrong token") }
+        assertEquals(1, alice.queuedFor(contact.id))
+        out.outgoing.forEach { b.onPdu(it) }
+        val committed = a.commitOutgoing(token)
+        assertEquals(1, committed.flushed)
+        assertEquals(0, alice.queuedFor(contact.id))
+        assertEquals("Sent", alice.storedMessages(contact.id).single().status)
+        assertEquals(0, a.commitOutgoing(token).flushed)
+        a.close(); b.close()
+    }
+
+    @Test
+    fun firstMiddleAndFinalCallbackFailureReplayOneLogicalText() {
+        for (failure in 0..2) {
+            val dir = kotlin.io.path.createTempDirectory("omcp-transport-replay").toFile()
+            val phrases = List(2) { RustOmcpCore().generateRecoveryPhrase() }
+            val keys = List(2) { RustOmcpCore().generateStorageKey() }
+            fun reopen(side: Int) = RustOmcpCore().apply {
+                open(phrases[side], if (side == 0) "Alice" else "Bob", File(dir, "$side.db").path, keys[side])
+            }
+            var alice = reopen(0)
+            var bob = reopen(1)
+            val contact = alice.addContactFromQr(bob.qrPayload())
+            val sender = bob.addContactFromQr(alice.qrPayload())
+            var a = alice.openInitiatorLink(contact.id)
+            var b = bob.openResponderLink()
+            pump(a, b, a.start())
+            val out = a.sendText("fragmented reliable text ".repeat(100))
+            assertTrue(out.outgoing.size > 3)
+            // Failure is allowed even after the last bytes reached the peer: a callback
+            // is not a protocol receipt, and replay must not emit a second logical message.
+            val delivered = when (failure) { 0 -> 0; 1 -> out.outgoing.size / 2; else -> out.outgoing.size }
+            val received = mutableListOf<IncomingText>()
+            out.outgoing.take(delivered).forEach { received += b.onPdu(it).received }
+            a.abortOutgoing(requireNotNull(out.batchToken))
+            assertFalse(a.isEstablished())
+            assertEquals(1, alice.queuedFor(contact.id))
+            a.close(); b.close()
+            // Reopen both encrypted stores: neither transient seen caches nor old link
+            // ownership may be required to preserve/replay the logical work safely.
+            alice = reopen(0)
+            bob = reopen(1)
+            assertEquals(1, alice.queuedFor(contact.id))
+            a = alice.openInitiatorLink(contact.id)
+            b = bob.openResponderLink()
+            received += pump(a, b, a.start())
+            assertEquals(1, received.size)
+            assertEquals(1, bob.storedMessages(sender.id).size)
+            assertEquals(0, alice.queuedFor(contact.id))
+            org.junit.Assert.assertThrows(Exception::class.java) { a.commitOutgoing(requireNotNull(out.batchToken)) }
+            a.close(); b.close()
+        }
+    }
+
+    @Test
+    fun finalFileBatchAbortReplaysWithoutASecondReceivedFile() {
+        val alice = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Alice") }
+        val bob = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Bob") }
+        val contact = alice.addContactFromQr(bob.qrPayload())
+        bob.addContactFromQr(alice.qrPayload())
+        var a = alice.openInitiatorLink(contact.id)
+        var b = bob.openResponderLink()
+        pump(a, b, a.start())
+        alice.queueFile(contact.id, "small.txt", "text/plain", ByteArray(2000) { 42 })
+        val out = a.flush()
+        assertTrue(out.fileProgress.isEmpty()) // sender progress is transport-committed
+        var received = 0
+        out.outgoing.forEach { received += b.onPdu(it).files.size }
+        assertEquals(1, received)
+        assertEquals("Queued", alice.storedMessages(contact.id).single().status)
+        a.abortOutgoing(requireNotNull(out.batchToken))
+        a.close(); b.close()
+        a = alice.openInitiatorLink(contact.id)
+        b = bob.openResponderLink()
+        drainBatches(a, b, a.start()) { _, result -> received += result.files.size }
+        assertEquals(1, received)
+        assertEquals("Sent", alice.storedMessages(contact.id).single().status)
+        a.close(); b.close()
     }
 
     // ---- Burn after read end to end: two Rust nodes behind two MeshRepositories ----
@@ -135,17 +224,8 @@ class RustBridgeTest {
             r.received.forEach(s.repo::onReceived)
             r.opened.forEach(s.repo::onOpened)
         }
-        apply(if (fromA) a else b, first)
-        var pending = listOf(fromA to first.outgoing)
-        while (pending.isNotEmpty()) {
-            val next = mutableListOf<kotlin.Pair<Boolean, List<ByteArray>>>()
-            for ((srcA, pdus) in pending) for (p in pdus) {
-                val (dst, link) = if (srcA) b to lb else a to la
-                val r = link.onPdu(p)
-                apply(dst, r)
-                if (r.outgoing.isNotEmpty()) next += !srcA to r.outgoing
-            }
-            pending = next
+        drainBatches(la, lb, first, fromA) { sourceA, result ->
+            apply(if (sourceA) a else b, result)
         }
     }
 

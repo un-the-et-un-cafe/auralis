@@ -480,7 +480,7 @@ fun ChatThreadScreen(
                     } else {
                         val meta = time(m.timeMs) + " · " + when (m.status) {
                             ChatMessage.Status.Queued -> "Queued"
-                            ChatMessage.Status.Sent -> "Sent · Mesh"
+                            ChatMessage.Status.Sent -> stringResource(R.string.message_transport_accepted)
                             ChatMessage.Status.Received -> "Mesh"
                             ChatMessage.Status.System -> ""
                         }

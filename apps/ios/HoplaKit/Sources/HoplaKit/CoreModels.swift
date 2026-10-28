@@ -214,6 +214,8 @@ public struct FileFailureInfo: Equatable, Sendable {
 /// PDUs to transmit (in order) + decrypted messages from one link step.
 public struct LinkResult: Sendable {
     public var outgoing: [Data]
+    /// Commit only after every PDU is accepted by the OS transport; not peer receipt.
+    public var batchToken: String?
     public var received: [IncomingText]
     public var established: Bool
     public var peerContactId: String?
@@ -222,7 +224,7 @@ public struct LinkResult: Sendable {
     public var fileProgress: [FileProgressInfo]
     public var files: [ReceivedFileInfo]
     public var fileFailures: [FileFailureInfo]
-    /// More file chunks wait: call `flush()` again once the BLE write/notify queue is empty.
+    /// More work waits: call `flush()` only after the current batch has committed.
     public var morePending: Bool
     /// RS1: contacts now on a new (restored) device; the core already stored the system notice.
     public var restoreNotices: [RestoreNoticeInfo] = []
@@ -236,12 +238,13 @@ public struct LinkResult: Sendable {
                 opened: [OpenedInfo] = [], fileProgress: [FileProgressInfo] = [], files: [ReceivedFileInfo] = [],
                 fileFailures: [FileFailureInfo] = [], morePending: Bool = false,
                 restoreNotices: [RestoreNoticeInfo] = [], mediaRequests: [MediaRequestInfo] = [],
-                resendAsks: [MediaRequestInfo] = [], mediaUpdates: [MediaUpdateInfo] = []) {
+                resendAsks: [MediaRequestInfo] = [], mediaUpdates: [MediaUpdateInfo] = [], batchToken: String? = nil) {
         self.restoreNotices = restoreNotices
         self.mediaRequests = mediaRequests
         self.resendAsks = resendAsks
         self.mediaUpdates = mediaUpdates
         self.outgoing = outgoing
+        self.batchToken = batchToken
         self.received = received
         self.established = established
         self.peerContactId = peerContactId
@@ -476,6 +479,10 @@ public protocol CoreLink: AnyObject {
     func onPdu(_ pdu: Data) throws -> LinkResult
     func sendText(_ text: String) throws -> LinkResult
     func flush() throws -> LinkResult
+    /// Atomically retire a batch accepted by the OS, never an end-to-end delivery ACK.
+    func commitOutgoing(_ token: String) throws -> LinkResult
+    /// Discard this session and its ciphertext, preserving logical durable work for reconnect.
+    func abortOutgoing(_ token: String) throws
     var isEstablished: Bool { get }
     func close()
 }

@@ -268,3 +268,28 @@ own manually dispatched run. Signed distribution and physical-device acceptance
 remain separate gates even after all build jobs pass. Adding these files alone
 does not publish a repository, sign or deploy an app, submit it to a store, or
 change external repository settings.
+
+## Known v1 reliability work still open
+
+The [durable transport-acceptance stage](TRANSPORT_ACCEPTANCE.md) addresses the
+sender queue/OS-acceptance boundary, not a peer-delivery acknowledgement. Its
+local tests do not replace exact-commit hosted/native/device release gates.
+
+**Receive-file finalization is the next bounded stage and blocks a v1 durable
+file-delivery claim.** `NodeState::persist_file_events` currently persists
+`FILE_RECEIVED` before Android/iOS `MeshRepository.onFileReceived` saves the
+returned bytes and calls `setReceivedFilePath`. A crash between those steps can
+leave no saved bytes/path while the completed-transfer guard suppresses replay.
+Add recoverable staging/finalization and crash/reopen tests both before native
+writing and after writing but before path acknowledgement, retaining peer/ID
+ownership and immutable fully finalized transfers. The sender-ACK patch does
+not fix or claim receive-side crash safety.
+
+**Safe downgrade/store-error recovery is also a v1 release gate.** The Rust
+schema-v3 refusal in older schema-v2 code is not sufficient: Android and iOS
+`MeshRepository.loadCore` catch generic store-unavailable errors, attempt to
+rename the database, delete its rollback journal, and open a fresh store.
+Downgrading may silently take that path; original database/journal preservation
+is not guaranteed. Classify errors and implement non-destructive, explicit
+recovery before claiming downgrade safety. The sender-ACK stage and its Rust
+failed-rollback quarantine do not fix this native recovery behavior.
