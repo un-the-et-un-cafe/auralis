@@ -1,6 +1,8 @@
 """Exercise KVM permission decisions without touching devices or invoking sudo."""
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -150,6 +152,25 @@ class KvmAccessTests(unittest.TestCase):
         self.assertIn("user:2222:r--", self.entries)
         self.assertNotIn("user:1001:", self.entries)
         self.assertIn("mask::rw-", self.entries)
+
+    def test_drift_without_our_uid_reports_actual_acl_without_mutation(self):
+        kvm.prepare()
+        self.entries = "user::rw-\ngroup::rw-\nmask::rw-\nother::---"
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, "UID entry was already absent"):
+                kvm.cleanup()
+        self.assertEqual(self.run.call_count, 1)
+        self.assertIn("KVM cleanup observed mode: 0660", output.getvalue())
+        self.assertIn("KVM cleanup named UID 1001 present: False", output.getvalue())
+        self.assertIn(self.entries, output.getvalue())
+
+    def test_drift_cleanup_verifies_uid_entry_was_removed(self):
+        kvm.prepare()
+        self.entries = self.entries.replace("group::rw-", "user:2222:r--\ngroup::rw-")
+        self.run.side_effect = None  # A purported successful command must not hide a retained UID.
+        with self.assertRaisesRegex(RuntimeError, "could not verify removal"):
+            kvm.cleanup()
 
     def test_replaced_device_is_not_touched_during_cleanup(self):
         kvm.prepare()

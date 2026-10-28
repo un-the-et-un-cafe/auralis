@@ -95,15 +95,27 @@ def cleanup():
     require(saved.get("uid") == uid and saved.get("identity") == device_identity(),
             "KVM state or device changed; refusing to touch a different UID/device.")
     current = acl()
+    # Device ACLs contain only host UID/permission metadata, never app secrets.
+    # Preserve the actual drift evidence rather than guessing at its cause.
+    print(f"KVM cleanup verified device identity (device, inode, rdev, owner, group): {saved['identity']}", flush=True)
+    print(f"KVM cleanup observed mode: {stat.S_IMODE(os.lstat(DEVICE).st_mode):04o}", flush=True)
+    print(f"KVM cleanup observed ACL:\n{current}", flush=True)
+    uid_present = any(line.startswith(f"user:{uid}:") for line in current.splitlines())
+    print(f"KVM cleanup named UID {uid} present: {uid_present}", flush=True)
     if current == granted_acl(uid):
         # No other named entries exist: remove just ours and the now-unneeded mask.
         set_acl("--remove", f"user:{uid},mask::")
         require(acl() == BASE_ACL, "KVM baseline ACL was not restored.")
     elif current != BASE_ACL:
         # Do not overwrite unexpected concurrent ACL changes. Revoke only our UID.
-        if any(line.startswith(f"user:{uid}:") for line in current.splitlines()):
+        if uid_present:
             set_acl("--remove", f"user:{uid}")
-        raise RuntimeError("Unexpected KVM ACL drift; removed only this job's UID grant.")
+            remaining = acl()
+            print(f"KVM ACL after removing this job's UID:\n{remaining}", flush=True)
+            require(not any(line.startswith(f"user:{uid}:") for line in remaining.splitlines()),
+                    "KVM cleanup could not verify removal of this job's UID grant.")
+            raise RuntimeError("Unexpected KVM ACL drift; removed only this job's UID grant.")
+        raise RuntimeError("Unexpected KVM ACL drift; this job's UID entry was already absent, so no ACL was changed.")
     path.unlink()
     print(f"KVM UID {uid} grant revoked; original ACL restored.")
 
