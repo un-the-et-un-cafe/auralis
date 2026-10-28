@@ -1,8 +1,12 @@
 package chat.omcp.app
 
 import android.view.WindowManager
+import android.os.SystemClock
+import android.util.Log
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -32,6 +36,24 @@ class AppSmokeTest {
     private fun text(id: Int) = compose.activity.getString(id)
     private fun clickText(id: Int) = compose.onNodeWithText(text(id)).performScrollTo().performClick()
     private fun tab(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
+    private fun composer() = compose.onNodeWithTag("message-composer")
+    private fun assertDraft(expected: String) = composer().assert(
+        SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(expected)),
+    )
+
+    private fun recreateThreadWithDraft(expected: String) {
+        // Establish that text input has committed before testing whether recreation retains it.
+        assertDraft(expected)
+        compose.activityRule.scenario.recreate()
+        // recreate() waits for Activity RESUMED, not the restored Compose/NavHost destination.
+        // Wait only for the editor to exist: an empty or changed draft MUST still fail below.
+        val started = SystemClock.elapsedRealtime()
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithTag("message-composer").fetchSemanticsNodes().size == 1
+        }
+        Log.i("AppSmokeTest", "Restored composer attached after ${SystemClock.elapsedRealtime() - started} ms")
+        assertDraft(expected)
+    }
     private fun back() { hideKeyboard(); device.pressBack(); compose.waitForIdle() }
     private fun hideKeyboard() {
         compose.runOnIdle {
@@ -107,9 +129,8 @@ class AppSmokeTest {
         clickText(R.string.cta_continue)
         clickText(R.string.chat_without_verifying)
         denyPermissions(required = false)
-        compose.onNodeWithText(text(R.string.auralis_message_placeholder)).performTextInput("Draft survives rotation")
-        compose.activityRule.scenario.recreate()
-        compose.onNodeWithText("Draft survives rotation").assertExists()
+        composer().performTextInput("Draft survives rotation")
+        recreateThreadWithDraft("Draft survives rotation")
         assertEquals(peerId, app.repository.core.identity()!!.peerIdHex)
         assertSecure()
         compose.onNodeWithContentDescription(text(R.string.file_send)).performClick()

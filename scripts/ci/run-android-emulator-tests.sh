@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Ephemeral GitHub-hosted Linux only. Never relax /dev/kvm or app privacy flags.
 set -euo pipefail
+STAGE=preflight
+trap 'result=$?; echo "Android emulator failed during $STAGE at line $LINENO (exit $result)." >&2' ERR
 
 API=${1:?usage: run-android-emulator-tests.sh 31|35}
 case "$API" in
@@ -85,32 +87,30 @@ cleanup() {
   exit "$result"
 }
 trap cleanup EXIT
+STAGE=adb-server
+# Start the transport before QEMU attempts its own post-boot ADB configuration.
+"$ADB" start-server
+STAGE=emulator-launch
 "$EMULATOR" -avd auralis-ci -port 5554 -accel on -gpu swiftshader \
   -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
   -cores 2 -memory 2048 > "$REPORTS/emulator.log" 2>&1 &
 EMULATOR_PID=$!
-"$ADB" start-server
-# Bound both transport readiness and Android framework boot, preserving evidence.
-timeout 180 "$ADB" -s "$ANDROID_SERIAL" wait-for-device
-BOOTED=false
-for ((attempt=0; attempt<120; attempt++)); do
-  if ! kill -0 "$EMULATOR_PID" 2>/dev/null; then
-    cat "$REPORTS/emulator.log" >&2; exit 1
-  fi
-  if [[ $(timeout 10 "$ADB" -s "$ANDROID_SERIAL" shell getprop sys.boot_completed | tr -d '\r') == 1 ]]; then
-    BOOTED=true; break
-  fi
-  sleep 2
-done
-if [[ "$BOOTED" != true ]]; then echo 'Android framework did not finish booting.' >&2; exit 1; fi
+STAGE=android-readiness
+# A boot property can precede a transient ADB restart. Require stable transport
+# plus package/input/window services; never retry or skip failed app tests.
+python3 "$(dirname "$0")/wait_for_android.py" "$ADB" "$ANDROID_SERIAL" "$EMULATOR_PID" \
+  2>&1 | tee "$REPORTS/readiness.txt"
 "$ADB" -s "$ANDROID_SERIAL" logcat -v threadtime > "$REPORTS/logcat.txt" 2>&1 &
 LOGCAT_PID=$!
+STAGE=wake-screen
 "$ADB" -s "$ANDROID_SERIAL" shell input keyevent KEYCODE_WAKEUP
 "$ADB" -s "$ANDROID_SERIAL" shell input keyevent KEYCODE_MENU
 if [[ "$API" == 35 ]]; then
+  STAGE=accessibility-configuration
   # Accessibility configuration on this disposable test AVD, never a user's device.
   "$ADB" -s "$ANDROID_SERIAL" shell settings put system font_scale 2.0
   "$ADB" -s "$ANDROID_SERIAL" shell cmd uimode night yes
 fi
 # No permission pre-grants, demo data, simulated cloud backups or secure-window bypass.
+STAGE=instrumentation
 ./gradlew connectedDebugAndroidTest --no-daemon --console=plain

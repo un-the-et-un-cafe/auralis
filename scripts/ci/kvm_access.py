@@ -17,6 +17,9 @@ import sys
 
 DEVICE = "/dev/kvm"
 BASE_ACL = "user::rw-\ngroup::rw-\nother::---"
+# Observed after real emulator use in run 40712973802: our named UID was
+# already absent, retaining only this redundant, access-neutral mask.
+BASE_MASK_ACL = "user::rw-\ngroup::rw-\nmask::rw-\nother::---"
 
 
 def require(condition, message):
@@ -98,15 +101,25 @@ def cleanup():
     # Device ACLs contain only host UID/permission metadata, never app secrets.
     # Preserve the actual drift evidence rather than guessing at its cause.
     print(f"KVM cleanup verified device identity (device, inode, rdev, owner, group): {saved['identity']}", flush=True)
-    print(f"KVM cleanup observed mode: {stat.S_IMODE(os.lstat(DEVICE).st_mode):04o}", flush=True)
+    mode = stat.S_IMODE(os.lstat(DEVICE).st_mode)
+    print(f"KVM cleanup observed mode: {mode:04o}", flush=True)
     print(f"KVM cleanup observed ACL:\n{current}", flush=True)
     uid_present = any(line.startswith(f"user:{uid}:") for line in current.splitlines())
     print(f"KVM cleanup named UID {uid} present: {uid_present}", flush=True)
-    if current == granted_acl(uid):
+    if current == granted_acl(uid) and mode == 0o660:
         # No other named entries exist: remove just ours and the now-unneeded mask.
         set_acl("--remove", f"user:{uid},mask::")
-        require(acl() == BASE_ACL, "KVM baseline ACL was not restored.")
-    elif current != BASE_ACL:
+        require(device_identity() == saved["identity"] and acl() == BASE_ACL
+                and stat.S_IMODE(os.lstat(DEVICE).st_mode) == mode,
+                "KVM baseline ACL was not restored with unchanged owner/group/other rights.")
+    elif current == BASE_MASK_ACL and mode == 0o660:
+        # This exact form has no named user/group entries. Removing just its rw
+        # mask preserves owner rw, group rw, other none; it grants nobody access.
+        set_acl("--remove", "mask::")
+        require(device_identity() == saved["identity"] and acl() == BASE_ACL
+                and stat.S_IMODE(os.lstat(DEVICE).st_mode) == mode,
+                "KVM baseline ACL was not restored with unchanged owner/group/other rights.")
+    elif current != BASE_ACL or mode != 0o660:
         # Do not overwrite unexpected concurrent ACL changes. Revoke only our UID.
         if uid_present:
             set_acl("--remove", f"user:{uid}")
@@ -114,10 +127,10 @@ def cleanup():
             print(f"KVM ACL after removing this job's UID:\n{remaining}", flush=True)
             require(not any(line.startswith(f"user:{uid}:") for line in remaining.splitlines()),
                     "KVM cleanup could not verify removal of this job's UID grant.")
-            raise RuntimeError("Unexpected KVM ACL drift; removed only this job's UID grant.")
-        raise RuntimeError("Unexpected KVM ACL drift; this job's UID entry was already absent, so no ACL was changed.")
+            raise RuntimeError("Unexpected KVM ACL drift or mode change; removed only this job's UID grant.")
+        raise RuntimeError("Unexpected KVM ACL drift or mode change; this job's UID entry was already absent, so no ACL was changed.")
     path.unlink()
-    print(f"KVM UID {uid} grant revoked; original ACL restored.")
+    print(f"KVM UID {uid} absent; original ACL and owner/group/other rights confirmed.")
 
 
 if __name__ == "__main__":

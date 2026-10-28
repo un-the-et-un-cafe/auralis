@@ -67,6 +67,10 @@ class KvmAccessTests(unittest.TestCase):
         elif entries == "user:1001,mask::":
             self.assertEqual(operation, "--remove")
             self.entries = kvm.BASE_ACL
+        elif entries == "mask::":
+            self.assertEqual(operation, "--remove")
+            self.assertEqual(self.entries, kvm.BASE_MASK_ACL)
+            self.entries = kvm.BASE_ACL
         else:
             self.assertEqual((operation, entries), ("--remove", "user:1001"))
             self.entries = "\n".join(line for line in self.entries.splitlines()
@@ -155,7 +159,7 @@ class KvmAccessTests(unittest.TestCase):
 
     def test_drift_without_our_uid_reports_actual_acl_without_mutation(self):
         kvm.prepare()
-        self.entries = "user::rw-\ngroup::rw-\nmask::rw-\nother::---"
+        self.entries = "user::rw-\nuser:2222:r--\ngroup::rw-\nmask::rw-\nother::---"
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(RuntimeError, "UID entry was already absent"):
@@ -164,6 +168,69 @@ class KvmAccessTests(unittest.TestCase):
         self.assertIn("KVM cleanup observed mode: 0660", output.getvalue())
         self.assertIn("KVM cleanup named UID 1001 present: False", output.getvalue())
         self.assertIn(self.entries, output.getvalue())
+
+    def test_observed_mask_only_state_restores_baseline_without_access_change(self):
+        kvm.prepare()
+        self.entries = kvm.BASE_MASK_ACL  # This job's named UID was already absent.
+        identity = kvm.device_identity()
+        kvm.cleanup()
+        self.assertEqual(self.entries, kvm.BASE_ACL)
+        self.assertEqual(kvm.device_identity(), identity)
+        self.assertEqual(stat.S_IMODE(self.info.st_mode), 0o660)
+        self.assertEqual(self.run.call_args.args[0][4:6], ["--remove", "mask::"])
+        self.assertFalse(kvm.state_path().exists())
+
+    def test_mask_only_state_with_different_mode_is_not_normalized(self):
+        kvm.prepare()
+        self.entries = kvm.BASE_MASK_ACL
+        self.info.st_mode = stat.S_IFCHR | 0o1660
+        with self.assertRaisesRegex(RuntimeError, "ACL drift or mode change"):
+            kvm.cleanup()
+        self.assertEqual(self.run.call_count, 1)
+
+    def test_other_masks_and_rights_are_not_normalized(self):
+        kvm.prepare()
+        for entries in [kvm.BASE_MASK_ACL.replace("mask::rw-", "mask::r--"),
+                        kvm.BASE_MASK_ACL.replace("mask::rw-", "mask::rwx"),
+                        kvm.BASE_MASK_ACL.replace("group::rw-", "group::r--"),
+                        kvm.BASE_MASK_ACL.replace("other::---", "other::r--"),
+                        kvm.BASE_MASK_ACL.replace("group::rw-", "group::rw-\ngroup:2222:r--")]:
+            with self.subTest(acl=entries):
+                self.entries = entries
+                with self.assertRaisesRegex(RuntimeError, "ACL drift"):
+                    kvm.cleanup()
+        self.assertEqual(self.run.call_count, 1)
+
+    def test_mask_removal_verifies_baseline_and_effective_rights(self):
+        kvm.prepare()
+        self.entries = kvm.BASE_MASK_ACL
+
+        def faulty_command(command, **kwargs):
+            self.mutate_acl(command, **kwargs)
+            self.info.st_mode = stat.S_IFCHR | 0o640
+
+        self.run.side_effect = faulty_command
+        with self.assertRaisesRegex(RuntimeError, "unchanged owner/group/other rights"):
+            kvm.cleanup()
+        self.assertTrue(kvm.state_path().exists())
+
+    def test_mask_removal_denial_is_not_retried_and_keeps_state(self):
+        kvm.prepare()
+        self.entries = kvm.BASE_MASK_ACL
+        self.run.side_effect = subprocess.CalledProcessError(1, ["sudo"])
+        with self.assertRaises(subprocess.CalledProcessError):
+            kvm.cleanup()
+        self.assertEqual(self.run.call_count, 2)  # One prior grant, one denied removal.
+        self.assertEqual(self.entries, kvm.BASE_MASK_ACL)
+        self.assertTrue(kvm.state_path().exists())
+
+    def test_mask_removal_rejects_success_with_mask_still_present(self):
+        kvm.prepare()
+        self.entries = kvm.BASE_MASK_ACL
+        self.run.side_effect = None
+        with self.assertRaisesRegex(RuntimeError, "baseline ACL was not restored"):
+            kvm.cleanup()
+        self.assertTrue(kvm.state_path().exists())
 
     def test_drift_cleanup_verifies_uid_entry_was_removed(self):
         kvm.prepare()

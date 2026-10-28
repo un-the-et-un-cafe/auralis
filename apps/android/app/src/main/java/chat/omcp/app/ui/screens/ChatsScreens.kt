@@ -87,6 +87,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import java.text.DateFormat
 import java.util.Date
 import chat.omcp.app.ui.components.ChatRow
@@ -370,7 +371,7 @@ fun ChatThreadScreen(
                 TextField(
                     value = draft,
                     onValueChange = vm::setDraft,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("message-composer"),
                     placeholder = { Text(stringResource(R.string.auralis_message_placeholder)) },
                     maxLines = 5,
                     colors = TextFieldDefaults.colors(
