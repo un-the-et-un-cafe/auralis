@@ -21,7 +21,7 @@ x25519-dalek = { version = "=2.0.1", features = ["static_secrets"] }
 ml-kem = { version = "=0.3.3", features = ["getrandom"] }
 
 # Hybrid ck mix per PROTOCOL §21.5: HKDF-SHA-384(salt=ck, ikm=mlkem_ss, info=OMCP-Noise-Hybrid-v1)
-hkdf = "=0.12.4"
+hkdf = "=0.13.0"
 sha2 = "=0.10.8"
 
 getrandom = "=0.2.15"
