@@ -1,0 +1,61 @@
+name: Auralis Telegram status (manual only)
+
+# Deliberately no schedule, push, PR, workflow_run, or repository_dispatch trigger.
+# Enable only after token rotation, recipient confirmation, and code review.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_send:
+        description: Send one public Auralis status report to the confirmed Telegram destination
+        required: true
+        type: boolean
+        default: false
+      pr_number:
+        description: Optional Auralis PR number; otherwise report the current default-branch head
+        required: false
+        type: string
+      progress_json:
+        description: Optional public-only progress JSON; see docs/TELEGRAM_STATUS.md (never enter credentials)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: auralis-telegram-status
+  cancel-in-progress: false
+
+jobs:
+  status:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'un-the-et-un-cafe/auralis' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      vars.TELEGRAM_STATUS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed default-branch revision (never PR code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/telegram_status.py
+            scripts/test_telegram_status.py
+          sparse-checkout-cone-mode: false
+      - name: Run offline security and reporting tests without delivery credentials
+        run: python3 -I scripts/test_telegram_status.py
+      - name: Send one report (no retries)
+        env:
+          TELEGRAM_STATUS_ENABLED: ${{ vars.TELEGRAM_STATUS_ENABLED }}
+          TELEGRAM_SEND_CONFIRMED: ${{ inputs.confirm_send }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          STATUS_PR_NUMBER: ${{ inputs.pr_number }}
+          STATUS_PROGRESS_JSON: ${{ inputs.progress_json }}
+        run: python3 -I scripts/telegram_status.py
