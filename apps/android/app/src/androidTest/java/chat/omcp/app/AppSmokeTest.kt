@@ -5,8 +5,9 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.getOrNull
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,7 +39,9 @@ class AppSmokeTest {
     private fun tab(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
     private fun composer() = compose.onNodeWithTag("message-composer")
     private fun assertDraft(expected: String) = composer().assert(
-        SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(expected)),
+        SemanticsMatcher("EditableText text equals '$expected'") {
+            it.config.hasExactEditableText(expected)
+        },
     )
 
     private fun recreateThreadWithDraft(expected: String) {
@@ -165,3 +168,8 @@ class AppSmokeTest {
         assertSecure()
     }
 }
+
+// IME composition can decorate EditableText with an underline. The draft contract is
+// exact text, not presentation annotations; missing or changed editor text still fails.
+internal fun SemanticsConfiguration.hasExactEditableText(expected: String): Boolean =
+    getOrNull(SemanticsProperties.EditableText)?.text == expected
