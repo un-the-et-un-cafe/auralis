@@ -9,6 +9,7 @@ import UserNotifications
 struct OpenMeshChatApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -22,20 +23,34 @@ struct OpenMeshChatApp: App {
             .environmentObject(model)
             .auralisTheme()
             .screenSecurity()
-            .onChange(of: model.onboarded) { _, on in if on { model.startMesh() } }
+            .onChange(of: model.onboarded) { _, on in
+                if on { model.startMesh(); delegate.requestNotifications() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { model.refreshTimeSensitiveState() }
+            }
+            .task { if model.onboarded { delegate.requestNotifications() } }
         }
     }
 }
 
 /// Notifications default ON (asked after onboarding) and content-free APNs registration.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var notificationsRequested = false
+
     func application(_ app: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { ok, _ in
-            if ok { DispatchQueue.main.async { app.registerForRemoteNotifications() } }
-        }
         return true
+    }
+
+    @MainActor
+    func requestNotifications() {
+        guard !notificationsRequested else { return }
+        notificationsRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { ok, _ in
+            if ok { DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() } }
+        }
     }
 
     /// STUB: the APNs token would be registered with the user's gateway mailbox. The gateway

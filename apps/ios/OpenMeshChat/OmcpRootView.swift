@@ -9,10 +9,7 @@ struct AuralisRootView: View {
     @AppStorage("omcp.iosBleTipDismissed") private var iosBleTipDismissed = false
     @State private var showIosBleTip = false
 
-    private var gate: BackupGate {
-        _ = model.revision
-        return model.repo.backupGate()
-    }
+    private var gate: BackupGate { model.backupGate }
 
     var body: some View {
         TabView {

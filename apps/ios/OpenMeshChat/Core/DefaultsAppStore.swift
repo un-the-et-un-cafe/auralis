@@ -75,13 +75,25 @@ enum Keychain {
     }
 
     @discardableResult
-    static func write(_ data: Data, account: String, synchronizable: Bool) -> Bool {
-        delete(account: account, synchronizable: synchronizable)
-        var q = query(account, synchronizable)
-        q[kSecValueData as String] = data
-        // iCloud Keychain item must be AfterFirstUnlock (not ThisDeviceOnly) to sync.
-        q[kSecAttrAccessible as String] = synchronizable ? kSecAttrAccessibleAfterFirstUnlock : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess
+    static func write(_ data: Data, account: String, synchronizable: Bool,
+                      update: (CFDictionary, CFDictionary) -> OSStatus = SecItemUpdate,
+                      add: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = SecItemAdd) -> Bool {
+        let q = query(account, synchronizable)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: synchronizable ? kSecAttrAccessibleAfterFirstUnlock : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        // Update in place: deleting first would destroy the only recovery/storage key if
+        // the replacement failed (locked Keychain, unavailable access group, storage error).
+        let status = update(q as CFDictionary, attributes as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        let item = q.merging(attributes) { _, new in new }
+        let added = add(item as CFDictionary, nil)
+        // Another writer may have inserted between the lookup and add. Retry the update,
+        // never delete the winning item merely to make the insert succeed.
+        if added == errSecDuplicateItem { return update(q as CFDictionary, attributes as CFDictionary) == errSecSuccess }
+        return added == errSecSuccess
     }
 
     static func delete(account: String, synchronizable: Bool) {

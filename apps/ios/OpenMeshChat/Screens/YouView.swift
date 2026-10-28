@@ -27,27 +27,33 @@ struct YouView: View {
                     NavigationLink { MyQrView() } label: {
                         AuralisActionRow(icon: "qrcode", title: L("my_qr_title"), detail: L("auralis_identity_qr_detail"))
                     }
+                    .accessibilityIdentifier("you.myQR")
                 }
                 AuralisSettingsSection(L("auralis_your_control")) {
                     NavigationLink { BackupSettingsView() } label: {
                         AuralisActionRow(icon: "arrow.triangle.2.circlepath", title: L("backup_title"), detail: L("backup_row_desc"))
                     }
+                    .accessibilityIdentifier("you.backup")
                     Divider().overlay(c.line)
                     NavigationLink { PrivacySettingsView() } label: {
                         AuralisActionRow(icon: "hand.raised", title: L("privacy_title"), detail: L("privacy_row_desc"))
                     }
+                    .accessibilityIdentifier("you.privacy")
                     Divider().overlay(c.line)
                     NavigationLink { NotificationSettingsView() } label: {
                         AuralisActionRow(icon: "bell", title: L("notif_title"), detail: L("notif_row_desc"))
                     }
+                    .accessibilityIdentifier("you.notifications")
                     Divider().overlay(c.line)
                     NavigationLink { StorageSettingsView() } label: {
                         AuralisActionRow(icon: "externaldrive", title: L("storage_title"), detail: L("storage_keep_title"))
                     }
+                    .accessibilityIdentifier("you.storage")
                     Divider().overlay(c.line)
                     NavigationLink { GatewaySettingsView() } label: {
                         AuralisActionRow(icon: "antenna.radiowaves.left.and.right", title: L("gateway_title"), detail: L("gateway_row_desc"))
                     }
+                    .accessibilityIdentifier("you.gateway")
                 }
                 AuralisCard {
                     AuralisWordmark()
@@ -70,6 +76,7 @@ struct NotificationSettingsView: View {
         AuralisSettingsPage {
             AuralisSettingsSection(footer: L("notif_private_footer")) {
                 Toggle(L("notif_private"), isOn: Binding(get: { s.privateNotifications }, set: { s.privateNotifications = $0; model.touch() }))
+                    .accessibilityIdentifier("settings.privateNotifications")
                 Toggle(L("notif_hide_lock"), isOn: Binding(get: { s.hideOnLockScreen }, set: { s.hideOnLockScreen = $0; model.touch() }))
             }
             AuralisSettingsSection(L("notif_preview")) {

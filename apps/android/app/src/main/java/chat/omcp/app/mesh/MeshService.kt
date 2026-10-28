@@ -23,6 +23,12 @@ class MeshService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // A sticky restart can follow a permission revocation. Android 14+ validates the
+        // connectedDevice prerequisites in startForeground(), not only when BLE is used.
+        if (!MeshPermissions.hasBle(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         MeshNotifications.ensureChannels(this)
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
@@ -34,8 +40,10 @@ class MeshService : Service() {
             .setOngoing(true)
             .setContentIntent(open)
             .build()
-        ServiceCompat.startForeground(this, 1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        if (!MeshPermissions.hasBle(this)) {
+        try {
+            ServiceCompat.startForeground(this, 1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } catch (_: SecurityException) {
+            // The grant may have changed between the check above and the framework call.
             stopSelf()
             return START_NOT_STICKY
         }

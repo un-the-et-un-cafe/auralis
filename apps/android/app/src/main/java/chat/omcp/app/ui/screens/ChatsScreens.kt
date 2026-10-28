@@ -64,6 +64,7 @@ import androidx.compose.ui.semantics.Role
 import chat.omcp.app.ui.components.AuralisWordmark
 import chat.omcp.app.ui.conversationContacts
 import androidx.compose.runtime.LaunchedEffect
+import chat.omcp.app.files.readFileBounded
 import kotlinx.coroutines.delay
 import chat.omcp.app.core.PathKind
 import chat.omcp.app.data.BackupGate
@@ -71,6 +72,7 @@ import chat.omcp.app.data.ChatMessage
 import chat.omcp.app.data.FileAttachment
 import chat.omcp.app.data.FileAttachment.State as S
 import chat.omcp.app.ui.vm.ChatThreadViewModel
+import chat.omcp.app.ui.vm.PickedFile
 import chat.omcp.app.ui.vm.ChatsViewModel
 import chat.omcp.app.ui.components.Callout
 import chat.omcp.app.ui.components.CalloutKind
@@ -85,6 +87,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import java.text.DateFormat
 import java.util.Date
 import chat.omcp.app.ui.components.ChatRow
@@ -228,9 +231,9 @@ fun ChatThreadScreen(
     val msgs = all[vm.contactId].orEmpty()
     val contact = vm.contact()
     val c = LocalOmcpColors.current
-    var draft by remember { mutableStateOf("") }
-    // Per-message 🔥 (long-press Send). Falls back to the chat's Burn-after-read default.
-    var burnNext by remember { mutableStateOf(false) }
+    val composer by vm.composer.collectAsState()
+    val draft = composer.draft
+    val burnNext = composer.burnNext
     var opened by remember { mutableStateOf<OpenedBurn?>(null) }
     LaunchedEffect(vm.contactId) {
         while (true) { vm.tickBurn(); delay(250) }
@@ -261,17 +264,24 @@ fun ChatThreadScreen(
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
-        var name = "file"
-        var size = 0L
-        ctx.contentResolver.query(uri, null, null, null, null)?.use { cur ->
-            if (cur.moveToFirst()) {
-                cur.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name = cur.getString(it) }
-                cur.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 }?.let { size = cur.getLong(it) }
+        val resolver = ctx.applicationContext.contentResolver
+        vm.loadFileSelection {
+            // Document providers may be remote or revoked. The VM owns this off-main query
+            // across recreation, and discards late results from an older selection.
+            var name = "file"
+            var size = 0L // unknown: the streaming cap remains authoritative
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cur ->
+                if (cur.moveToFirst()) {
+                    cur.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 && !cur.isNull(it) }
+                        ?.let { name = cur.getString(it).ifBlank { "file" } }
+                    cur.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !cur.isNull(it) }
+                        ?.let { size = cur.getLong(it).coerceAtLeast(0) }
+                }
             }
-        }
-        val resolver = ctx.contentResolver
-        vm.onFilePicked(name, size, resolver.getType(uri) ?: "application/octet-stream") {
-            resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("unreadable")
+            val maxBytes = vm.repo.core.maxFileBytes()
+            PickedFile(name, size, resolver.getType(uri) ?: "application/octet-stream") {
+                resolver.openInputStream(uri)?.use { it.readFileBounded(maxBytes) } ?: error("unreadable")
+            }
         }
     }
     val fileError by vm.fileError.collectAsState()
@@ -354,14 +364,14 @@ fun ChatThreadScreen(
             ) {
                 IconButton(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.AttachFile, contentDescription = stringResource(R.string.file_attach)) }
                 if (vm.chatBurn() == null) {
-                    IconToggleButton(checked = burnNext, onCheckedChange = { burnNext = it }) {
+                    IconToggleButton(checked = burnNext, onCheckedChange = vm::setBurnNext) {
                         Icon(Icons.Default.LocalFireDepartment, stringResource(R.string.auralis_burn_toggle), tint = if (burnNext) MaterialTheme.colorScheme.primary else c.ink3)
                     }
                 }
                 TextField(
                     value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.weight(1f),
+                    onValueChange = vm::setDraft,
+                    modifier = Modifier.weight(1f).testTag("message-composer"),
                     placeholder = { Text(stringResource(R.string.auralis_message_placeholder)) },
                     maxLines = 5,
                     colors = TextFieldDefaults.colors(
@@ -383,14 +393,9 @@ fun ChatThreadScreen(
                         .background(if (draft.isNotBlank()) MaterialTheme.colorScheme.primary else c.surface2)
                         .combinedClickable(
                             role = Role.Button,
-                            onClick = {
-                                if (draft.isNotBlank()) {
-                                    vm.send(draft, if (burnNext) vm.chatBurn() ?: BurnSpec.onOpen() else null)
-                                    draft = ""; burnNext = false
-                                }
-                            },
+                            onClick = { vm.sendDraft() },
                             onLongClickLabel = burnToggleLabel,
-                            onLongClick = { burnNext = !burnNext },
+                            onLongClick = { vm.setBurnNext(!burnNext) },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -404,6 +409,9 @@ fun ChatThreadScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            if (composer.sendFailed) {
+                Callout(stringResource(R.string.auralis_send_failed), CalloutKind.Danger, Modifier.padding(12.dp))
+            }
             // Path banner: mesh / gateway / mixed / queued only.
             PathBanner(
                 kind = path,

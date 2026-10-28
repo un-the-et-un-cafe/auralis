@@ -21,7 +21,16 @@ import chat.omcp.app.core.ReceivedFileInfo
 import chat.omcp.app.data.FileAttachment
 import chat.omcp.app.data.FileSink
 import org.junit.Test
+import chat.omcp.app.ui.vm.PickedFile
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ChatAndContactViewModelTest {
     private val core = FakeOmcpCore()
     private val store = InMemoryAppStore()
@@ -147,4 +156,122 @@ class ChatAndContactViewModelTest {
         val d = vm.decision(NetworkType.Cellular, metered = true)
         assertTrue(d.bridge && d.meteredWarning)
     }
+    @Test
+    fun `failed queue keeps draft and burn choice until retry succeeds`() {
+        var fail = true
+        val failingCore = object : chat.omcp.app.core.OmcpCore by core {
+            override fun queueMessage(contactId: String, text: String, burn: chat.omcp.app.burn.BurnSpec?): String {
+                if (fail) throw IllegalStateException("storage unavailable")
+                return core.queueMessage(contactId, text, burn)
+            }
+        }
+        val repo = MeshRepository(failingCore, store)
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id)
+        vm.setDraft("private draft")
+        vm.setBurnNext(true)
+        assertFalse(vm.sendDraft())
+        assertEquals("private draft", vm.composer.value.draft)
+        assertTrue(vm.composer.value.burnNext)
+        assertTrue(vm.composer.value.sendFailed)
+        assertTrue(repo.messages.value.isEmpty())
+        fail = false
+        assertTrue(vm.sendDraft())
+        assertEquals("", vm.composer.value.draft)
+        assertFalse(vm.composer.value.burnNext)
+        assertFalse(vm.composer.value.sendFailed)
+        assertNotNull(repo.messages.value[contact.id]!!.single().burn)
+    }
+
+    @Test
+    fun `unreadable picked file shows error and double confirm never queues twice`() {
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id, kotlinx.coroutines.Dispatchers.Unconfined)
+        vm.onFilePicked("revoked.pdf", 10, "application/pdf") { throw SecurityException("revoked") }
+        vm.confirmFile()
+        assertTrue(vm.fileError.value)
+        assertTrue(repo.messages.value.isEmpty())
+        vm.dismissFileError()
+        var reads = 0
+        vm.onFilePicked("valid.pdf", 1, "application/pdf") { reads++; byteArrayOf(1) }
+        vm.confirmFile(); vm.confirmFile()
+        assertEquals(1, reads)
+        assertEquals(1, repo.messages.value[contact.id]!!.size)
+        assertFalse(vm.fileError.value)
+    }
+
+    @Test
+    fun `cancelled blocking read cannot send after view model is cleared`() {
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id, kotlinx.coroutines.Dispatchers.Unconfined)
+        val models = androidx.lifecycle.ViewModelStore().also { it.put("thread", vm) }
+        vm.onFilePicked("slow.pdf", 1, "application/pdf") {
+            models.clear() // destruction while the document provider is returning
+            byteArrayOf(1)
+        }
+        vm.confirmFile()
+        assertTrue(repo.messages.value.isEmpty())
+        assertFalse(vm.fileError.value) // lifecycle cancellation is not a file-read failure
+    }
+
+    @Test
+    fun `slow obsolete provider result cannot replace the latest picked file`() = runTest {
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id, StandardTestDispatcher(testScheduler))
+        val oldProvider = CompletableDeferred<Unit>()
+        vm.loadFileSelection {
+            withContext(NonCancellable) { oldProvider.await() }
+            PickedFile("old.pdf", 1, "application/pdf") { byteArrayOf(1) }
+        }
+        runCurrent()
+        vm.loadFileSelection { PickedFile("latest.pdf", 1, "application/pdf") { byteArrayOf(2) } }
+        runCurrent()
+        assertEquals("latest.pdf", vm.fileConfirm.value!!.name)
+        oldProvider.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("latest.pdf", vm.fileConfirm.value!!.name)
+        vm.confirmFile()
+        advanceUntilIdle()
+        assertEquals("latest.pdf", repo.messages.value[contact.id]!!.single().file!!.name)
+        assertFalse(vm.fileError.value)
+    }
+
+    @Test
+    fun `obsolete provider error cannot clear a newer confirmation`() = runTest {
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id, StandardTestDispatcher(testScheduler))
+        val oldProvider = CompletableDeferred<Unit>()
+        vm.loadFileSelection {
+            withContext(NonCancellable) {
+                oldProvider.await()
+                throw SecurityException("old provider revoked")
+            }
+        }
+        runCurrent()
+        vm.loadFileSelection { PickedFile("latest.pdf", 1, "application/pdf") { byteArrayOf(2) } }
+        runCurrent()
+        oldProvider.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("latest.pdf", vm.fileConfirm.value!!.name)
+        assertFalse(vm.fileError.value)
+    }
+
+    @Test
+    fun `clearing the view model discards an outstanding provider query`() = runTest {
+        val contact = repo.addContact(bobQr, false)
+        val vm = ChatThreadViewModel(repo, contact.id, StandardTestDispatcher(testScheduler))
+        val models = androidx.lifecycle.ViewModelStore().also { it.put("thread", vm) }
+        val provider = CompletableDeferred<Unit>()
+        vm.loadFileSelection {
+            withContext(NonCancellable) { provider.await() }
+            PickedFile("old.pdf", 1, "application/pdf") { byteArrayOf(1) }
+        }
+        runCurrent()
+        models.clear()
+        provider.complete(Unit)
+        advanceUntilIdle()
+        assertNull(vm.fileConfirm.value)
+        assertFalse(vm.fileError.value)
+    }
+
 }

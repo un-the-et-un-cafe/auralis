@@ -12,6 +12,27 @@ use zeroize::Zeroizing;
 use crate::files::OutgoingFile;
 use crate::{BurnMeta, BurnSpec, Contact, FfiError, LinkOutput, NodeState, Queued};
 
+/// An incoming transfer may fill a same-peer non-burn file record, but never
+/// replace an immutable completed file or active outgoing transfer. Restored
+/// own-sent media is also re-fetchable from its hash-bound placeholder.
+pub(crate) fn accepts_incoming_file(m: &MessageRec, peer: &[u8; 32]) -> bool {
+    let Some(f) = m.file.as_ref() else {
+        return false;
+    };
+    m.peer == *peer
+        && m.burn.is_none()
+        && f.state != st::FILE_RECEIVED
+        && (!m.mine
+            || (f.hash.as_ref().is_some_and(|h| h.len() == 32)
+                && matches!(
+                    f.state,
+                    st::FILE_MISSING
+                        | st::FILE_REQUESTED
+                        | st::FILE_UNAVAILABLE
+                        | st::FILE_RECEIVING
+                )))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MessageStatus {
     Queued,
@@ -272,6 +293,9 @@ impl NodeState {
                     }),
                 })?,
                 None => {}
+                Some(m)
+                    if (p.incoming && !accepts_incoming_file(&m, &peer))
+                        || (!p.incoming && (m.peer != peer || !m.mine || m.file.is_none())) => {}
                 Some(_) => self.update_message(&id, |m| {
                     let Some(f) = m.file.as_mut() else { return };
                     if matches!(f.state, st::FILE_RECEIVED | st::FILE_INTEGRITY_FAILED) {
@@ -303,6 +327,7 @@ impl NodeState {
                 locator: Some(id.to_vec()),
             };
             match self.db.message(&id)? {
+                Some(m) if !accepts_incoming_file(&m, &peer) => {}
                 Some(_) => self.update_message(&id, |m| m.file = Some(file))?,
                 None => self.db.put_message(&MessageRec {
                     id,
@@ -321,7 +346,14 @@ impl NodeState {
         }
         for e in &out.file_failures[from.2..] {
             let id = crate::parse_msg_id(&e.transfer_id_hex)?;
+            let peer = crate::parse_id(&e.contact_id)?;
             self.update_message(&id, |m| {
+                // File failures currently originate only from incoming data.
+                // An attacker-chosen ID must not mutate another peer's record
+                // or collide with an outgoing transfer to the same peer.
+                if !accepts_incoming_file(m, &peer) {
+                    return;
+                }
                 if let Some(f) = m.file.as_mut() {
                     f.state = if e.reason == "integrity" {
                         st::FILE_INTEGRITY_FAILED

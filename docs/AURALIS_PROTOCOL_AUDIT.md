@@ -1,5 +1,8 @@
 # Auralis: OMCP interoperability and implementation audit
 
+> Historical foundation audit: implementation observations below describe the original audited baseline. Subsequent compatible resource/ownership hardening is documented in [RESOURCE_LIMITS.md](RESOURCE_LIMITS.md) and admitted only by the explicit reviewed-hash manifest. This is not independent security certification.
+
+
 Reviewed 2026-10-28 against upstream commit
 `233210d5b13f443798428d126266c520999ad387` (`open-mesh-chat`, chat-backup merge).
 This is a source review and regression-test addition, **not an independent
@@ -257,15 +260,30 @@ lines, not from source test annotations. `git diff` confirmed no changes to
 in the audit-owned files.
 
 `scripts/check_protocol_invariants.py` is a standard-library-only source guard.
-It compares protected files against the pinned upstream commit and detects new,
-changed and removed files. It refuses symlinks and reports missing baselines as
-errors. An intentional reviewed protocol upgrade can choose a new `--base`; the
-checker is not a permanent ban on protocol changes. It deliberately excludes UI,
-test and build-metadata changes. Seven isolated temporary-repository regression
-scenarios passed: unchanged tree, modified/removed/added protected files,
-unrelated file, symlink and unavailable baseline; an additional protected-directory
-symlink rejection check passed. The checker reads Git archive
-members in memory and never extracts an archive onto disk.
+The original immutable upstream commit remains the comparison anchor. Normal CI
+accepts only exact per-file exceptions in `scripts/protocol-review-manifest.json`:
+original upstream SHA-256, accepted SHA-256, compatibility rationale and named
+regression evidence. Everything else in the protected scopes must match upstream.
+New/removed files, unlisted edits, stale hashes, duplicate or malformed manifest
+entries, absent baselines and symlinks fail closed. Embedded tests in protected
+Rust source files are protected too; UI and build metadata are not protected by
+this source guard. The checker reads Git archive members in memory and never
+extracts an archive onto disk.
+
+The manifest is not an approval mechanism or independent security audit. For each
+exception, a reviewer must inspect the source diff against upstream, determine
+whether wire/crypto/persistence compatibility is retained, review the named tests,
+and approve the code **and exact manifest entry together**. CI never generates or
+updates accepted hashes automatically. Do not reset the baseline to `HEAD`, use
+wildcards, skip the gate or call a hash update an audit. If a protected file needs
+a later change, that exact change needs the same review again.
+
+`python3 -m unittest discover -s scripts/tests -v` exercises accepted and unchanged
+trees, unreviewed modified/added/removed paths, invalid/duplicate metadata and
+protected symlinks. `--upstream-only` is a diagnostic comparison that ignores all
+exceptions and exposes the complete divergence from upstream; it is expected to
+fail after approved hardening. It is not the normal CI mode. The command no longer
+accepts a movable replacement `--base`.
 
 Run the repository's canonical gates, without weakening them:
 
@@ -286,8 +304,8 @@ and SY3 models catch-up rather than proving full radio-network behavior.
 ### Acceptance ladder (do not skip the final two levels)
 
 1. **Source preservation:** compare protocol-bearing Rust and protocol documents
-   against the pinned upstream commit; review any difference explicitly. Keep
-   new tests separate. Verify matching Android/iOS UUIDs and FFI constants.
+   against the pinned upstream commit plus explicit reviewed per-file hashes;
+   inspect and approve every difference and its regression evidence. Verify matching Android/iOS UUIDs and FFI constants.
 2. **Core and platform checks:** run all canonical Rust gates; Android
    `assembleDebug testDebugUnitTest`; iOS HoplaKit tests, string parity, generated
    bridge tests and Xcode build/tests. Do not treat bridge tests skipped because

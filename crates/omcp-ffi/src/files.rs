@@ -18,7 +18,7 @@ use std::collections::{HashMap, VecDeque};
 
 use omcp_core::burn::AppContent;
 use omcp_core::files::{
-    check_file_size, decrypt_and_reassemble, encrypt_file, ContentKey, FileChunk, FileMeta,
+    check_file_size, encrypt_file, ContentKey, FileChunk, FileMeta, FileReassembler,
 };
 use zeroize::Zeroizing;
 
@@ -30,6 +30,10 @@ pub const FILE_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const FILE_CHUNKS_PER_FLUSH: usize = 2;
 /// Concurrent incoming transfers per peer (bounds receiver memory).
 const MAX_INCOMING_PER_PEER: usize = 2;
+/// Node-wide budgets include paused/reconnecting transfers; local admission
+/// policy, not smaller OMCP file/chunk limits. See docs/RESOURCE_LIMITS.md.
+const MAX_INCOMING_TRANSFERS: usize = 8;
+const MAX_INCOMING_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FileOffer {
@@ -89,8 +93,8 @@ pub(crate) struct IncomingFile {
     peer: [u8; 32],
     meta: FileMeta,
     key: ContentKey,
-    chunks: Vec<Option<FileChunk>>,
-    have: u32,
+    receiver: FileReassembler,
+    reserved_bytes: usize,
 }
 
 #[derive(Default)]
@@ -171,38 +175,81 @@ fn fail(out: &mut LinkOutput, id: &[u8; 16], peer: &[u8; 32], reason: &str) {
     });
 }
 
+fn incoming_budget_allows(
+    count: usize,
+    peer_count: usize,
+    reserved: usize,
+    required: usize,
+) -> bool {
+    count < MAX_INCOMING_TRANSFERS
+        && peer_count < MAX_INCOMING_PER_PEER
+        && reserved
+            .checked_add(required)
+            .is_some_and(|n| n <= MAX_INCOMING_BYTES)
+}
+
 /// Receiver: a file offer arrived.
 pub(crate) fn on_offer(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mut LinkOutput) {
     let Ok((id, rest)) = split_id(body) else {
         return;
     };
-    if rest.len() < 32 || st.incoming.contains_key(&id) {
-        return;
+    if st.incoming.get(&id).is_some_and(|f| f.peer != peer) {
+        // An ID collision from a different authenticated contact must not erase
+        // the original contact's partial transfer.
+        return fail(out, &id, &peer, "invalid");
+    }
+    if rest.len() < 32 {
+        st.incoming.remove(&id);
+        return fail(out, &id, &peer, "invalid");
     }
     let mut k = [0u8; 32];
     k.copy_from_slice(&rest[..32]);
     let key = ContentKey(k);
     let Ok(meta) = FileMeta::decode(&rest[32..]) else {
+        st.incoming.remove(&id);
         return fail(out, &id, &peer, "invalid");
     };
-    let len = meta.chunk_plaintext_len as u64;
-    let expect = if meta.size == 0 {
-        1
-    } else if len == 0 {
-        0
-    } else {
-        meta.size.div_ceil(len)
+    let Ok(buffer_bytes) = FileReassembler::required_bytes(&meta) else {
+        st.incoming.remove(&id);
+        return fail(out, &id, &peer, "invalid");
     };
-    if check_file_size(meta.size).is_err()
-        || len == 0
-        || len > FILE_CHUNK_BYTES as u64
-        || u64::from(meta.num_chunks) != expect
-    {
+    if meta.chunk_plaintext_len as usize > FILE_CHUNK_BYTES {
+        st.incoming.remove(&id);
         return fail(out, &id, &peer, "invalid");
     }
-    if st.incoming.values().filter(|f| f.peer == peer).count() >= MAX_INCOMING_PER_PEER {
+    if let Some(f) = st.incoming.get(&id) {
+        if f.meta == meta && f.key == key {
+            // Reconnect replays the same offer. Retain authenticated partial data
+            // and do not reserve a second buffer or reset receipt progress.
+            out.file_progress.push(FileProgress {
+                transfer_id_hex: hex::encode(id),
+                contact_id: hex::encode(peer),
+                incoming: true,
+                name: meta.name,
+                size: meta.size,
+                done_chunks: f.receiver.received_chunks(),
+                total_chunks: meta.num_chunks,
+            });
+            return;
+        }
+        st.incoming.remove(&id);
+        return fail(out, &id, &peer, "invalid");
+    }
+    // Metadata is bounded to an envelope before decode. Twice its wire size
+    // covers its strings, wrapped-key structs/ciphertexts and allocation slack.
+    let reserved_bytes = buffer_bytes + 2 * rest.len() + std::mem::size_of::<IncomingFile>() + 256;
+    let reserved: usize = st.incoming.values().map(|f| f.reserved_bytes).sum();
+    if !incoming_budget_allows(
+        st.incoming.len(),
+        st.incoming.values().filter(|f| f.peer == peer).count(),
+        reserved,
+        reserved_bytes,
+    ) {
         return fail(out, &id, &peer, "busy");
     }
+    let Ok(receiver) = FileReassembler::new(&meta) else {
+        return fail(out, &id, &peer, "busy");
+    };
     out.file_progress.push(FileProgress {
         transfer_id_hex: hex::encode(id),
         contact_id: hex::encode(peer),
@@ -212,15 +259,14 @@ pub(crate) fn on_offer(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
         done_chunks: 0,
         total_chunks: meta.num_chunks,
     });
-    let n = meta.num_chunks as usize;
     st.incoming.insert(
         id,
         IncomingFile {
             peer,
             meta,
             key,
-            chunks: vec![None; n],
-            have: 0,
+            receiver,
+            reserved_bytes,
         },
     );
 }
@@ -236,18 +282,23 @@ pub(crate) fn on_chunk(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
     if f.peer != peer {
         return;
     }
+    // Reject oversized encoded chunks before FileChunk::decode copies any bytes.
+    if rest.len() > 20 + FILE_CHUNK_BYTES + 16 {
+        st.incoming.remove(&id);
+        return fail(out, &id, &peer, "invalid");
+    }
     let Ok(c) = FileChunk::decode(rest) else {
         st.incoming.remove(&id);
         return fail(out, &id, &peer, "invalid");
     };
-    let i = c.chunk_index as usize;
-    if i >= f.chunks.len() {
+    if let Err(error) = f.receiver.push(&f.key, &c) {
         st.incoming.remove(&id);
-        return fail(out, &id, &peer, "invalid");
-    }
-    if f.chunks[i].is_none() {
-        f.chunks[i] = Some(c);
-        f.have += 1;
+        let reason = if matches!(error, omcp_core::error::OmcpError::File("chunk open")) {
+            "integrity"
+        } else {
+            "invalid"
+        };
+        return fail(out, &id, &peer, reason);
     }
     out.file_progress.push(FileProgress {
         transfer_id_hex: hex::encode(id),
@@ -255,17 +306,16 @@ pub(crate) fn on_chunk(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
         incoming: true,
         name: f.meta.name.clone(),
         size: f.meta.size,
-        done_chunks: f.have,
+        done_chunks: f.receiver.received_chunks(),
         total_chunks: f.meta.num_chunks,
     });
-    if f.have < f.meta.num_chunks {
+    if f.receiver.received_chunks() < f.meta.num_chunks {
         return;
     }
     let Some(f) = st.incoming.remove(&id) else {
         return;
     };
-    let chunks: Vec<FileChunk> = f.chunks.into_iter().flatten().collect();
-    match decrypt_and_reassemble(&f.meta, &f.key, &chunks) {
+    match f.receiver.finish() {
         Ok(bytes) => out.files.push(ReceivedFile {
             transfer_id_hex: hex::encode(id),
             contact_id: hex::encode(peer),
@@ -289,5 +339,107 @@ impl FileState {
                 f.peer = *new;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer(id: [u8; 16], meta: &FileMeta, key: &ContentKey) -> Vec<u8> {
+        let mut body = id.to_vec();
+        body.extend_from_slice(key.as_bytes());
+        body.extend_from_slice(&meta.encode().unwrap());
+        body
+    }
+
+    fn chunk(id: [u8; 16], chunk: &FileChunk) -> Vec<u8> {
+        let mut body = id.to_vec();
+        body.extend_from_slice(&chunk.encode());
+        body
+    }
+
+    #[test]
+    fn node_wide_file_budget_boundaries_do_not_require_large_allocations() {
+        let max_file = 56_250_000 + 4096;
+        assert!(incoming_budget_allows(0, 0, 0, max_file));
+        assert!(incoming_budget_allows(1, 1, max_file, max_file));
+        assert!(!incoming_budget_allows(2, 0, 2 * max_file, max_file));
+        assert!(incoming_budget_allows(0, 0, 0, MAX_INCOMING_BYTES));
+        assert!(!incoming_budget_allows(0, 0, 0, MAX_INCOMING_BYTES + 1));
+        assert!(!incoming_budget_allows(0, 0, usize::MAX, 1));
+        assert!(!incoming_budget_allows(MAX_INCOMING_TRANSFERS, 0, 0, 1));
+        assert!(!incoming_budget_allows(0, MAX_INCOMING_PER_PEER, 0, 1));
+    }
+
+    #[test]
+    fn incoming_ids_are_bounded_across_peers_and_invalid_chunk_releases_admission() {
+        let (meta, key, _) = encrypt_file(b"xy", "x", "binary", &[], 1).unwrap();
+        let mut st = FileState::default();
+        let mut out = LinkOutput::default();
+        for i in 0..MAX_INCOMING_TRANSFERS as u8 {
+            on_offer(&mut st, [i; 32], &offer([i; 16], &meta, &key), &mut out);
+        }
+        assert_eq!(st.incoming.len(), MAX_INCOMING_TRANSFERS);
+        on_offer(&mut st, [99; 32], &offer([99; 16], &meta, &key), &mut out);
+        assert_eq!(out.file_failures.last().unwrap().reason, "busy");
+        assert!(!st.incoming.contains_key(&[99; 16]));
+        // Malformed body for a transfer owned by this peer frees its whole budget.
+        on_chunk(&mut st, [0; 32], &[0; 16], &mut out);
+        assert_eq!(st.incoming.len(), MAX_INCOMING_TRANSFERS - 1);
+        on_offer(&mut st, [99; 32], &offer([99; 16], &meta, &key), &mut out);
+        assert!(st.incoming.contains_key(&[99; 16]));
+    }
+
+    #[test]
+    fn reconnect_offer_is_idempotent_but_conflicting_or_cross_peer_ids_cannot_overwrite() {
+        let (meta, key, chunks) = encrypt_file(b"xy", "x", "binary", &[], 1).unwrap();
+        let mut st = FileState::default();
+        let mut out = LinkOutput::default();
+        let id = [1; 16];
+        let body = offer(id, &meta, &key);
+        on_offer(&mut st, [1; 32], &body, &mut out);
+        on_chunk(&mut st, [1; 32], &chunk(id, &chunks[0]), &mut out);
+        let reserved = st.incoming[&id].reserved_bytes;
+        on_offer(&mut st, [1; 32], &body, &mut out);
+        assert_eq!(st.incoming[&id].receiver.received_chunks(), 1);
+        assert_eq!(st.incoming[&id].reserved_bytes, reserved);
+        on_offer(&mut st, [2; 32], &body, &mut out);
+        assert_eq!(out.file_failures.last().unwrap().reason, "invalid");
+        assert_eq!(st.incoming[&id].receiver.received_chunks(), 1);
+        on_chunk(&mut st, [2; 32], &[1; 16], &mut out);
+        assert!(st.incoming.contains_key(&id));
+        on_chunk(&mut st, [1; 32], &chunk(id, &chunks[0]), &mut out);
+        assert_eq!(st.incoming[&id].receiver.received_chunks(), 1);
+        on_chunk(&mut st, [1; 32], &chunk(id, &chunks[1]), &mut out);
+        assert_eq!(out.files.last().unwrap().bytes, b"xy");
+        assert!(st.incoming.is_empty());
+        on_offer(&mut st, [1; 32], &body, &mut out);
+        on_offer(
+            &mut st,
+            [1; 32],
+            &offer(id, &meta, &ContentKey([99; 32])),
+            &mut out,
+        );
+        assert!(st.incoming.is_empty());
+        assert_eq!(out.file_failures.last().unwrap().reason, "invalid");
+    }
+
+    #[test]
+    fn invalid_layout_and_oversized_chunk_are_rejected_before_chunk_allocation() {
+        let (mut meta, key, _) = encrypt_file(b"x", "x", "binary", &[], 1).unwrap();
+        let mut st = FileState::default();
+        let mut out = LinkOutput::default();
+        meta.num_chunks = 50_000_000;
+        on_offer(&mut st, [1; 32], &offer([1; 16], &meta, &key), &mut out);
+        assert!(st.incoming.is_empty());
+        assert_eq!(out.file_failures.last().unwrap().reason, "invalid");
+        meta.num_chunks = 1;
+        on_offer(&mut st, [1; 32], &offer([1; 16], &meta, &key), &mut out);
+        let mut body = vec![0; 16 + 20 + FILE_CHUNK_BYTES + 17];
+        body[..16].copy_from_slice(&[1; 16]);
+        on_chunk(&mut st, [1; 32], &body, &mut out);
+        assert!(st.incoming.is_empty());
+        assert_eq!(out.file_failures.last().unwrap().reason, "invalid");
     }
 }

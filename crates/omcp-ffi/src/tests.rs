@@ -1583,3 +1583,332 @@ fn d_old_identity_backup_restores_legacy_contacts() {
     // A legacy contact: dialled by its id (the X25519 key) until re-keyed.
     assert_eq!(n.inner.lock().contacts[&[9; 32]].dh, [9; 32]);
 }
+
+// Resource bounds and fail-closed transport cleanup (no external devices).
+#[test]
+fn handshake_rejects_malformed_order_counts_and_oversized_chunks_and_releases_buffers() {
+    let b = node("Bob");
+    for bad in [
+        vec![PDU_HANDSHAKE, 0, 0],
+        vec![PDU_HANDSHAKE, 255, 255],
+        vec![PDU_HANDSHAKE, 1, 2],
+        vec![PDU_HANDSHAKE, 0],
+        {
+            let mut p = vec![PDU_HANDSHAKE, 0, 2];
+            p.extend(vec![0; HANDSHAKE_CHUNK + 1]);
+            p
+        },
+    ] {
+        let link = b.open_responder_link().unwrap();
+        assert!(link.on_pdu(bad).is_err());
+        let st = link.lock();
+        assert!(matches!(st.role, Role::Closed));
+        assert_eq!(st.hs_buf.capacity(), 0);
+        assert_eq!(st.hs_next, 0);
+        assert!(b.inner.lock().active_links.is_empty());
+    }
+    for bad in [
+        vec![PDU_HANDSHAKE, 0, 3, 1],
+        vec![PDU_HANDSHAKE, 2, 3, 1],
+        vec![PDU_HANDSHAKE, 1, 2, 1],
+    ] {
+        let link = b.open_responder_link().unwrap();
+        link.on_pdu(vec![PDU_HANDSHAKE, 0, 3, 1]).unwrap();
+        assert!(link.on_pdu(bad).is_err());
+        assert_eq!(link.lock().hs_buf.capacity(), 0);
+        assert!(b.inner.lock().active_links.is_empty());
+    }
+}
+
+#[test]
+fn full_handshake_chunk_range_is_bounded_and_shutdown_drops_reservation() {
+    let b = node("Bob");
+    let link = b.open_responder_link().unwrap();
+    for index in 0..254 {
+        let mut pdu = vec![PDU_HANDSHAKE, index, 255];
+        pdu.extend(vec![0; HANDSHAKE_CHUNK]);
+        link.on_pdu(pdu).unwrap();
+    }
+    assert_eq!(link.lock().hs_buf.len(), 254 * HANDSHAKE_CHUNK);
+    assert_eq!(link.lock().hs_buf.capacity(), MAX_HANDSHAKE_BYTES);
+    let mut last = vec![PDU_HANDSHAKE, 254, 255];
+    last.extend(vec![0; HANDSHAKE_CHUNK]);
+    // The entire legal framing range reaches Noise, which rejects these fake
+    // cryptographic bytes. The transport must not overflow/reject index 254.
+    assert!(matches!(link.on_pdu(last), Err(FfiError::Protocol { .. })));
+    assert_eq!(link.lock().hs_buf.capacity(), 0);
+    let next = b.open_responder_link().unwrap();
+    next.on_pdu(vec![PDU_HANDSHAKE, 0, 255, 0]).unwrap();
+    next.shutdown();
+    assert_eq!(next.lock().hs_buf.capacity(), 0);
+    assert!(b.inner.lock().active_links.is_empty());
+}
+
+#[test]
+fn active_links_are_bounded_and_drop_shutdown_and_input_errors_release_slots() {
+    let b = node("Bob");
+    let mut links = Vec::new();
+    for _ in 0..MAX_ACTIVE_LINKS {
+        links.push(b.open_responder_link().unwrap());
+    }
+    assert!(matches!(
+        b.open_responder_link(),
+        Err(FfiError::State { .. })
+    ));
+    links.pop();
+    let replacement = b.open_responder_link().unwrap();
+    assert_eq!(b.inner.lock().active_links.len(), MAX_ACTIVE_LINKS);
+    replacement.shutdown();
+    assert_eq!(b.inner.lock().active_links.len(), MAX_ACTIVE_LINKS - 1);
+    assert!(links[0].on_pdu(vec![]).is_err());
+    assert_eq!(b.inner.lock().active_links.len(), MAX_ACTIVE_LINKS - 2);
+    links.clear();
+    assert!(b.inner.lock().active_links.is_empty());
+}
+
+#[test]
+fn established_link_error_marks_peer_offline_and_new_connection_still_works() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    assert_eq!(b.path_status().nearby_peers, 1);
+    let out = la.send_text("tampered".into()).unwrap();
+    let mut pdu = out.outgoing[0].clone();
+    *pdu.last_mut().unwrap() ^= 1;
+    assert!(lb.on_pdu(pdu).is_err());
+    assert!(!lb.is_established());
+    assert_eq!(b.path_status().nearby_peers, 0);
+    assert!(b.inner.lock().active_links.is_empty());
+    la.shutdown();
+    let la2 = a
+        .open_initiator_link(a.contacts()[0].contact_id.clone())
+        .unwrap();
+    let lb2 = b.open_responder_link().unwrap();
+    pump(&la2, &lb2, la2.start().unwrap());
+    let got = pump(
+        &la2,
+        &lb2,
+        la2.send_text("fresh nonce space".into()).unwrap(),
+    );
+    assert_eq!(got[0].text, "fresh nonce space");
+}
+
+#[test]
+fn cancel_incoming_file_releases_peer_admission_and_can_be_repeated_safely() {
+    use omcp_core::files::encrypt_file;
+    let b = node("Bob");
+    let (meta, key, _) = encrypt_file(b"small", "x", "binary", &[], 1).unwrap();
+    let offer = |id: [u8; 16]| {
+        let mut body = id.to_vec();
+        body.extend_from_slice(key.as_bytes());
+        body.extend_from_slice(&meta.encode().unwrap());
+        body
+    };
+    let mut out = LinkOutput::default();
+    {
+        let mut st = b.inner.lock();
+        files::on_offer(&mut st.files, [7; 32], &offer([1; 16]), &mut out);
+        files::on_offer(&mut st.files, [7; 32], &offer([2; 16]), &mut out);
+        files::on_offer(&mut st.files, [7; 32], &offer([3; 16]), &mut out);
+        assert_eq!(out.file_failures.last().unwrap().reason, "busy");
+        assert_eq!(st.files.incoming.len(), 2);
+    }
+    assert!(b.cancel_file(hex::encode([1; 16])));
+    assert!(!b.cancel_file(hex::encode([1; 16])));
+    let mut st = b.inner.lock();
+    files::on_offer(&mut st.files, [7; 32], &offer([3; 16]), &mut out);
+    assert_eq!(st.files.incoming.len(), 2);
+    assert!(st.files.incoming.contains_key(&[3; 16]));
+}
+
+#[test]
+fn file_events_and_offers_cannot_overwrite_durable_transfer_ownership() {
+    use omcp_core::files::encrypt_file;
+    let (a, _b, _la, _lb) = paired();
+    let peer = parse_id(&a.contacts()[0].contact_id).unwrap();
+    let offer = a
+        .queue_file(
+            hex::encode(peer),
+            "original".into(),
+            "binary".into(),
+            b"original".to_vec(),
+        )
+        .unwrap();
+    let id = parse_msg_id(&offer.transfer_id_hex).unwrap();
+    let original = a.inner.lock().db().message(&id).unwrap().unwrap();
+    let (meta, key, _) = encrypt_file(b"replacement", "foreign", "binary", &[], 1).unwrap();
+    let mut body = id.to_vec();
+    body.extend_from_slice(key.as_bytes());
+    body.extend_from_slice(&meta.encode().unwrap());
+    let inner = core_burn::encode_app(None, &AppContent::FileMeta(body)).unwrap();
+    let mut send_counter = 0;
+    let env =
+        seal_inner_envelope(&[0; 32], &peer, [99; 16], &inner, 0, &mut send_counter, 8).unwrap();
+    for claimant in [peer, [99; 32]] {
+        let mut out = LinkOutput::default();
+        let mut st = a.inner.lock();
+        MeshLink::deliver(
+            &mut st,
+            claimant,
+            &env,
+            omcp_core::ble::message::CONTENT_TYPE_INNER_V1,
+            &inner,
+            &mut out,
+        )
+        .unwrap();
+        assert!(st.files.incoming.is_empty());
+        assert_eq!(out.file_failures.len(), 1);
+        // Defense in depth: even synthesized progress/completion events cannot
+        // cross the durable peer/direction ownership boundary.
+        out.file_progress.push(FileProgress {
+            transfer_id_hex: hex::encode(id),
+            contact_id: hex::encode(claimant),
+            incoming: true,
+            name: "foreign".into(),
+            size: 11,
+            done_chunks: 1,
+            total_chunks: 1,
+        });
+        out.files.push(ReceivedFile {
+            transfer_id_hex: hex::encode(id),
+            contact_id: hex::encode(claimant),
+            name: "foreign".into(),
+            mime: "binary".into(),
+            size: 11,
+            bytes: b"replacement".to_vec(),
+        });
+        st.persist_file_events(&out, (0, 0, 0), 1).unwrap();
+        assert_eq!(st.db().message(&id).unwrap().unwrap(), original);
+    }
+    // A foreign peer also cannot alter an existing incoming transfer record.
+    let mut incoming = original.clone();
+    incoming.mine = false;
+    a.inner.lock().db().put_message(&incoming).unwrap();
+    let mut out = LinkOutput::default();
+    out.file_failures.push(FileFailure {
+        transfer_id_hex: hex::encode(id),
+        contact_id: hex::encode([99; 32]),
+        reason: "invalid".into(),
+    });
+    a.inner
+        .lock()
+        .persist_file_events(&out, (0, 0, 0), 2)
+        .unwrap();
+    assert_eq!(a.inner.lock().db().message(&id).unwrap().unwrap(), incoming);
+}
+
+#[test]
+fn completed_file_id_is_immutable_under_same_peer_replay_conflicts_and_failure_events() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let peer = parse_id(&b.identity().peer_id_hex).unwrap();
+    let offer = a
+        .queue_file(
+            hex::encode(peer),
+            "original".into(),
+            "binary".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    let id = parse_msg_id(&offer.transfer_id_hex).unwrap();
+    let (encoded_offer, encoded_chunk) = {
+        let st = a.inner.lock();
+        let f = st.files.out[&peer].front().unwrap();
+        (f.offer.clone(), f.chunks[0].clone())
+    };
+    assert_eq!(drain(&la, &lb).iter().flat_map(|o| &o.files).count(), 1);
+    b.set_received_file_path(
+        offer.transfer_id_hex.clone(),
+        Some("/saved/original".into()),
+    )
+    .unwrap();
+    let original = b.inner.lock().db().message(&id).unwrap().unwrap();
+    let AppContent::FileMeta(mut conflict) = core_burn::decode_app(&encoded_offer).unwrap().1
+    else {
+        panic!("offer")
+    };
+    conflict[16] ^= 1; // Same transfer ID, conflicting content key.
+    let repeated = [
+        core_burn::decode_app(&encoded_offer).unwrap().1,
+        core_burn::decode_app(&encoded_chunk).unwrap().1,
+        AppContent::FileMeta(conflict),
+        AppContent::FileChunk(id.to_vec()), // Malformed chunk after completed offer.
+    ];
+    for content in repeated {
+        a.inner.lock().queue_control(&peer, content).unwrap();
+        let outputs = drain(&la, &lb);
+        assert!(outputs.iter().all(|o| o.files.is_empty()
+            && o.file_progress.is_empty()
+            && o.file_failures.is_empty()));
+        assert!(b.inner.lock().files.incoming.is_empty());
+        assert_eq!(b.inner.lock().db().message(&id).unwrap().unwrap(), original);
+    }
+    // Defense in depth at persistence: late/synthetic completion or error events
+    // from the correct peer must not reset a completed file's saved path/hash.
+    let mut out = LinkOutput::default();
+    out.files.push(ReceivedFile {
+        transfer_id_hex: hex::encode(id),
+        contact_id: a.identity().peer_id_hex.clone(),
+        name: "replacement".into(),
+        mime: "binary".into(),
+        size: 3,
+        bytes: b"bad".to_vec(),
+    });
+    out.file_failures.push(FileFailure {
+        transfer_id_hex: hex::encode(id),
+        contact_id: a.identity().peer_id_hex,
+        reason: "integrity".into(),
+    });
+    b.inner
+        .lock()
+        .persist_file_events(&out, (0, 0, 0), 99)
+        .unwrap();
+    assert_eq!(b.inner.lock().db().message(&id).unwrap().unwrap(), original);
+}
+
+#[test]
+fn restored_own_sent_file_placeholder_remains_hash_verified_and_refetchable() {
+    let (a, b, la, lb) = paired();
+    pump(&la, &lb, la.start().unwrap());
+    let offer = a
+        .queue_file(
+            b.identity().peer_id_hex,
+            "sent.jpg".into(),
+            "image/jpeg".into(),
+            PIC.to_vec(),
+        )
+        .unwrap();
+    drain(&la, &lb);
+    b.set_received_file_path(offer.transfer_id_hex.clone(), Some("/b/sent.jpg".into()))
+        .unwrap();
+    let mut blobs = Vec::new();
+    backup_all(&a, 1, &mut blobs);
+    la.shutdown();
+    lb.shutdown();
+    let dir = tempfile::tempdir().unwrap();
+    let restored = restore_device(&a, &blobs, dir.path());
+    let id = parse_msg_id(&offer.transfer_id_hex).unwrap();
+    let before = restored.inner.lock().db().message(&id).unwrap().unwrap();
+    assert!(before.mine);
+    assert_eq!(before.file.as_ref().unwrap().state, st::FILE_MISSING);
+    let (lr, lb2, outputs) = link(&restored, &b);
+    let requests: Vec<_> = outputs.iter().flat_map(|o| &o.media_requests).collect();
+    assert_eq!(requests.len(), 1);
+    b.answer_media_request(
+        requests[0].contact_id.clone(),
+        requests[0].msg_id_hex.clone(),
+        Some(PIC.to_vec()),
+    )
+    .unwrap();
+    let outputs = drain(&lb2, &lr);
+    assert!(outputs.iter().all(|o| o.file_failures.is_empty()));
+    let files: Vec<_> = outputs.iter().flat_map(|o| &o.files).collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].bytes, PIC);
+    let after = restored.inner.lock().db().message(&id).unwrap().unwrap();
+    assert!(
+        after.mine,
+        "refetch does not change original message direction"
+    );
+    assert_eq!(after.file.as_ref().unwrap().state, st::FILE_RECEIVED);
+    assert_eq!(after.file.as_ref().unwrap().hash, before.file.unwrap().hash);
+}

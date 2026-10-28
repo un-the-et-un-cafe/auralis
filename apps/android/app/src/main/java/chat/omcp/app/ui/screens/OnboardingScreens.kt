@@ -174,7 +174,7 @@ fun OnboardingFlow(
             Button(onClick = { vm.secureNext() }, enabled = s.anyBackupDone, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.cta_continue))
             }
-            if (!s.anyBackupDone) TextButton(onClick = vm::remindLater) { Text(stringResource(R.string.backup_remind_later)) }
+            if (!s.anyBackupDone && vm.canRemindLater) TextButton(onClick = vm::remindLater) { Text(stringResource(R.string.backup_remind_later)) }
         }
 
         OnboardingStep.WriteDown -> PlainPage(stringResource(R.string.backup_written)) {

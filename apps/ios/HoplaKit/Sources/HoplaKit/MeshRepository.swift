@@ -131,6 +131,7 @@ public final class MeshRepository {
         if let k = store.storageKey { key = k } else {
             key = try core.generateStorageKey()
             store.storageKey = key
+            guard store.storageKey == key else { throw CoreError.storageUnavailable("keychain write failed") }
         }
         do {
             try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
@@ -168,6 +169,7 @@ public final class MeshRepository {
     public func saveIdentity(phrase: String, name: String) throws {
         try loadCore(phrase: phrase, name: name)
         store.recoveryPhrase = phrase
+        guard store.recoveryPhrase == phrase else { throw CoreError.storageUnavailable("keychain write failed") }
         store.displayName = name
     }
 

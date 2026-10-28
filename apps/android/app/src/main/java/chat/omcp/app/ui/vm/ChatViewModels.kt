@@ -7,11 +7,15 @@ import chat.omcp.app.data.MeshRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 class ChatsViewModel(val repo: MeshRepository) : ViewModel() {
@@ -31,6 +35,12 @@ data class FileConfirm(
     val tooLarge get() = sizeBytes > maxBytes
 }
 
+/** In-memory only: survives activity recreation, never serializes message drafts into a Bundle. */
+data class ComposerState(val draft: String = "", val burnNext: Boolean = false, val sendFailed: Boolean = false)
+
+/** Metadata is read off-main; the content reader stays lazy until confirmation. */
+data class PickedFile(val name: String, val size: Long, val mime: String, val read: () -> ByteArray)
+
 class ChatThreadViewModel(
     val repo: MeshRepository,
     val contactId: String,
@@ -38,6 +48,9 @@ class ChatThreadViewModel(
 ) : ViewModel() {
     /** Reading + encrypting up to 50 MB happens off the main thread. */
     private val ioScope = CoroutineScope(SupervisorJob() + io)
+    private val fileLock = Any()
+    private var selectionVersion = 0L
+    private var selectionJob: Job? = null
     private var reader: (() -> ByteArray)? = null
     private val _fileError = MutableStateFlow(false)
     /** Reading/encrypting the picked file failed (picker gave us an unreadable Uri). */
@@ -46,6 +59,25 @@ class ChatThreadViewModel(
     val status = repo.status
     private val _file = MutableStateFlow<FileConfirm?>(null)
     val fileConfirm: StateFlow<FileConfirm?> = _file.asStateFlow()
+    private val _composer = MutableStateFlow(ComposerState())
+    val composer: StateFlow<ComposerState> = _composer.asStateFlow()
+
+    fun setDraft(text: String) = _composer.update { it.copy(draft = text, sendFailed = false) }
+    fun setBurnNext(on: Boolean) = _composer.update { it.copy(burnNext = on) }
+
+    /** Failed queue writes must leave the unsent draft intact and must not crash the UI. */
+    fun sendDraft(): Boolean {
+        val s = _composer.value
+        if (s.draft.isBlank()) return false
+        return try {
+            send(s.draft, if (s.burnNext) chatBurn() ?: BurnSpec.onOpen() else null)
+            _composer.value = ComposerState()
+            true
+        } catch (_: Exception) {
+            _composer.update { it.copy(sendFailed = true) }
+            false
+        }
+    }
 
     fun contact() = repo.contact(contactId)
 
@@ -71,31 +103,68 @@ class ChatThreadViewModel(
     fun closeBurn(id: String) = repo.closeBurn(contactId, id)
     fun tickBurn() = repo.tickBurn()
 
+    /** Survives activity recreation; an obsolete provider result can never replace a newer pick. */
+    fun loadFileSelection(load: suspend () -> PickedFile) = synchronized(fileLock) {
+        val version = ++selectionVersion
+        selectionJob?.cancel()
+        _file.value = null
+        reader = null
+        selectionJob = ioScope.launch {
+            try {
+                val picked = load()
+                ensureActive()
+                synchronized(fileLock) {
+                    if (version == selectionVersion) onFilePicked(picked.name, picked.size, picked.mime, picked.read)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ensureActive()
+                synchronized(fileLock) {
+                    if (version == selectionVersion) _fileError.value = true
+                }
+            }
+        }
+    }
+
     /**
      * System picker returned a file. [read] loads its bytes and is only called after the user
      * confirms and the size passed the core limit (too large is decided before any read/encrypt).
      */
-    fun onFilePicked(name: String, size: Long, mime: String, read: () -> ByteArray) {
+    fun onFilePicked(name: String, size: Long, mime: String, read: () -> ByteArray) = synchronized(fileLock) {
         reader = read
         _file.value = FileConfirm(name, size, mime, repo.core.maxFileBytes(), path())
     }
 
     fun confirmFile() {
-        val f = _file.value ?: return
-        if (f.tooLarge) return
-        val read = reader ?: return
-        _file.value = null
-        reader = null
+        val (f, read) = synchronized(fileLock) {
+            val f = _file.value ?: return
+            if (f.tooLarge) return
+            val read = reader ?: return
+            _file.value = null
+            reader = null
+            f to read
+        }
         ioScope.launch {
-            runCatching {
+            try {
                 val bytes = read()
+                ensureActive() // A blocking provider may return after this screen was destroyed.
                 require(bytes.size.toLong() <= f.maxBytes) { "file too large" }
                 repo.sendFile(contactId, f.name, f.mime, bytes)
-            }.onFailure { _fileError.value = true }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _fileError.value = true
+            }
         }
     }
 
-    fun cancelFile() { _file.value = null; reader = null }
+    fun cancelFile() = synchronized(fileLock) {
+        selectionVersion++
+        selectionJob?.cancel()
+        _file.value = null
+        reader = null
+    }
     fun dismissFileError() { _fileError.value = false }
 
     /** Cancel an in-flight transfer (Sending / Receiving / Queued bubble). */

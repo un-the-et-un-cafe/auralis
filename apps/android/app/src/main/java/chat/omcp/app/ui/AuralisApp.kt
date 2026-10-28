@@ -1,6 +1,5 @@
 package chat.omcp.app.ui
 
-import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
@@ -33,6 +32,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -99,14 +102,25 @@ fun AuralisApp(
     val onboarded by repo.onboarded.collectAsState()
     val contacts by repo.contacts.collectAsState()
     val meshStatus by repo.status.collectAsState()
-    // Re-evaluate the backup gate whenever contacts change or we recompose after onboarding.
+    // Expiry must take effect without changing contacts or restarting the process. Recheck
+    // on resume, at the deadline, and once a minute for changes to the device's wall clock.
     val gateTick = remember { mutableIntStateOf(0) }
     val gate = remember(onboarded, contacts, gateTick.intValue) { repo.backupGate() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(repo, onboarded, lifecycleOwner) {
+        if (onboarded) lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                gateTick.intValue++
+                val remaining = repo.appStore.backupRemindDeadlineMs - System.currentTimeMillis()
+                delay(if (remaining > 0) remaining.coerceAtMost(60_000L) else 60_000L)
+            }
+        }
+    }
 
     val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (MeshPermissions.hasBle(ctx)) MeshService.start(ctx)
     }
-    val requestMesh = { perms.launch(MeshPermissions.BLE + Manifest.permission.POST_NOTIFICATIONS) }
+    val requestMesh = { perms.launch(MeshPermissions.runtimePermissions()) }
     LaunchedEffect(onboarded) { if (onboarded && MeshPermissions.hasBle(ctx)) MeshService.start(ctx) }
 
     if (!onboarded || gate == BackupGate.Required) {
@@ -125,7 +139,7 @@ fun AuralisApp(
             }
         }
         if (onboarded && gate == BackupGate.Required) {
-            LaunchedEffect(Unit) { if (ovm.state.value.step == OnboardingStep.Welcome) ovm.getStarted(); ovm.profileNext() }
+            LaunchedEffect(ovm) { ovm.resumeRequiredBackup() }
         }
         OnboardingFlow(
             vm = ovm,

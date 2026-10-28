@@ -227,3 +227,28 @@ final class CloudKitChatRecordBackend: ChatRecordBackend {
         } catch let e as CKError where e.code == .unknownItem {}
     }
 }
+
+/// Each worker operation creates and owns its blocking provider. No mutable provider,
+/// repository or UI object crosses the actor boundary; only sealed Sendable values do.
+enum AppCloudBackupIO {
+    private static func store(_ method: String) throws -> CloudBackupStore {
+        switch method {
+        case backupICloud: return ICloudBackupStore()
+        case backupDrive: return GoogleDrive.makeStore()
+        default: throw CoreError.invalid("backup destination")
+        }
+    }
+
+    static func download(_ methods: [String]) -> [(method: String, blob: Data)] {
+        methods.compactMap { method in
+            guard let store = try? store(method), let blob = try? store.download() else { return nil }
+            return (method, blob)
+        }
+    }
+
+    static func upload(_ upload: PreparedCloudBackup) throws {
+        try upload.upload(to: store(upload.method))
+    }
+
+    static func delete(_ method: String) throws { try store(method).delete() }
+}

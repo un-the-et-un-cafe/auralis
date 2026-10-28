@@ -2,8 +2,17 @@ import HoplaKit
 import LocalAuthentication
 import SwiftUI
 
-/// Observable wrapper over the platform-independent `OnboardingFlow` (HoplaKit). Cloud work runs
-/// off the main thread (CloudKit / Drive calls block).
+/// Run blocking cloud I/O without transferring a flow, repository, view or model to a worker.
+/// Completion always resumes on the calling actor.
+private func cloudWork<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async -> Result<T, Error> {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: Result { try operation() })
+        }
+    }
+}
+
+/// The flow and its repository belong to the main actor. Only prepared cloud I/O runs off-main.
 @MainActor
 final class OnboardingVM: ObservableObject {
     @Published private(set) var s = OnboardingState()
@@ -13,24 +22,45 @@ final class OnboardingVM: ObservableObject {
     func attach(_ model: AppModel) {
         guard flow == nil else { return }
         let f = model.makeOnboarding()
-        f.onChange = { [weak self] st in Task { @MainActor in self?.s = st } }
         flow = f
         s = f.state
-        run { $0.detectBackup() }
+        let methods = f.availableBackupMethods
+        busy = true
+        Task {
+            for method in methods {
+                if case .success(let candidates) = await cloudWork({ AppCloudBackupIO.download([method]) }) {
+                    f.acceptBackupSearch(candidates)
+                }
+                // A valid iCloud backup must not trigger unrelated Google authorization.
+                if f.state.step != .welcome { break }
+            }
+            s = f.state
+            busy = false
+        }
     }
 
-    /// Run a (possibly blocking) flow step in the background.
-    func run(_ step: @escaping (OnboardingFlow) -> Void) {
+    func backup(_ method: String) {
         guard let flow, !busy else { return }
-        busy = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            step(flow)
-            DispatchQueue.main.async { self.s = flow.state; self.busy = false }
+        do {
+            let upload = try flow.prepareBackup(method)
+            busy = true
+            Task {
+                let result = await cloudWork { try AppCloudBackupIO.upload(upload) }
+                switch result {
+                case .success: flow.completeBackup(method, succeeded: true)
+                case .failure: flow.completeBackup(method, succeeded: false)
+                }
+                s = flow.state
+                busy = false
+            }
+        } catch {
+            flow.completeBackup(method, succeeded: false)
+            s = flow.state
         }
     }
 
     func now(_ step: (OnboardingFlow) -> Void) {
-        guard let flow else { return }
+        guard let flow, !busy else { return }
         step(flow)
         s = flow.state
     }
@@ -38,6 +68,7 @@ final class OnboardingVM: ObservableObject {
 
 /// Auralis presentation over the unchanged onboarding state machine.
 /// Welcome → Profile → Secure your account → Done (O1: 4 screens).
+@MainActor
 struct OnboardingView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.omcpColors) private var c
@@ -138,9 +169,10 @@ struct OnboardingView: View {
                 .background(c.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 VStack(spacing: 12) {
                     Button(L("ob_get_started")) { vm.now { $0.getStarted() } }
-                        .buttonStyle(AuralisPrimaryButtonStyle())
+                        .buttonStyle(AuralisPrimaryButtonStyle()).accessibilityIdentifier("onboarding.getStarted")
                     Button(L("ob_restore_with_phrase")) { vm.now { $0.usePhraseInstead() } }
                         .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
+                        .accessibilityIdentifier("onboarding.restorePhrase")
                 }
                 if let e = vm.s.error { Text(L("ob_error_" + e)).foregroundStyle(c.danger) }
             }
@@ -161,8 +193,9 @@ struct OnboardingView: View {
     private var profile: some View {
         AuralisSettingsSection(footer: L("ob_profile_footer")) {
             TextField(L("ob_display_name"), text: Binding(get: { vm.s.displayName }, set: { v in vm.now { $0.setName(v) } }))
-                .textContentType(.nickname)
-            Button(L("ob_next")) { vm.run { $0.profileNext() } }.buttonStyle(AuralisPrimaryButtonStyle())
+                .textContentType(.nickname).accessibilityIdentifier("onboarding.displayName")
+            Button(L("ob_next")) { vm.now { $0.profileNext() } }.buttonStyle(AuralisPrimaryButtonStyle())
+                .accessibilityIdentifier("onboarding.profileNext")
         }
     }
 
@@ -178,7 +211,7 @@ struct OnboardingView: View {
             } else {
                 Toggle(L("ob_use_password"), isOn: Binding(get: { vm.s.usePassword }, set: { v in vm.now { $0.setUsePassword(v) } }))
                 if vm.s.usePassword { passwordField }
-                Button(L("ob_backup_icloud")) { vm.run { $0.backupToICloud() } }
+                Button(L("ob_backup_icloud")) { vm.backup(backupICloud) }
                     .disabled(vm.s.usePassword && !vm.s.passwordOk)
             }
         }
@@ -189,7 +222,7 @@ struct OnboardingView: View {
                 Text(L("ob_drive_unavailable")).foregroundStyle(.secondary)
             } else {
                 passwordField
-                Button(L("ob_backup_drive")) { vm.run { $0.backupToDrive() } }.disabled(!vm.s.passwordOk)
+                Button(L("ob_backup_drive")) { vm.backup(backupDrive) }.disabled(!vm.s.passwordOk)
             }
         }
         AuralisSettingsSection(L("ob_write_down")) {
@@ -197,11 +230,13 @@ struct OnboardingView: View {
                 Label(L("ob_backup_done"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
                 Button(L("ob_show_words")) { vm.now { $0.writeItDown() } }
+                    .accessibilityIdentifier("onboarding.showWords")
             }
         }
         AuralisSettingsSection(footer: L("ob_remind_footer")) {
             Button(L("ob_continue")) { vm.now { _ = $0.secureNext() } }.buttonStyle(AuralisPrimaryButtonStyle()).disabled(!vm.s.anyBackupDone)
             Button(L("ob_remind_later")) { vm.now { $0.remindLater() } }
+                .accessibilityIdentifier("onboarding.remindLater")
         }
     }
 
@@ -221,6 +256,7 @@ struct OnboardingView: View {
         AuralisSettingsSection {
             Button(L("ob_wrote_it_down")) { vm.now { $0.startQuiz() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToSecure() } }
+                .accessibilityIdentifier("onboarding.wordsCancel")
         }
     }
 
@@ -237,6 +273,7 @@ struct OnboardingView: View {
         AuralisSettingsSection {
             Button(L("ob_check")) { vm.now { _ = $0.submitQuiz() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToSecure() } }
+                .accessibilityIdentifier("onboarding.wordsCancel")
         }
     }
 
@@ -247,6 +284,7 @@ struct OnboardingView: View {
         }
         AuralisSettingsSection {
             Button(L("ob_start_chatting")) { vm.now { $0.finish() } }.buttonStyle(AuralisPrimaryButtonStyle())
+                .accessibilityIdentifier("onboarding.finish")
         }
     }
 
@@ -257,7 +295,7 @@ struct OnboardingView: View {
                 SecureField(L("ob_backup_password"), text: Binding(get: { vm.s.restorePassword }, set: { v in vm.now { $0.setRestorePassword(v) } }))
             }
             if vm.s.restoreLockMs > 0 { Text(L("ob_restore_locked", Int(vm.s.restoreLockMs / 1000))).foregroundStyle(.orange) }
-            Button(L("ob_restore")) { vm.run { $0.restoreFromCloud() } }.buttonStyle(AuralisPrimaryButtonStyle())
+            Button(L("ob_restore")) { vm.now { _ = $0.restoreFromCloud() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_use_phrase")) { vm.now { $0.usePhraseInstead() } }
             Button(L("ob_start_fresh")) { vm.now { $0.backToWelcome() } }
         }
@@ -267,8 +305,10 @@ struct OnboardingView: View {
         AuralisSettingsSection(footer: L("ob_phrase_footer")) {
             TextEditor(text: Binding(get: { vm.s.restorePhrase }, set: { v in vm.now { $0.setRestorePhrase(v) } }))
                 .frame(minHeight: 120).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .accessibilityIdentifier("onboarding.phraseInput")
             Button(L("ob_restore")) { vm.now { _ = $0.restoreFromPhrase() } }.buttonStyle(AuralisPrimaryButtonStyle())
             Button(L("ob_back")) { vm.now { $0.backToWelcome() } }
+                .accessibilityIdentifier("onboarding.restoreCancel")
         }
     }
 }
@@ -301,6 +341,7 @@ struct BackupRequiredView: View {
 }
 
 /// Settings › Backup and restore.
+@MainActor
 struct BackupSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
@@ -363,24 +404,41 @@ struct BackupSettingsView: View {
         }
         .confirmationDialog(L("backup_delete_confirm"), isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button(L("backup_delete"), role: .destructive) {
-                if let m = confirmDelete { work { try s.deleteCloudBackup(m) } }
+                if let m = confirmDelete { deleteBackup(m) }
             }
         }
     }
 
-    private func work(_ f: @escaping () throws -> Void) {
+    /// The worker only sees a sealed upload/deletion. Repository commits and SwiftUI state
+    /// remain on the main actor, including the completion of device authentication below.
+    private func work(_ operation: @escaping @Sendable () throws -> Void, commit: @escaping @MainActor () throws -> Void) {
         guard !busy else { return }
         busy = true
-        DispatchQueue.global().async {
-            let e: String? = (try? f()) == nil ? L("backup_failed") : nil
-            DispatchQueue.main.async { busy = false; error = e; password = ""; model.touch() }
+        Task { @MainActor in
+            let result = await cloudWork(operation)
+            do {
+                try result.get()
+                try commit()
+                error = nil
+            } catch { self.error = L("backup_failed") }
+            busy = false
+            password = ""
+            model.touch()
         }
     }
 
-    private func backUp(_ m: String) {
-        let pw = (usePassword || m == backupDrive) ? password : nil
+    private func backUp(_ method: String) {
+        let pw = (usePassword || method == backupDrive) ? password : nil
         let s = settings
-        work { try s.backUp(m, password: pw) }
+        do {
+            let upload = try s.prepareBackup(method, password: pw)
+            work({ try AppCloudBackupIO.upload(upload) }, commit: { s.completeBackup(method) })
+        } catch { self.error = L("backup_failed") }
+    }
+
+    private func deleteBackup(_ method: String) {
+        let s = settings
+        work({ try AppCloudBackupIO.delete(method) }, commit: { try s.completeDeletion(method) })
     }
 
     /// Biometric or device passcode required.
@@ -390,7 +448,7 @@ struct BackupSettingsView: View {
         revealRequest = request
         let ctx = LAContext()
         ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: L("backup_view_phrase_reason")) { ok, _ in
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 guard isVisible, revealRequest == request else { return }
                 revealRequest = nil
                 if ok { phrase = (try? settings.revealPhrase()) ?? [] }

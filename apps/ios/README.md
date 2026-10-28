@@ -31,7 +31,8 @@ intentionally retained.
 | `HoplaKit/` | SwiftPM package, **platform-independent**: models, `OmcpCore` protocol + `FakeOmcpCore`, `MeshRepository`, `OnboardingFlow`, `BackupSettings`, `NotificationPolicy`, `PushPayload`, `ScreenCapturePolicy`, `OmcpGatt`, file/gateway policy, `RetryLimiter`. Builds and tests on Linux. |
 | `OpenMeshChat/` | SwiftUI app target (display name **Auralis**): screens, `RustOmcpCore` (UniFFI adapter), CoreBluetooth transport, CloudKit/Keychain/Drive backup stores, notifications, secure-capture layer. |
 | `NotificationService/` | Notification Service Extension for content-free APNs pushes (stub). |
-| `OpenMeshChatTests/` | `RustBridgeTests`: the real Rust core through the Swift bindings (two nodes, QR, Noise link, burn + OPENED, iCloud key / password backups). |
+| `OpenMeshChatTests/` | Real-Rust `RustBridgeTests` plus `AppLifecycleTests` for Keychain update failures, backup deadlines and failed local restore routing. |
+| `OpenMeshChatUITests/` | Real-app onboarding/cancellation/navigation/settings/relaunch smoke on a fresh simulator; secure capture stays enabled. |
 | `Generated/`, `build/` | git-ignored: `OmcpFFI.swift` bindings and `OmcpFFI.xcframework`. |
 | `scripts/build-rust.sh` | macOS: build `aarch64-apple-ios` + `aarch64-apple-ios-sim` static libs, generate bindings, make the xcframework. |
 | `scripts/verify-linux.sh` | Linux: HoplaKit tests, then HoplaKit + generated bindings + `RustOmcpCore.swift` + `RustBridgeTests` against the host `libomcp_ffi.so`, then `swiftc -parse` of every Swift file. |
@@ -66,7 +67,10 @@ xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
 
 The Rust scripts use `--locked` with the committed root `Cargo.lock`.
 
-CI: the `ios` job in `.github/workflows/ci.yml` (macos-latest) runs exactly this.
+The `ios` job in `.github/workflows/ci.yml` runs both native XCTest targets and the real-app
+UI smoke on a fresh simulator. Use a dedicated erased simulator for local UI smoke runs:
+its ordered journey deliberately retains state to check process relaunch. See
+[V1_RELIABILITY.md](V1_RELIABILITY.md) for the exact changes, test scope and validation limits.
 
 ## Features
 

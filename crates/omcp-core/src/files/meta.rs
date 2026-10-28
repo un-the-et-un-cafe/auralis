@@ -52,6 +52,9 @@ impl FileMeta {
 
     /// Decode from [`Self::encode`].
     pub fn decode(mut buf: &[u8]) -> Result<Self> {
+        if buf.len() > crate::framing::MAX_CIPHERTEXT_LEN as usize {
+            return Err(OmcpError::File("metadata exceeds envelope budget"));
+        }
         let take_u16 = |buf: &mut &[u8]| -> Result<u16> {
             if buf.len() < 2 {
                 return Err(OmcpError::Truncated {
@@ -109,7 +112,15 @@ impl FileMeta {
         let num_chunks = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
         buf = &buf[4..];
         let n_keys = take_u16(&mut buf)? as usize;
-        let mut wrapped_keys = Vec::with_capacity(n_keys);
+        // A count alone must not reserve tens of MB for nonexistent KEM keys.
+        let min_key_wire = 4 + 32 + 32 + crate::handshake::MLKEM768_CT_LEN + 12 + 2;
+        if n_keys > buf.len() / min_key_wire {
+            return Err(OmcpError::File("wrapped key count exceeds available bytes"));
+        }
+        let mut wrapped_keys = Vec::new();
+        wrapped_keys
+            .try_reserve_exact(n_keys)
+            .map_err(|_| OmcpError::File("wrapped key allocation failed"))?;
         for _ in 0..n_keys {
             if buf.len() < 4 {
                 return Err(OmcpError::Truncated {
@@ -137,5 +148,30 @@ impl FileMeta {
             num_chunks,
             wrapped_keys,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forged_wrapped_key_count_fails_without_count_sized_allocation() {
+        let meta = FileMeta {
+            name: "x".into(),
+            size: 0,
+            mime: "binary".into(),
+            content_hash: [0; 32],
+            chunk_plaintext_len: 65536,
+            num_chunks: 1,
+            wrapped_keys: vec![],
+        };
+        let mut bytes = meta.encode().unwrap();
+        let end = bytes.len();
+        bytes[end - 2..].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert_eq!(
+            FileMeta::decode(&bytes),
+            Err(OmcpError::File("wrapped key count exceeds available bytes"))
+        );
     }
 }

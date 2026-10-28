@@ -46,4 +46,5 @@
     <string name="auralis_thread_empty_title">A little hello goes a long way</string>
     <string name="auralis_thread_empty_body">Your first message will wait here if your contact is out of range.</string>
     <string name="auralis_simulated_backup_warning">TEST MODE · Backup is simulated in memory. Nothing is uploaded to Google Drive. These backups disappear when the app process ends. Do not rely on this mode to recover your identity.</string>
+    <string name="auralis_send_failed">Could not queue your message. Your draft is still here. Try sending again.</string>
 </resources>
