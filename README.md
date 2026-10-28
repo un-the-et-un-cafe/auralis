@@ -1,149 +1,83 @@
 <div align="center">
-
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="design/brand/hopla-v2/readme-header-dark.svg">
-  <img alt="Hopla" src="design/brand/hopla-v2/readme-header-light.svg" width="640">
+  <source media="(prefers-color-scheme: dark)" srcset="design/brand/auralis/readme-header-dark.svg">
+  <img src="design/brand/auralis/readme-header-light.svg" alt="Auralis — Stay close. Beyond the signal." width="100%">
 </picture>
 
-# Open Mesh Chat Protocol
+# Auralis
 
-**An open protocol for private messaging that keeps working when the Internet doesn't.**
+**An alternative OMCP client. An independent interpretation of how the mesh should feel.**
 
-[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](./LICENSE)
-[![Spec: v0.1 draft](https://img.shields.io/badge/spec-v0.1%20draft-orange.svg)](./PROTOCOL.md)
-[![CI](https://github.com/un-the-et-un-cafe/open-mesh-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/un-the-et-un-cafe/open-mesh-chat/actions)
+Android 12+ · iOS 17+ · Kotlin / Compose · SwiftUI · Rust
 
-[Specification](./PROTOCOL.md) · [Reference app](#reference-app-hopla) · [Build your own client](#build-your-own-client) · [Roadmap](#roadmap) · [Contributing](#contributing)
-
+[Protocol](PROTOCOL.md) · [Compatibility audit](docs/AURALIS_PROTOCOL_AUDIT.md) · [Releases](docs/AURALIS_RELEASE.md) · [Android](apps/android/README.md) · [iOS](apps/ios/README.md)
 </div>
 
----
+> **Experimental development build.** The underlying protocol is a draft and has not had an independent security audit. Do not rely on this software for emergency, life-critical, or high-risk communications. Native device interoperability must be tested before claiming release readiness.
 
-## About
+## A different way to see the mesh
 
-**OMCP (Open Mesh Chat Protocol)** lets phones talk to each other directly over Bluetooth. Every device relays messages for the others, so a crowd of phones becomes its own network. When any one device has Internet access, it can carry encrypted traffic out for everyone nearby. It never sees what's inside.
+Auralis brings conversations, connectivity, and personal security into one calm, legible experience. Its native application presentation is being rewritten around three spaces:
 
-OMCP is a **protocol**, not a single app. This repository contains:
+- **Conversations:** people and messages first, with honest delivery and verification states.
+- **Mesh:** understand the connection available now; see what is queued, add a contact, and reach gateway settings without confusing a roadmap promise for a live connection.
+- **You:** identity, recovery, backups, storage, and privacy in one place.
 
-- **the open specification**, which is the source of truth for anyone building a compatible client
-- **`omcp-core`**, a reference library in Rust
-- **Hopla**, the reference app for Android and iOS, which shows the protocol in action
+Deep ink, luminous mint, warm off-white surfaces, clear hierarchy, and an original three-stroke signal mark form the Auralis visual system. Both platforms remain native rather than wrapping a website.
 
-Anyone can build their own app, gateway, bot or desktop client on OMCP. Any app that follows the spec can talk to every other OMCP app.
+## Foundation and compatibility
 
-### Why it matters
+This project derives from [Hopla / open-mesh-chat](https://github.com/un-the-et-un-cafe/open-mesh-chat), baseline commit `233210d5b13f443798428d126266c520999ad387`.
 
-- **Outages, protests, disasters, festivals, remote areas:** messages still reach people nearby with no cell network or Wi-Fi.
-- **No central server holds your conversations:** there is no company in the middle that could read, sell or lose them.
-- **Security that holds up long term:** the encryption is designed to stay safe against future quantum computers, not just today's attacks.
+The **app experience is new; the cryptography is not reinvented**. The shared `omcp-core`, `omcp-ffi`, transport adapters, persisted formats, and protocol identifiers remain the compatibility foundation. Attribution and the upstream MIT license are preserved. The original normative `PROTOCOL.md` is unchanged.
 
----
+Auralis targets compatibility with **the implemented Hopla beta**, not unsupported claims of complete draft-protocol conformance. The audit explains the differences. Shared code and contract tests provide evidence, but do not replace testing two real devices running independently built Hopla and Auralis.
 
-## Highlights
+### Implemented upstream capabilities retained
 
-| | |
-| --- | --- |
-| 📡 **Mesh first** | Peer-to-peer over Bluetooth Low Energy, with no Internet needed |
-| 🌉 **Every peer can be a gateway** | Online devices relay encrypted envelopes for offline neighbours |
-| 🔐 **End-to-end encrypted by default** | Noise handshake, MLS for groups, sealed sender addressing |
-| 🛡️ **Post-quantum hybrid** | X25519 + ML-KEM-768 key exchange (suite `OMCP-2026-A`) |
-| 📦 **Store and forward** | Messages wait on nearby peers until the recipient shows up |
-| 🧩 **Open and extensible** | Versioned wire format, crypto agility and a public extension process |
-| 👥 **Communities and live** *(v0.2)* | Channels, roles, and end-to-end encrypted livestreams over Wi-Fi or Internet |
+- Recovery-phrase identity and encrypted backup/restore flows.
+- QR contact exchange, safety-number verification, and mismatch handling.
+- Direct one-to-one BLE chat, offline queue handling, and reconnect logic.
+- Chunked encrypted file transfer with size caps and integrity verification.
+- Burn-after-read messages and privacy-conscious notification policies.
+- Platform storage, backup, notification, and security settings.
+- English and French localization, light and dark appearance.
 
----
+Platform services still need their own configuration and device testing. See each platform README for precise limitations.
 
-## How it works
+### Explicitly not production features
 
-```mermaid
-flowchart LR
-    A[📱 Peer A<br/>offline] <-- BLE mesh --> B[📱 Peer B<br/>gateway]
-    B <-- BLE mesh --> C[📱 Peer C<br/>offline]
-    B -. encrypted envelopes .-> I((Internet))
-    I -.-> R[🌍 Remote peers]
+Working Internet gateway transport, MLS group messaging in the app, communities, live streams, calls, and full draft-protocol coverage are not claimed. Settings or preview screens for these do not implement their underlying transport. Bluetooth delivery and background behavior depend on OS permissions, radio conditions, platform restrictions, and nearby peers. No app can prevent someone photographing a screen with another device.
+
+## Build and verify
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
 ```
 
-1. Phones find each other over Bluetooth and set up encrypted sessions.
-2. Messages hop from phone to phone until they reach the recipient.
-3. If a phone along the way has Internet, it forwards the **still-encrypted** envelope to recipients farther away.
-4. When the Internet drops, the local mesh keeps working.
+Android additionally needs a JDK, Android SDK/NDK, Rust Android targets, and `cargo-ndk`. iOS app builds require macOS, Xcode, and XcodeGen. Follow the platform-specific instructions linked above; installing Rust alone does not produce a phone-ready application.
 
----
+CI is designed to check the core and both native apps. Manual release packaging produces **unsigned / testing artifacts**, not an App Store or Google Play release. Store distribution needs separate signing, ownership, policy review, and explicit approval.
 
-## Reference app: Hopla
+## Repository
 
-The Android (12+) and iOS (17+) apps in this project are the **reference implementation** of OMCP. They show what the protocol can do, and they're meant to be a polished app people want to use.
-
-> Hopla is **one** OMCP client, not the only one. Other apps that follow the spec are full members of the network.
-
-Product requirements: [`apps/REQUIREMENTS.md`](./apps/REQUIREMENTS.md). UI design pack: [`design/`](./design/).
-
----
-
-## Build your own client
-
-You don't need our code or our app to join the network. To build a compatible client:
-
-1. Implement the wire format and crypto suite in [`PROTOCOL.md`](./PROTOCOL.md). The normative pins are in §21.
-2. Use `omcp-core` (Rust) if you like, or write your own implementation in any language.
-3. Pass the acceptance scenarios in §13.6, and the test vectors as they're published.
-4. Advertise your supported features in the `Hello` handshake. Peers negotiate the rest.
-
-Ideas for the community: desktop clients, dedicated gateway nodes (Raspberry Pi), emergency-response tools, bots, and bridges to other open protocols.
-
----
-
-## Repository layout
-
-```
-.
-├── PROTOCOL.md          # The OMCP specification (normative)
-├── extensions/          # Protocol extensions (e.g. MLS post-quantum)
-├── crates/omcp-core/    # Reference Rust library
-├── apps/                # Reference Android & iOS apps
-├── design/              # Reference UI and brand assets
-└── .github/workflows/   # CI
+```text
+PROTOCOL.md                 Unmodified upstream normative draft
+crates/omcp-core/            Shared protocol and crypto implementation
+crates/omcp-ffi/             Native bridge
+crates/omcp-sim/             Protocol simulations
+apps/android/               Native Android client
+apps/ios/                   Native iOS client and platform-independent tests
+design/brand/auralis/        Original Auralis brand assets
+docs/AURALIS_PROTOCOL_AUDIT.md  Compatibility boundaries and test plan
+docs/AURALIS_RELEASE.md      Quality gates and release procedure
+.github/workflows/          Verification and manual packaging
 ```
 
----
+## Attribution and security
 
-## Roadmap
+Copyright and credit for inherited work remain with the OMCP/Hopla contributors under [LICENSE](LICENSE). Auralis is a distinct app identity, not a claim of endorsement by upstream contributors. The name is a working product name, not a trademark-clearance claim.
 
-| Milestone | Scope | Status |
-| --- | --- | --- |
-| **M0** | Specification and CI skeleton | ✅ Done |
-| **M1** | `omcp-core`: Noise hybrid handshake and envelope framing | 🚧 [In review](https://github.com/un-the-et-un-cafe/open-mesh-chat/pull/1) |
-| **M2** | BLE transport and two-device text chat | ⏳ Planned |
-| **M3** | MLS groups and chunked file transfer | ⏳ Planned |
-| **M4** | Gateway role and optional rendezvous | ⏳ Planned |
-| **M5** | Android reference beta “Hopla” (`apps/android` + `crates/omcp-ffi`; experimental, untested on real hardware) | 🚧 In progress |
-| **M6** | iOS reference beta | ⏳ Planned |
-| **M7** | Independent cryptography review | ⏳ Planned |
-
-**v0.2:** communities, channels, livestreams, stories, polls. **v0.3:** usernames, bots, and an optional Tor transport.
-
----
-
-## Security
-
-OMCP is a **draft and has not been audited**. Don't rely on it for life-critical communication yet.
-
-Please report vulnerabilities privately through [GitHub Security Advisories](https://github.com/un-the-et-un-cafe/open-mesh-chat/security/advisories/new) rather than public issues. The threat model is in [`PROTOCOL.md` §4](./PROTOCOL.md).
-
----
-
-## Contributing
-
-Contributions are welcome:
-
-- **Protocol changes:** open a PR against `PROTOCOL.md` with your reasoning, the impact on the wire format, and test vectors.
-- **Extensions:** add a proposal under `extensions/` (see §16).
-- **Code and design:** open an issue first for anything large.
-
-Please be respectful. This project exists to protect people who may be in vulnerable situations.
-
----
-
-## Licence
-
-[MIT](./LICENSE) © OMCP contributors
+Do not post secrets, recovery phrases, private messages, or exploit details in public issues. Before using this software in sensitive situations, obtain independent cryptographic review and execute the documented cross-client, device, backup, and failure-recovery tests.
