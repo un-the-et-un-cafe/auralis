@@ -10,14 +10,14 @@
 
 Android 12+ · iOS 17+ · Kotlin / Compose · SwiftUI · Rust
 
-[Protocol](PROTOCOL.md) · [Compatibility audit](docs/AURALIS_PROTOCOL_AUDIT.md) · [Releases](docs/AURALIS_RELEASE.md) · [Android](apps/android/README.md) · [iOS](apps/ios/README.md)
+[Protocol](PROTOCOL.md) · [Compatibility audit](docs/AURALIS_PROTOCOL_AUDIT.md) · [Verification](docs/AURALIS_VERIFICATION.md) · [Releases](docs/AURALIS_RELEASE.md) · [Android](apps/android/README.md) · [iOS](apps/ios/README.md)
 </div>
 
 > **Experimental development build.** The underlying protocol is a draft and has not had an independent security audit. Do not rely on this software for emergency, life-critical, or high-risk communications. Native device interoperability must be tested before claiming release readiness.
 
 ## A different way to see the mesh
 
-Auralis brings conversations, connectivity, and personal security into one calm, legible experience. Its native application presentation is being rewritten around three spaces:
+Auralis brings conversations, connectivity, and personal security into one calm, legible experience. Its native application presentation is organized around three spaces:
 
 - **Conversations:** people and messages first, with honest delivery and verification states.
 - **Mesh:** understand the connection available now; see what is queued, add a contact, and reach gateway settings without confusing a roadmap promise for a live connection.

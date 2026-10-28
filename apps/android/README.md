@@ -1,7 +1,14 @@
-# Hopla — OMCP Android beta (M5)
+# Auralis for Android — an independent OMCP client
 
 **Experimental · not production-ready · untested on real hardware.**
-Consumer name: **Hopla**. Protocol / crates stay **OMCP**. Package id `chat.omcp.app`.
+Consumer name: **Auralis**. Protocol / crates stay **OMCP**. Application id `chat.auralis.app` (`chat.auralis.app.debug` for debug); Kotlin namespace stays `chat.omcp.app`.
+
+Auralis installs alongside Hopla. Android intentionally gives the two apps separate private storage
+and Keystore namespaces: existing Hopla data is not read or copied automatically. Recovery requires
+the existing supported backup/24-word restore flow. Format compatibility does not imply automatic
+access to the other app’s Google Drive app-data backup. Configure a Google OAuth Android client for
+the **new application id and its signing-certificate SHA fingerprint**; an OAuth registration for
+`chat.omcp.app` is not the Auralis registration. The FileProvider authority follows `${applicationId}`.
 
 minSdk 31 (Android 12+) · Kotlin · Jetpack Compose · Material 3 · Rust core via UniFFI.
 
@@ -43,11 +50,31 @@ Services `AuthorizationClient` (scope `drive.appdata` only, consent shown by `Ma
 Drive v3 REST on `appDataFolder` (create / overwrite / download / delete one file). It is live
 when the build has `GOOGLE_OAUTH_CLIENT_ID` (Gradle property or env var, never committed); see
 [`../GOOGLE_DRIVE_BACKUP.md`](../GOOGLE_DRIVE_BACKUP.md) for creating the OAuth client. Without it,
-Drive shows as unavailable and debug builds use an in-memory “simulated Drive”. TODO: WorkManager
-retry when offline.
+Drive shows as unavailable in both debug and release; “Write it down” and 24-word recovery remain
+available. TODO: WorkManager retry when offline.
 
-Onboarding screens are plain layouts (`ui/components/Plain.kt`) pending design v0.1.2. Contact-add,
-QR and file-confirm follow DESIGN_SPEC §5.19–§5.24.
+For deliberate UI tests only, `-PAURALIS_SIMULATED_DRIVE_BACKUP=true` enables an in-memory store in
+**debug** builds without an OAuth client. It is off by default, cannot replace real Drive in release,
+and every setup/recovery/backup dashboard shows a prominent **TEST MODE** warning. No data is sent
+to Google; simulated backups disappear when the process ends. Never use this option for a distributable
+or recovery test that claims durable cloud storage.
+
+The Auralis application layer is rewritten around **Conversations · Mesh · You**. The Mesh hub
+uses live `MeshRepository` status; it is not a simulated radar. Contact-name search is recent-first
+and does not search message bodies. Profile security opens a contact chooser rather than silently
+selecting the first contact. Communities and Live remain honest future-capability screens, reached
+from Mesh rather than taking primary navigation slots.
+
+Onboarding, contact/QR, conversation/composer, burn viewer, recovery, backup, gateway policy, storage
+and contact security use a new native design system: system typography, paper/ink surfaces, mint
+signals, spacious grouped cards, adaptive safety-number grids, and English/French presentation copy.
+Recovery phrases stay protected; sensitive drafts are not copied into saveable UI state.
+
+**Retained intentionally:** the repository, view models, Rust UniFFI interface, cryptography, BLE
+transport, contact payloads, notification privacy policy, Android Keystore/persistence keys and
+backup formats. Historical `hopla-chat-`, `hopla-media-`, and `hopla-restore` identifiers remain for
+compatibility. Open Mesh Chat / Hopla is acknowledged in About and the upstream MIT licence remains.
+This is an application-layer reinterpretation, not an independent cryptographic implementation.
 
 ### Acceptance tests (Android)
 
@@ -68,7 +95,7 @@ QR and file-confirm follow DESIGN_SPEC §5.19–§5.24.
 | Identity, phrase, encrypted backup, restore | Real (Rust) |
 | QR show (ZXing) / scan (zxing-android-embedded), preview + safety number, verify / chat without verifying, mismatch block | Real |
 | 1:1 text over BLE GATT, offline queue flush on connect | Real code path; verified Kotlin↔Rust in JVM test with simulated PDUs, **not on phones** |
-| Notifications | Previews off by default (“New Hopla message”) |
+| Notifications | Previews off by default (“New Auralis message”) |
 | Gateway settings | Policy from core (500 MB/day, Wi-Fi only, metered warns); no real gateway transport |
 | File send / receive | Picker + 50 MB check before reading; Rust encrypts 64 KiB chunks (`queue_file`), transport streams them (`more_pending`), pause/auto-resume on reconnect, BLAKE3-verified receive saved to app storage, v0.1.1 bubble states. Verified Kotlin↔Rust in JVM; **not on phones** |
 | Android ↔ iPhone discovery | Scan filters: OMCP service UUID, OMCP manufacturer data, OMCP local name, Apple overflow-area data; iPhones are probed via GATT service discovery + Control read (`ScanClassifier`). Not tried on hardware |
@@ -87,10 +114,25 @@ export ANDROID_HOME=~/android-sdk ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.124790
 ```
 
 `RustBridgeTest` loads the host `target/debug/libomcp_ffi.so` through JNA (skipped if absent).
-App icon is a **placeholder** (redesign pending).
+The launcher and splash screen use the Auralis three-stroke signal mark.
+UniFFI Kotlin generation sets `android = true`: the vendor-generated cleaner uses Android
+SystemCleaner only on API 34+ and JNA below it, preserving the Android 12 / API 31 minimum without
+blanket lint suppression.
+
+### Auralis UI verification
+
+`ConversationPresentationTest` covers recent-first ordering, stable ties, trimmed case-insensitive
+contact search, message-content exclusion and orphan-history handling. `AuralisDesignTest` checks
+AA text contrast for both palettes and EN/FR key/format-placeholder parity. Existing onboarding,
+backup, restore, file, burn, privacy and screen-capture tests remain in place.
+
+Before distribution, run `./gradlew assembleDebug testDebugUnitTest lintDebug` after building Rust.
+Then check small screens, 200% font scaling, TalkBack, light/dark mode, system Back, canceled QR
+scans, failed restore/permission flows, repeated cloud actions and two-device interoperability on
+real Android hardware. Unit/resource checks do not establish device rendering or radio behavior.
 
 ## Notifications (v0.1.2)
-- Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Hopla: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.
+- Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Auralis: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.
 - Push: `notify/PushReceiver.kt` defines a content-free `PushPayload` (only the opaque mailbox id; extra keys are rejected) (N3). `StubPushReceiver` stands in for FCM since there's no Firebase project yet, so no `FirebaseMessagingService` is registered.
 - Tests: `NotificationsTest` (N1–N3, policy level). N2 history/lock screen is covered by the policy plus the public version; it hasn't been checked on a device.
 - Not done yet: real FCM integration and gateway token registration; avatars in notifications; quiet hours, per-chat mute and per-community levels; call, mention and livestream notifications.
@@ -116,11 +158,11 @@ App icon is a **placeholder** (redesign pending).
 - **Deferred to iOS (M6)**: iOS B1–B5. The 📸 screenshot notice has been dropped: screenshots are now blocked app-wide (see below).
 
 ## Product decisions (2026-10-24)
-- **Private calls**: `NotificationPolicy.callContent` shows "Hopla · Incoming call" with no caller name. This is policy and tests only, since there are no calls yet.
+- **Private calls**: `NotificationPolicy.callContent` shows "Auralis · Incoming call" with no caller name. This is policy and tests only, since there are no calls yet.
 - **Per-chat override**: the Security centre switch sets a per-chat override in both directions. Off shows the sender and preview even when global Private notifications is on.
-- **Hide on lock screen**: uses `VISIBILITY_PRIVATE` with a public version "Hopla · New message" (not blank). Otherwise `VISIBILITY_PUBLIC`.
+- **Hide on lock screen**: uses `VISIBILITY_PRIVATE` with a public version "Auralis · New message" (not blank). Otherwise `VISIBILITY_PUBLIC`.
 - **No screenshots anywhere**: `ScreenSecurity.Callbacks`, registered in `OmcpApplication`, sets FLAG_SECURE on every activity at pre-create, including the third-party QR scanner. On Android 13+ it also calls `setRecentsScreenshotEnabled(false)`. Compose dialogs and sheets inherit FLAG_SECURE, and nothing clears it. `ScreenSecurityTest` covers SS1, SS2 and B3 at the source and hook level. Black screenshots, recordings and casting on Android 10–15 still need a device check.
 - **Deferred to iOS (M6)**: secure-capture layer, app-switcher blur cover, `UIScreen.isCaptured` cover, and iOS SS1 and SS2.
 
 ## Roadmap
-- **v0.3 Hopla Nearby** (not started): dating, plus a Nearby session (Android foreground service with an ongoing notification, 30/60/120 min) and area mode over the gateway geohash. Acceptance NX1–NX3: first card < 1 s from cache, an iOS session lasting 60 min while locked, and an area-mode match notified within 5 min.
+- **v0.3 Auralis Nearby** (not started): dating, plus a Nearby session (Android foreground service with an ongoing notification, 30/60/120 min) and area mode over the gateway geohash. Acceptance NX1–NX3: first card < 1 s from cache, an iOS session lasting 60 min while locked, and an area-mode match notified within 5 min.

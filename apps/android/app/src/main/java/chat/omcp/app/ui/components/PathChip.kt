@@ -37,8 +37,8 @@ fun PathChip(
         PathKind.Queued -> c.pathQueue to c.pathQueueSoft
     }
     val padH = if (micro) 7.dp else 10.dp
-    val padV = if (micro) 2.dp else 5.dp
-    val textSize = if (micro) 10.sp else 12.sp
+    val padV = if (micro) 3.dp else 6.dp
+    val textSize = if (micro) 11.sp else 12.sp
     Row(
         modifier = modifier
             .clip(RoundedCornerShape(999.dp))

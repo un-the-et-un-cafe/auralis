@@ -7,12 +7,12 @@ import HoplaKit
 /// iCloud backup: one `OMCPBackup` record in the CloudKit **private** database. The record holds
 /// only the sealed blob from the Rust core (never the phrase or the key). Blocking API: call off
 /// the main thread. Requires the iCloud + CloudKit capability with container
-/// `iCloud.chat.omcp.app` (see OpenMeshChat.entitlements).
+/// `iCloud.chat.auralis.app` (see OpenMeshChat.entitlements).
 final class ICloudBackupStore: CloudBackupStore {
     let method = backupICloud
     // Lazy: CKContainer(identifier:) traps when the binary lacks the iCloud entitlement (e.g. unsigned
     // simulator builds in CI), so only create it when CloudKit is actually used.
-    private lazy var db = CKContainer(identifier: "iCloud.chat.omcp.app").privateCloudDatabase
+    private lazy var db = CKContainer(identifier: "iCloud.chat.auralis.app").privateCloudDatabase
     private let recordID = CKRecord.ID(recordName: "omcp-backup-v1")
     static let recordType = "OMCPBackup"
 
@@ -154,7 +154,7 @@ final class WebAuthenticator: NSObject, ASWebAuthenticationPresentationContextPr
 /// Private database, custom zone `HoplaBackupV1`. Each record has only `blob` (CKAsset), `seq` and
 /// `created`; blobs are Rust-sealed and padded. Blocking: call off the main thread.
 final class CloudKitChatRecordBackend: ChatRecordBackend {
-    private lazy var db = CKContainer(identifier: "iCloud.chat.omcp.app").privateCloudDatabase
+    private lazy var db = CKContainer(identifier: "iCloud.chat.auralis.app").privateCloudDatabase
     private let zoneID = CKRecordZone.ID(zoneName: ICloudChatRecords.zone, ownerName: CKCurrentUserDefaultName)
     private var zoneReady = false
 

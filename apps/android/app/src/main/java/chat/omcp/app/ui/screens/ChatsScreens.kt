@@ -46,10 +46,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import chat.omcp.app.R
+import chat.omcp.app.ui.components.AuralisSimulationNotice
 import chat.omcp.app.burn.BurnSpec
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material3.IconToggleButton
+import chat.omcp.app.ui.components.AuralisPanel
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.semantics.Role
+import chat.omcp.app.ui.components.AuralisWordmark
+import chat.omcp.app.ui.conversationContacts
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
 import chat.omcp.app.core.PathKind
@@ -95,7 +108,7 @@ private fun time(ms: Long) = DateFormat.getTimeInstance(DateFormat.SHORT).format
 
 private fun mb(bytes: Long) = "%.1f".format(bytes / 1_000_000.0)
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatsListScreen(
     vm: ChatsViewModel,
@@ -103,12 +116,15 @@ fun ChatsListScreen(
     onOpenChat: (String) -> Unit,
     onAddContact: () -> Unit,
     onBackup: () -> Unit,
+    onMesh: () -> Unit,
 ) {
     val status by vm.status.collectAsState()
     val contacts by vm.contacts.collectAsState()
     val messages by vm.messages.collectAsState()
-    val chats = if (DesignReviewFlags.showSampleChatsForDesignReview) DesignReviewSampleChats else contacts.map { c ->
-        val last = messages[c.id]?.lastOrNull()
+    var query by remember { mutableStateOf("") }
+    val visibleContacts = conversationContacts(contacts, messages, query)
+    val chats = if (DesignReviewFlags.showSampleChatsForDesignReview) DesignReviewSampleChats.filter { it.title.contains(query, ignoreCase = true) } else visibleContacts.map { c ->
+        val last = messages[c.id]?.maxByOrNull { it.timeMs }
         ChatRowModel(
             id = c.id,
             title = c.displayName,
@@ -119,7 +135,7 @@ fun ChatsListScreen(
                     it.file?.isPlaceholder == true -> "📎 " + it.file.name + " · " + stringResource(R.string.media_requested_toast).lowercase()
                     else -> it.file?.name ?: it.text
                 }
-            } ?: "",
+            } ?: stringResource(R.string.auralis_start_conversation),
             time = last?.let { time(it.timeMs) } ?: "",
             initials = c.displayName.split(" ").mapNotNull { it.firstOrNull()?.uppercase() }.take(2).joinToString(""),
             verified = c.verified,
@@ -131,49 +147,70 @@ fun ChatsListScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.tab_chats)) },
+                title = { AuralisWordmark() },
                 actions = {
                     IconButton(onClick = onAddContact) {
-                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.contact_add_title))
+                        Icon(Icons.Default.Add, contentDescription = stringResource(R.string.contact_add_title), tint = MaterialTheme.colorScheme.primary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
             )
         },
     ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(MaterialTheme.colorScheme.background),
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (backupGate == BackupGate.Banner) {
-                Callout(
-                    stringResource(R.string.backup_banner),
-                    CalloutKind.Warn,
-                    Modifier.padding(horizontal = 16.dp, vertical = 8.dp).clickable(onClick = onBackup),
-                )
-            }
-            Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (status.nearbyPeers > 0) PathChip(PathKind.Mesh, "Mesh · ${status.nearbyPeers} nearby")
-                if (status.queuedCount > 0 || status.nearbyPeers == 0) {
-                    PathChip(PathKind.Queued, if (status.queuedCount > 0) "${status.queuedCount} queued" else stringResource(R.string.path_queued))
+            item(key = "header") {
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Text(stringResource(R.string.auralis_conversations_title), style = MaterialTheme.typography.headlineLarge)
+                    AuralisSimulationNotice()
+                    FlowRow(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surface).clickable(onClick = onMesh).padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        PathChip(if (status.nearbyPeers > 0) PathKind.Mesh else PathKind.Queued,
+                            if (status.nearbyPeers > 0) stringResource(R.string.auralis_peers_count, status.nearbyPeers) else stringResource(R.string.path_queued))
+                        Text(stringResource(R.string.auralis_view_mesh), style = MaterialTheme.typography.labelMedium, color = LocalOmcpColors.current.ink2)
+                    }
+                    if (backupGate == BackupGate.Banner) {
+                        Callout(stringResource(R.string.backup_banner), CalloutKind.Warn, Modifier.clickable(onClick = onBackup))
+                    }
+                    if (contacts.isNotEmpty()) {
+                        TextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text(stringResource(R.string.auralis_search_contacts)) },
+                            leadingIcon = { Icon(Icons.Default.Search, null) },
+                            trailingIcon = if (query.isNotEmpty()) ({ IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, stringResource(R.string.auralis_clear_search)) } }) else null,
+                            singleLine = true,
+                            shape = RoundedCornerShape(18.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = LocalOmcpColors.current.surface2,
+                                unfocusedContainerColor = LocalOmcpColors.current.surface2,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                            ),
+                        )
+                    }
                 }
             }
             if (chats.isEmpty()) {
-                EmptyState(
-                    title = stringResource(R.string.chats_empty_title),
-                    body = stringResource(R.string.chats_empty_body),
-                )
-            } else {
-                LazyColumn {
-                    items(chats, key = { it.id }) { row ->
-                        ChatRow(row, onClick = { onOpenChat(row.id) })
-                    }
+                item(key = "empty") {
+                    EmptyState(
+                        title = stringResource(if (query.isEmpty()) R.string.chats_empty_title else R.string.auralis_search_empty_title),
+                        body = stringResource(if (query.isEmpty()) R.string.chats_empty_body else R.string.auralis_search_empty_body),
+                        fillAvailableSpace = false,
+                        actionLabel = stringResource(if (query.isEmpty()) R.string.contact_add_title else R.string.auralis_clear_search),
+                        onAction = if (query.isEmpty()) onAddContact else ({ query = "" }),
+                    )
                 }
+            } else {
+                items(chats, key = { it.id }) { row -> ChatRow(row, onClick = { onOpenChat(row.id) }) }
             }
         }
     }
@@ -310,15 +347,23 @@ fun ChatThreadScreen(
                 Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surface)
-                    .padding(8.dp),
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.AttachFile, contentDescription = stringResource(R.string.file_attach)) }
+                if (vm.chatBurn() == null) {
+                    IconToggleButton(checked = burnNext, onCheckedChange = { burnNext = it }) {
+                        Icon(Icons.Default.LocalFireDepartment, stringResource(R.string.auralis_burn_toggle), tint = if (burnNext) MaterialTheme.colorScheme.primary else c.ink3)
+                    }
+                }
                 TextField(
                     value = draft,
                     onValueChange = { draft = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message") },
+                    placeholder = { Text(stringResource(R.string.auralis_message_placeholder)) },
+                    maxLines = 5,
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = c.surface2,
                         unfocusedContainerColor = c.surface2,
@@ -326,24 +371,34 @@ fun ChatThreadScreen(
                         focusedIndicatorColor = Color.Transparent,
                         unfocusedIndicatorColor = Color.Transparent,
                     ),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(24.dp),
                 )
                 val burnOn = burnNext || vm.chatBurn() != null
+                val burnToggleLabel = stringResource(R.string.auralis_burn_toggle)
                 Box(
                     Modifier
+                        .padding(start = 8.dp)
                         .size(48.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(if (draft.isNotBlank()) MaterialTheme.colorScheme.primary else c.surface2)
                         .combinedClickable(
-                                                        onClick = {
+                            role = Role.Button,
+                            onClick = {
                                 if (draft.isNotBlank()) {
                                     vm.send(draft, if (burnNext) vm.chatBurn() ?: BurnSpec.onOpen() else null)
                                     draft = ""; burnNext = false
                                 }
                             },
+                            onLongClickLabel = burnToggleLabel,
                             onLongClick = { burnNext = !burnNext },
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (burnOn) Text("🔥") else Icon(Icons.Default.Send, contentDescription = "Send")
+                    Icon(
+                        if (burnOn) Icons.Default.LocalFireDepartment else Icons.Default.Send,
+                        contentDescription = stringResource(R.string.file_send) + if (burnOn) " · " + stringResource(R.string.burn_chat_title) else "",
+                        tint = if (draft.isNotBlank()) MaterialTheme.colorScheme.onPrimary else c.ink3,
+                    )
                 }
             }
         },
@@ -377,9 +432,17 @@ fun ChatThreadScreen(
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                if (msgs.isEmpty()) {
+                    item {
+                        AuralisPanel {
+                            Text(stringResource(R.string.auralis_thread_empty_title), style = MaterialTheme.typography.titleLarge)
+                            Text(stringResource(R.string.auralis_thread_empty_body), style = MaterialTheme.typography.bodyMedium, color = c.ink2)
+                        }
+                    }
+                }
                 items(msgs, key = { it.id }) { m ->
                     val f = m.file
                     if (m.status == ChatMessage.Status.System) {
@@ -468,8 +531,8 @@ private fun FileBubble(
         Column(
             Modifier
                 .fillMaxWidth(0.8f)
-                .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, if (f.state == S.IntegrityFailed) c.danger else c.line, RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(22.dp))
+                .border(1.dp, if (f.state == S.IntegrityFailed) c.danger else c.line, RoundedCornerShape(22.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .then(if (f.state == S.Received && f.localPath != null) Modifier.clickable(onClick = onOpen) else Modifier)
                 .padding(12.dp),
@@ -514,13 +577,14 @@ private fun Bubble(mine: Boolean, text: String, meta: String) {
     ) {
         Box(
             Modifier
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(22.dp))
                 .then(
-                    if (!mine) Modifier.border(1.dp, c.line, RoundedCornerShape(14.dp))
+                    if (!mine) Modifier.border(1.dp, c.line, RoundedCornerShape(22.dp))
                     else Modifier,
                 )
                 .background(bg)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .widthIn(max = 560.dp)
+                .padding(horizontal = 18.dp, vertical = 12.dp),
         ) {
             Text(text, style = MaterialTheme.typography.bodyLarge)
         }

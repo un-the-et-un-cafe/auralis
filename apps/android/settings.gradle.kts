@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "OpenMeshChat"
+rootProject.name = "Auralis"
 include(":app")

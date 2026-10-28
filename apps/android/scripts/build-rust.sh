@@ -14,10 +14,10 @@ cd "$ROOT"
 targets=()
 for a in $ABIS; do targets+=(-t "$a"); done
 flag=""; [ "$PROFILE" = "release" ] && flag="--release"
-cargo ndk "${targets[@]}" --platform 31 -o "$OUT/jniLibs" build -p omcp-ffi $flag
+cargo ndk "${targets[@]}" --platform 31 -o "$OUT/jniLibs" build --locked -p omcp-ffi $flag
 # Bindings are generated from a host build of the same crate (library mode).
-cargo build -p omcp-ffi
-cargo run -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- \
+cargo build --locked -p omcp-ffi
+cargo run --locked -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- \
   generate --library "$ROOT/target/debug/libomcp_ffi.so" --language kotlin \
   --config "$ROOT/crates/omcp-ffi/uniffi.toml" --out-dir "$OUT/kotlin" --no-format
 echo "omcp-ffi: jniLibs + Kotlin bindings in $OUT"

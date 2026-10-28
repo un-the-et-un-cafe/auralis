@@ -4,8 +4,15 @@ import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.ui.unit.dp
+import chat.omcp.app.ui.screens.MeshHomeScreen
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Person
@@ -61,6 +68,7 @@ import chat.omcp.app.ui.vm.OnboardingViewModel
 
 private object Routes {
     const val Chats = "chats"
+    const val Mesh = "mesh"
     const val Communities = "communities"
     const val Live = "live"
     const val You = "you"
@@ -81,7 +89,7 @@ private inline fun <reified VM : androidx.lifecycle.ViewModel> vm(key: String? =
     viewModel(key = key, factory = viewModelFactory { initializer { make() } })
 
 @Composable
-fun OmcpRoot(
+fun AuralisApp(
     repo: MeshRepository,
     cloud: CloudBackupStore,
     secureWindow: (Boolean) -> Unit,
@@ -90,6 +98,7 @@ fun OmcpRoot(
     val ctx = LocalContext.current
     val onboarded by repo.onboarded.collectAsState()
     val contacts by repo.contacts.collectAsState()
+    val meshStatus by repo.status.collectAsState()
     // Re-evaluate the backup gate whenever contacts change or we recompose after onboarding.
     val gateTick = remember { mutableIntStateOf(0) }
     val gate = remember(onboarded, contacts, gateTick.intValue) { repo.backupGate() }
@@ -135,21 +144,28 @@ fun OmcpRoot(
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
-    val showBar = route in setOf(Routes.Chats, Routes.Communities, Routes.Live, Routes.You)
+    val showBar = route in setOf(Routes.Chats, Routes.Mesh, Routes.You)
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (showBar) {
-                NavigationBar {
-                    NavigationBarItem(route == Routes.Chats, { nav.tab(Routes.Chats) }, { Icon(Icons.Default.Chat, null) }, label = { Text(stringResource(R.string.tab_chats)) })
-                    NavigationBarItem(route == Routes.Communities, { nav.tab(Routes.Communities) }, { Icon(Icons.Default.Groups, null) }, label = { Text(stringResource(R.string.tab_communities)) })
-                    NavigationBarItem(route == Routes.Live, { nav.tab(Routes.Live) }, { Icon(Icons.Default.LiveTv, null) }, label = { Text(stringResource(R.string.tab_live)) })
-                    NavigationBarItem(route == Routes.You, { nav.tab(Routes.You) }, { Icon(Icons.Default.Person, null) }, label = { Text(stringResource(R.string.tab_you)) })
+                NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                    val itemColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = MaterialTheme.colorScheme.primary,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    NavigationBarItem(route == Routes.Chats, { nav.tab(Routes.Chats) }, { Icon(Icons.Default.Chat, null) }, label = { Text(stringResource(R.string.tab_chats)) }, colors = itemColors)
+                    NavigationBarItem(route == Routes.Mesh, { nav.tab(Routes.Mesh) }, { Icon(Icons.Default.Hub, null) }, label = { Text(stringResource(R.string.tab_mesh)) }, colors = itemColors)
+                    NavigationBarItem(route == Routes.You, { nav.tab(Routes.You) }, { Icon(Icons.Default.Person, null) }, label = { Text(stringResource(R.string.tab_you)) }, colors = itemColors)
                 }
             }
         },
     ) { padding ->
-        NavHost(navController = nav, startDestination = Routes.Chats, modifier = Modifier.padding(padding)) {
+        NavHost(navController = nav, startDestination = Routes.Chats, modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
             composable(Routes.Chats) {
                 ChatsListScreen(
                     vm = vm { ChatsViewModel(repo) },
@@ -157,10 +173,21 @@ fun OmcpRoot(
                     onOpenChat = { nav.navigate(Routes.thread(it)) },
                     onAddContact = { nav.navigate(Routes.ContactAdd) },
                     onBackup = { nav.navigate(Routes.Backup) },
+                    onMesh = { nav.tab(Routes.Mesh) },
                 )
             }
-            composable(Routes.Communities) { CommunitiesHomeScreen() }
-            composable(Routes.Live) { LiveTabScreen() }
+            composable(Routes.Mesh) {
+                MeshHomeScreen(
+                    status = meshStatus,
+                    onFindNearby = requestMesh,
+                    onAddContact = { nav.navigate(Routes.ContactAdd) },
+                    onGateway = { nav.navigate(Routes.Gateway) },
+                    onCommunities = { nav.navigate(Routes.Communities) },
+                    onLive = { nav.navigate(Routes.Live) },
+                )
+            }
+            composable(Routes.Communities) { CommunitiesHomeScreen(onBack = { nav.popBackStack() }) }
+            composable(Routes.Live) { LiveTabScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.You) {
                 YouScreen(
                     identity = repo.core.identity(),
@@ -170,7 +197,8 @@ fun OmcpRoot(
                     hideOnLockScreen = repo.appStore.hideOnLockScreen,
                     onSetHideOnLockScreen = { repo.appStore.hideOnLockScreen = it },
                     onGateway = { nav.navigate(Routes.Gateway) },
-                    onSecurity = { contacts.firstOrNull()?.let { nav.navigate(Routes.security(it.id)) } },
+                    contacts = contacts,
+                    onSecurity = { id -> nav.navigate(Routes.security(id)) },
                     onBackup = { nav.navigate(Routes.Backup) },
                     onStorage = { nav.navigate(Routes.Storage) },
                     onMyQr = { nav.navigate(Routes.MyQr) },

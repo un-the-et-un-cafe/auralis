@@ -13,6 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material3.Icon
+import chat.omcp.app.ui.theme.OmcpDark
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -60,17 +68,19 @@ fun BurnBubble(m: ChatMessage, onOpen: () -> Unit) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = if (m.mine) Alignment.End else Alignment.Start) {
         Box(
             Modifier
-                .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, c.line, RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .border(1.dp, c.line, RoundedCornerShape(24.dp))
                 .background(if (m.mine) c.brandSoft else MaterialTheme.colorScheme.surface)
                 .then(if (tappable) Modifier.clickable(onClick = onOpen) else Modifier)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .heightIn(min = 64.dp)
+                .padding(horizontal = 18.dp, vertical = 16.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (tappable && !m.isViewOnceMedia) {
                     Text("••••••••••", modifier = Modifier.blur(6.dp), color = c.ink2)
                 }
-                Text("🔥 $label", style = MaterialTheme.typography.bodyLarge)
+                Icon(Icons.Default.LocalFireDepartment, null, tint = MaterialTheme.colorScheme.primary)
+                Text(label, style = MaterialTheme.typography.bodyLarge)
             }
         }
     }
@@ -101,7 +111,7 @@ fun BurnViewer(open: OpenedBurn, now: () -> Long, onClose: () -> Unit) {
             }
         }
         Column(
-            Modifier.fillMaxSize().background(Color.Black).padding(16.dp),
+            Modifier.fillMaxSize().background(OmcpDark.Bg).safeDrawingPadding().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -111,7 +121,7 @@ fun BurnViewer(open: OpenedBurn, now: () -> Long, onClose: () -> Unit) {
                     CircularProgressIndicator(
                         progress = { ((end - t).coerceAtLeast(0).toFloat() / total) },
                         modifier = Modifier.size(28.dp),
-                        color = Color(0xFFFF7A3D),
+                        color = OmcpDark.Brand,
                     )
                     Text(" ${((end - t).coerceAtLeast(0) / 1000) + 1}s", color = Color.White)
                 }
@@ -128,10 +138,10 @@ fun BurnViewer(open: OpenedBurn, now: () -> Long, onClose: () -> Unit) {
                     }
                     // TODO(M5.x): view-once video playback (Media3) — not bundled in the beta.
                     mime.startsWith("video/") -> Text(stringResource(R.string.burn_media_unavailable), color = Color.White)
-                    else -> Text(String(open.body), color = Color.White, style = MaterialTheme.typography.headlineSmall)
+                    else -> Text(String(open.body), color = OmcpDark.Ink, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.verticalScroll(rememberScrollState()))
                 }
             }
-            Text(stringResource(R.string.burn_honest_copy), color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.burn_honest_copy), color = OmcpDark.Ink2, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

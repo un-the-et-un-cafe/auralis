@@ -2,56 +2,56 @@ package chat.omcp.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-/** Designy tokens — light (DESIGN_SPEC §2.1 / mockups/tokens.css). */
+/** Auralis day palette: paper, deep ink and a restrained teal accent. */
 object OmcpLight {
-    val Bg = Color(0xFFF3F5F8)
+    val Bg = Color(0xFFF4F8F6)
     val Surface = Color(0xFFFFFFFF)
-    val Surface2 = Color(0xFFEEF1F5)
-    val Ink = Color(0xFF0F1B2D)
-    val Ink2 = Color(0xFF4A5B70)
-    val Ink3 = Color(0xFF6B7C90)
-    val Line = Color(0xFFD8DEE8)
-    val Brand = Color(0xFF0B6E6A)
-    val BrandSoft = Color(0xFFE0F3F1)
-    val Ok = Color(0xFF0F6B3A)
-    val OkSoft = Color(0xFFE3F4EA)
-    val Warn = Color(0xFF8A5A10)
-    val WarnSoft = Color(0xFFFAF0D8)
-    val Danger = Color(0xFF9B1C2E)
-    val DangerSoft = Color(0xFFFCE8EB)
-    val PathMesh = Color(0xFF0B6E6A)
-    val PathMeshSoft = Color(0xFFE0F3F1)
-    val PathGateway = Color(0xFF1A5F9E)
-    val PathGatewaySoft = Color(0xFFE4EEF8)
-    val PathMixed = Color(0xFF5A4A9E)
-    val PathMixedSoft = Color(0xFFEEEBF8)
-    val PathQueue = Color(0xFF8A5A10)
-    val PathQueueSoft = Color(0xFFFAF0D8)
+    val Surface2 = Color(0xFFE8F0EC)
+    val Ink = Color(0xFF071A21)
+    val Ink2 = Color(0xFF405F5A)
+    val Ink3 = Color(0xFF526D67)
+    val Line = Color(0xFFC9DBD4)
+    val Brand = Color(0xFF176B5B)
+    val BrandSoft = Color(0xFFD9F2E8)
+    val Ok = Color(0xFF216D47)
+    val OkSoft = Color(0xFFE0F2E6)
+    val Warn = Color(0xFF815318)
+    val WarnSoft = Color(0xFFFBF0DD)
+    val Danger = Color(0xFFA32941)
+    val DangerSoft = Color(0xFFFCE8EC)
+    val PathMesh = Brand
+    val PathMeshSoft = BrandSoft
+    val PathGateway = Color(0xFF285F91)
+    val PathGatewaySoft = Color(0xFFE5EFF9)
+    val PathMixed = Color(0xFF68538F)
+    val PathMixedSoft = Color(0xFFEFEAF7)
+    val PathQueue = Warn
+    val PathQueueSoft = WarnSoft
 }
 
-/** Designy tokens — dark. */
+/** Auralis night palette: luminous mint over deep ink, never pure black. */
 object OmcpDark {
-    val Bg = Color(0xFF0C1219)
-    val Surface = Color(0xFF151D28)
-    val Surface2 = Color(0xFF1C2633)
-    val Ink = Color(0xFFE8EEF5)
-    val Ink2 = Color(0xFFA3B1C2)
-    val Ink3 = Color(0xFF7A8A9C)
-    val Line = Color(0xFF2A3646)
-    val Brand = Color(0xFF3DBDB6)
-    val BrandSoft = Color(0xFF143836)
-    val Ok = Color(0xFF5DCA8E)
-    val OkSoft = Color(0xFF143525)
-    val Warn = Color(0xFFE0B45A)
-    val WarnSoft = Color(0xFF3A2E14)
-    val Danger = Color(0xFFF07178)
-    val DangerSoft = Color(0xFF3A1820)
-    val PathMesh = Color(0xFF3DBDB6)
-    val PathMeshSoft = Color(0xFF143836)
-    val PathGateway = Color(0xFF6BA3D9)
-    val PathGatewaySoft = Color(0xFF1A2E42)
-    val PathMixed = Color(0xFFA89AD9)
-    val PathMixedSoft = Color(0xFF2A2540)
-    val PathQueue = Color(0xFFE0B45A)
-    val PathQueueSoft = Color(0xFF3A2E14)
+    val Bg = Color(0xFF071A21)
+    val Surface = Color(0xFF10282F)
+    val Surface2 = Color(0xFF18353B)
+    val Ink = Color(0xFFF0F8F4)
+    val Ink2 = Color(0xFFBAD0CC)
+    val Ink3 = Color(0xFF9CB6B0)
+    val Line = Color(0xFF365459)
+    val Brand = Color(0xFF84E4CA)
+    val BrandSoft = Color(0xFF193F38)
+    val Ok = Color(0xFFA1DFAF)
+    val OkSoft = Color(0xFF1B3B2C)
+    val Warn = Color(0xFFE7C58D)
+    val WarnSoft = Color(0xFF3D3324)
+    val Danger = Color(0xFFFFA8B6)
+    val DangerSoft = Color(0xFF422631)
+    val PathMesh = Brand
+    val PathMeshSoft = BrandSoft
+    val PathGateway = Color(0xFFA4C9EF)
+    val PathGatewaySoft = Color(0xFF1D354A)
+    val PathMixed = Color(0xFFCBBAF0)
+    val PathMixedSoft = Color(0xFF342D48)
+    val PathQueue = Warn
+    val PathQueueSoft = WarnSoft
 }

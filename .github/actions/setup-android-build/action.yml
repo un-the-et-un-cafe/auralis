@@ -1,0 +1,45 @@
+name: Set up Android build tools
+description: Shared unsigned Android build environment for CI and manual packaging.
+runs:
+  using: composite
+  steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      with:
+        distribution: temurin
+        java-version: "17"
+    - name: Validate Gradle wrapper and configure caching
+      uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      with:
+        cache-provider: basic
+        cache-read-only: ${{ github.event_name == 'pull_request' || github.ref_name != github.event.repository.default_branch }}
+        validate-wrappers: true
+    - name: Install Android SDK and Rust targets
+      shell: bash
+      env:
+        NDK_VERSION: "27.2.12479018"
+        CMDLINE_TOOLS_BUILD: "13114758"
+        CMDLINE_TOOLS_SHA256: "7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee"
+      run: |
+        rustup show active-toolchain
+        rustup target add aarch64-linux-android x86_64-linux-android
+        cargo install cargo-ndk --version 4.1.2 --locked
+        # Pin CLI 19 rather than the runner's mutable latest SDK manager shim.
+        # Archive verified against Google's repository metadata before SHA-256 pinning.
+        TOOLS="$RUNNER_TEMP/auralis-android-tools"
+        mkdir -p "$TOOLS"
+        curl --fail --location --retry 3 --max-time 180 \
+          "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip" \
+          -o "$TOOLS/tools.zip"
+        echo "$CMDLINE_TOOLS_SHA256  $TOOLS/tools.zip" | sha256sum --check --strict
+        unzip -q "$TOOLS/tools.zip" -d "$TOOLS"
+        SDKMANAGER="$TOOLS/cmdline-tools/bin/sdkmanager"
+        # Ignore only yes's expected SIGPIPE, not sdkmanager failure.
+        set +o pipefail
+        yes | "$SDKMANAGER" --sdk_root="${ANDROID_HOME:?Android SDK is required}" --licenses > /dev/null
+        set -o pipefail
+        "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+          "platform-tools" "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+        rustc --version --verbose
+        java -version

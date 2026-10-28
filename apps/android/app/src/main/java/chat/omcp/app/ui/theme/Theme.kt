@@ -1,6 +1,12 @@
 package chat.omcp.app.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -60,6 +66,14 @@ private val LightScheme = lightColorScheme(
     onPrimary = Color.White,
     primaryContainer = OmcpLight.BrandSoft,
     onPrimaryContainer = OmcpLight.Brand,
+    secondary = OmcpLight.Brand,
+    onSecondary = Color.White,
+    secondaryContainer = OmcpLight.BrandSoft,
+    onSecondaryContainer = OmcpLight.Brand,
+    surfaceTint = OmcpLight.Brand,
+    surfaceContainer = OmcpLight.Surface,
+    surfaceContainerHigh = OmcpLight.Surface2,
+    outlineVariant = OmcpLight.Line,
     background = OmcpLight.Bg,
     onBackground = OmcpLight.Ink,
     surface = OmcpLight.Surface,
@@ -73,9 +87,17 @@ private val LightScheme = lightColorScheme(
 
 private val DarkScheme = darkColorScheme(
     primary = OmcpDark.Brand,
-    onPrimary = Color(0xFF062624),
+    onPrimary = OmcpDark.Bg,
     primaryContainer = OmcpDark.BrandSoft,
     onPrimaryContainer = OmcpDark.Brand,
+    secondary = OmcpDark.Brand,
+    onSecondary = OmcpDark.Bg,
+    secondaryContainer = OmcpDark.BrandSoft,
+    onSecondaryContainer = OmcpDark.Brand,
+    surfaceTint = OmcpDark.Brand,
+    surfaceContainer = OmcpDark.Surface,
+    surfaceContainerHigh = OmcpDark.Surface2,
+    outlineVariant = OmcpDark.Line,
     background = OmcpDark.Bg,
     onBackground = OmcpDark.Ink,
     surface = OmcpDark.Surface,
@@ -139,6 +161,17 @@ fun OmcpTheme(
     val scheme = if (darkTheme) DarkScheme else LightScheme
     val extra = if (darkTheme) DarkExtra else LightExtra
     CompositionLocalProvider(LocalOmcpColors provides extra) {
-        MaterialTheme(colorScheme = scheme, content = content)
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = AuralisTypography,
+            shapes = Shapes(
+                extraSmall = RoundedCornerShape(8.dp),
+                small = RoundedCornerShape(12.dp),
+                medium = RoundedCornerShape(20.dp),
+                large = RoundedCornerShape(28.dp),
+                extraLarge = RoundedCornerShape(32.dp),
+            ),
+            content = { Surface(Modifier.fillMaxSize(), color = scheme.background, contentColor = scheme.onBackground, content = content) },
+        )
     }
 }

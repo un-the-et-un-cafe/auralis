@@ -4,147 +4,159 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+# A reusable invocation must not cancel its parent release workflow.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
 jobs:
+  workflows:
+    name: workflow lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate GitHub Actions workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+
   rust:
     name: rust
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: rustfmt, clippy
-
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install Rust using the repository toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+          rustc --version --verbose
+      - name: Verify audited OMCP source invariants
+        run: python3 scripts/check_protocol_invariants.py
       - name: Cargo fmt
         run: cargo fmt --all -- --check
-
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Cargo test (including OMCP simulations)
+        run: cargo test --locked --workspace
 
-      - name: Cargo test
-        run: cargo test --workspace
-
-  # M5 Android beta: Rust .so via cargo-ndk + UniFFI bindings, then Gradle.
   android:
-    name: android (stub)
-    runs-on: ubuntu-latest
-    env:
-      NDK_VERSION: 27.2.12479018
+    name: android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install stable Rust + Android targets
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin/cargo-ndk
-            target
-          key: android-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
-          restore-keys: android-cargo-${{ runner.os }}-
-
-      - name: Install cargo-ndk
-        run: command -v cargo-ndk || cargo install cargo-ndk --locked
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          # The legacy 'tools' package (the action's default) no longer exists
-          # in cmdline-tools 16+, which made sdkmanager exit 1.
-          packages: platform-tools
-
-      - name: Install NDK + platform
-        run: sdkmanager "ndk;${NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Build omcp-ffi (.so + Kotlin bindings)
+          persist-credentials: false
+      - name: Set up Android build tools
+        uses: ./.github/actions/setup-android-build
+      - name: Build omcp-ffi (.so and Kotlin bindings)
         working-directory: apps/android
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
         run: ./scripts/build-rust.sh
-
-      - name: Gradle assembleDebug + unit tests
+      - name: Assemble, lint and test Android
         working-directory: apps/android
-        run: ./gradlew assembleDebug testDebugUnitTest --console=plain
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        run: ./gradlew assembleDebug lintDebug testDebugUnitTest --no-daemon --console=plain
+      - name: Upload Android reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: hopla-debug-apk
+          name: auralis-android-reports-${{ github.sha }}
+          path: |
+            apps/android/app/build/reports/
+            apps/android/app/build/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload development APK (not a release)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auralis-debug-apk-${{ github.sha }}
           path: apps/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
           retention-days: 7
 
-  # M6 — needs macOS runner; still skipped.
   ios:
     name: ios
-    runs-on: macos-latest
+    # The Rust build script produces an arm64, not an Intel, simulator slice.
+    runs-on: macos-15
     timeout-minutes: 60
     defaults:
       run:
         working-directory: apps/ios
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install stable Rust + iOS targets
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          targets: aarch64-apple-ios,aarch64-apple-ios-sim
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ios-cargo-${{ hashFiles('**/Cargo.toml', 'rust-toolchain.toml') }}
-
+          persist-credentials: false
+      - name: Set up iOS build tools
+        uses: ./.github/actions/setup-ios-build
       - name: HoplaKit (SwiftPM) tests
         working-directory: apps/ios/HoplaKit
         run: swift test
-
       - name: Strings EN/FR parity
         run: python3 scripts/strings.py --check
-
-      - name: Build omcp-ffi xcframework + Swift bindings
+      - name: Build omcp-ffi xcframework and Swift bindings
         run: ./scripts/build-rust.sh
-
-      - name: XcodeGen
-        run: |
-          command -v xcodegen || brew install xcodegen
-          xcodegen generate
-
-      - name: Pick simulator
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Pick an available iPhone simulator
         id: sim
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")))')
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
-
-      - name: xcodebuild build + test (simulator)
+      - name: Build and test on simulator
+        env:
+          SIMULATOR_UDID: ${{ steps.sim.outputs.udid }}
         run: |
           xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
-            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -destination "id=$SIMULATOR_UDID" \
+            -resultBundlePath build/Auralis-tests.xcresult \
             CODE_SIGNING_ALLOWED=NO build test
+      - name: Upload simulator test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auralis-ios-test-results-${{ github.sha }}
+          path: apps/ios/build/Auralis-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+  required:
+    name: required checks
+    if: ${{ always() }}
+    needs: [workflows, rust, android, ios]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every quality gate to pass
+        env:
+          WORKFLOWS_RESULT: ${{ needs.workflows.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          ANDROID_RESULT: ${{ needs.android.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
+        run: |
+          for result in "$WORKFLOWS_RESULT" "$RUST_RESULT" "$ANDROID_RESULT" "$IOS_RESULT"; do
+            test "$result" = success
+          done

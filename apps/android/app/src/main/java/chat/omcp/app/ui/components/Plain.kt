@@ -4,9 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -23,8 +26,8 @@ import androidx.compose.ui.unit.dp
 import chat.omcp.app.ui.theme.LocalOmcpColors
 
 /**
- * Plain building blocks for flows whose visual design is pending (onboarding v0.1.2).
- * Keep screens built from these so a restyle touches one file.
+ * Shared Auralis page shell for onboarding, backup and restore.
+ * Scrollable at large font scales; existing flow controls remain untouched.
  */
 @Composable
 fun PlainPage(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
@@ -32,11 +35,14 @@ fun PlainPage(title: String, modifier: Modifier = Modifier, content: @Composable
         modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 24.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Text(title, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        AuralisWordmark(Modifier.padding(bottom = 12.dp))
+        AuralisSimulationNotice()
+        Text(title, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
         content()
     }
 }
@@ -62,9 +68,9 @@ fun Callout(text: String, kind: CalloutKind = CalloutKind.Info, modifier: Modifi
         style = MaterialTheme.typography.bodyMedium,
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(bg)
-            .padding(12.dp),
+            .padding(16.dp),
     )
 }
 
@@ -72,27 +78,27 @@ fun Callout(text: String, kind: CalloutKind = CalloutKind.Info, modifier: Modifi
 @Composable
 fun SafetyNumberBlock(groups: List<String>, differs: Set<Int> = emptySet()) {
     val c = LocalOmcpColors.current
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(c.surface2)
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        groups.chunked(4).forEachIndexed { row, g ->
-            androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                g.forEachIndexed { col, digits ->
-                    val idx = row * 4 + col
-                    Text(
-                        digits,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = if (idx in differs) c.danger else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.semantics {
-                            contentDescription = "Group ${idx + 1}: ${digits.toList().joinToString(" ")}" +
-                                if (idx in differs) ", differs" else ""
-                        },
-                    )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = (maxWidth.value / (72f * LocalDensity.current.fontScale)).toInt().coerceIn(1, 4)
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(c.surface2).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            groups.chunked(columns).forEachIndexed { row, digitsInRow ->
+                androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                    digitsInRow.forEachIndexed { col, digits ->
+                        val idx = row * columns + col
+                        Text(
+                            digits,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (idx in differs) c.danger else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).semantics {
+                                contentDescription = "Group ${idx + 1}: ${digits.toList().joinToString(" ")}" +
+                                    if (idx in differs) ", differs" else ""
+                            },
+                        )
+                    }
                 }
             }
         }

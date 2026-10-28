@@ -1,7 +1,7 @@
 # XcodeGen spec. Generate with: ./scripts/build-rust.sh && xcodegen generate
 name: OpenMeshChat
 options:
-  bundleIdPrefix: chat.omcp
+  bundleIdPrefix: chat.auralis
   deploymentTarget:
     iOS: "17.0"
   createIntermediateGroups: true
@@ -43,7 +43,7 @@ targets:
       - target: OmcpFFI
       - target: NotificationService
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.omcp.app
+      PRODUCT_BUNDLE_IDENTIFIER: chat.auralis.app
       PRODUCT_NAME: OpenMeshChat
       INFOPLIST_FILE: OpenMeshChat/Info.plist
       GENERATE_INFOPLIST_FILE: false
@@ -58,7 +58,7 @@ targets:
     dependencies:
       - package: HoplaKit
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.omcp.app.notifications
+      PRODUCT_BUNDLE_IDENTIFIER: chat.auralis.app.notifications
       INFOPLIST_FILE: NotificationService/Info.plist
       GENERATE_INFOPLIST_FILE: false
   OpenMeshChatTests:

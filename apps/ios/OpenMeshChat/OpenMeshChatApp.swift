@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// Hopla (protocol: OMCP). Root: onboarding until done, then tabs; the whole window is under
+/// Auralis (protocol: OMCP). Root: onboarding until done, then tabs; the whole window is under
 /// the secure-capture layer with app-switcher and recording covers.
 @main
 struct OpenMeshChatApp: App {
@@ -14,13 +14,13 @@ struct OpenMeshChatApp: App {
         WindowGroup {
             Group {
                 if model.onboarded {
-                    OmcpRootView()
+                    AuralisRootView()
                 } else {
                     OnboardingView()
                 }
             }
             .environmentObject(model)
-            .environment(\.omcpColors, OmcpColors.current())
+            .auralisTheme()
             .screenSecurity()
             .onChange(of: model.onboarded) { _, on in if on { model.startMesh() } }
         }

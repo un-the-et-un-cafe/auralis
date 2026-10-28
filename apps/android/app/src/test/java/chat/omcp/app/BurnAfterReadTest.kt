@@ -45,8 +45,8 @@ class BurnAfterReadTest {
     }
 
     @Test fun `B5 burn content never in notification previews`() {
-        val n = NotificationPolicy.content(store, bob, "Bob", "secret", "Hopla", "New message", burn = true)
-        assertEquals("Hopla", n.title)
+        val n = NotificationPolicy.content(store, bob, "Bob", "secret", "Auralis", "New message", burn = true)
+        assertEquals("Auralis", n.title)
         assertFalse(listOf(n.title, n.body, n.publicTitle, n.publicBody).any { "secret" in it || "Bob" in it })
     }
 }

@@ -9,17 +9,22 @@ struct SecurityCentreView: View {
     var body: some View {
         let _ = model.revision
         let ct = model.repo.contact(contact.id) ?? contact
-        Form {
-            Section {
-                HStack { Text(ct.displayName).font(.title3.bold()); VerifiedBadge(contact: ct) }
+        AuralisSettingsPage {
+            AuralisSettingsSection {
+                HStack(spacing: 16) {
+                    AuralisAvatar(name: ct.displayName, size: 64)
+                    Text(ct.displayName).font(.title2.weight(.semibold))
+                    VerifiedBadge(contact: ct)
+                }
                 Text("omcp1:\(ct.id.prefix(4))…\(ct.id.suffix(4))").font(.footnote.monospaced()).foregroundStyle(c.ink2)
                 Text(L(ct.verified ? "verified_contact" : "unverified")).foregroundStyle(ct.verified ? c.ok : c.ink2)
             }
-            Section(header: Text(L("sn_section")), footer: Text(L("sn_compare", ct.displayName))) {
+            AuralisSettingsSection(L("sn_section"), footer: L("sn_compare", ct.displayName)) {
                 SafetyNumberGrid(groups: ct.safetyNumber)
                 Button(L(ct.verified ? "sn_unverify" : "sn_mark_verified")) { try? model.repo.setVerified(ct.id, !ct.verified) }
+                    .buttonStyle(AuralisPrimaryButtonStyle())
             }
-            Section(header: Text(L("session"))) {
+            AuralisSettingsSection(L("session")) {
                 Text(model.core.suiteLabel).font(.footnote.monospaced())
             }
         }

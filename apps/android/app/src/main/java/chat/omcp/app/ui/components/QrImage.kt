@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import chat.omcp.app.R
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -32,6 +34,7 @@ fun qrBitmap(payload: String, size: Int = 512): Bitmap {
 
 @Composable
 fun QrImage(payload: String, modifier: Modifier = Modifier) {
+    val label = stringResource(R.string.auralis_qr_a11y)
     val bmp = remember(payload) { qrBitmap(payload).asImageBitmap() }
     Image(
         bmp, null,
@@ -41,6 +44,6 @@ fun QrImage(payload: String, modifier: Modifier = Modifier) {
             .aspectRatio(1f)
             .background(Color.White)
             .padding(4.dp)
-            .semantics { contentDescription = "Your Hopla contact QR code" },
+            .semantics { contentDescription = label },
     )
 }

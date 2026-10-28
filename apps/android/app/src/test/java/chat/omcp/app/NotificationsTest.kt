@@ -18,7 +18,7 @@ class NotificationsTest {
     private val text = "meet at the cafe at 9"
 
     private fun render(store: InMemoryAppStore, chat: String = "c1"): NotificationContent =
-        NotificationPolicy.content(store, chat, sender, text, "Hopla", "New message")
+        NotificationPolicy.content(store, chat, sender, text, "Auralis", "New message")
 
     private fun NotificationContent.allText() = listOf(title, body, publicTitle, publicBody).joinToString("|")
 
@@ -35,7 +35,7 @@ class NotificationsTest {
     @Test fun `N2 global private hides sender and content everywhere`() {
         val s = InMemoryAppStore().apply { privateNotifications = true }
         val n = render(s)
-        assertEquals("Hopla", n.title)
+        assertEquals("Auralis", n.title)
         assertEquals("New message", n.body)
         assertFalse(n.showAvatar)
         assertFalse(n.allText().contains(sender))
@@ -52,31 +52,31 @@ class NotificationsTest {
         assertEquals(sender, render(s, "c1").title)
     }
 
-    @Test fun `hide on lock screen shows Hopla New message not blank`() {
+    @Test fun `hide on lock screen shows Auralis New message not blank`() {
         val s = InMemoryAppStore().apply { hideOnLockScreen = true }
         val n = render(s)
         assertEquals(LockVisibility.PRIVATE, n.visibility)
-        assertEquals("Hopla" to "New message", n.publicTitle to n.publicBody)
+        assertEquals("Auralis" to "New message", n.publicTitle to n.publicBody)
     }
 
     @Test fun `per-chat override turns private off even when global is on`() {
         val s = InMemoryAppStore().apply { privateNotifications = true }
         NotificationPolicy.setChatPrivate(s, "c1", false)
         assertEquals(sender, render(s, "c1").title)
-        assertEquals("Hopla", render(s, "c2").title)
+        assertEquals("Auralis", render(s, "c2").title)
         NotificationPolicy.setChatPrivate(s, "c1", null)
-        assertEquals("Hopla", render(s, "c1").title)
+        assertEquals("Auralis", render(s, "c1").title)
     }
 
-    @Test fun `private calls show Hopla Incoming call with no caller`() {
+    @Test fun `private calls show Auralis Incoming call with no caller`() {
         val s = InMemoryAppStore().apply { privateNotifications = true }
-        val n = NotificationPolicy.callContent(s, "c1", sender, "Hopla", "Incoming call")
-        assertEquals("Hopla" to "Incoming call", n.title to n.body)
+        val n = NotificationPolicy.callContent(s, "c1", sender, "Auralis", "Incoming call")
+        assertEquals("Auralis" to "Incoming call", n.title to n.body)
         assertFalse(n.showAvatar)
         assertFalse(listOf(n.title, n.body, n.publicTitle, n.publicBody).any { sender in it })
-        val open = NotificationPolicy.callContent(InMemoryAppStore(), "c1", sender, "Hopla", "Incoming call")
+        val open = NotificationPolicy.callContent(InMemoryAppStore(), "c1", sender, "Auralis", "Incoming call")
         assertEquals(sender, open.title)
-        assertEquals("Hopla", open.publicTitle)
+        assertEquals("Auralis", open.publicTitle)
     }
 
     @Test fun `N3 push payload carries only the opaque mailbox id`() {

@@ -16,7 +16,7 @@ import chat.omcp.app.R
 
 /**
  * Expedited WorkManager job that finishes a restore while the user may leave the app
- * (DESIGN_SPEC §5.86), with an ongoing notification "Restoring Hopla · step n of 3".
+ * (DESIGN_SPEC §5.86), with an ongoing notification "Restoring Auralis · step n of 3".
  */
 class RestoreWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {

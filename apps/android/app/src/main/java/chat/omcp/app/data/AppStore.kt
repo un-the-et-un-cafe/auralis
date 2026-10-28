@@ -12,7 +12,7 @@ interface AppStore {
     var privateNotifications: Boolean
     /** Per-chat Private notifications override: true = private, false = off even if global is on. */
     var chatPrivateOverride: Map<String, Boolean>
-    /** Lock screen shows only "Hopla · New message" (VISIBILITY_PRIVATE + public version). Off by default. */
+    /** Lock screen shows only "Auralis · New message" (VISIBILITY_PRIVATE + public version). Off by default. */
     var hideOnLockScreen: Boolean
     /** Per-chat burn option: chatId -> -1 off, 0 on open, else timer seconds. */
     var burnChats: Map<String, Int>

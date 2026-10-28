@@ -10,12 +10,13 @@ ROOT="$(cd "$IOS/../.." && pwd)"
 WORK="${OMCP_VERIFY_DIR:-$ROOT/target/ios-linux-verify}"
 
 python3 "$IOS/scripts/strings.py" --check
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$IOS/scripts" -p 'test_*.py'
 (cd "$IOS/HoplaKit" && swift test)
 
 cd "$ROOT"
-cargo build -p omcp-ffi
+cargo build --locked -p omcp-ffi
 rm -rf "$WORK" && mkdir -p "$WORK/gen"
-cargo run -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- generate \
+cargo run --locked -q -p omcp-ffi --features bindgen --bin uniffi-bindgen -- generate \
   --library "$ROOT/target/debug/libomcp_ffi.so" --language swift \
   --config "$ROOT/crates/omcp-ffi/uniffi.toml" --out-dir "$WORK/gen" 2>/dev/null
 

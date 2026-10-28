@@ -16,7 +16,7 @@ public struct NotificationContent: Equatable {
 /// Pure notification policy (REQUIREMENTS "Notifications (v0.1.2)" + product decisions 1–3).
 /// Same rules as Android `NotificationPolicy`.
 public enum NotificationPolicy {
-    public static let appName = "Hopla"
+    public static let appName = "Auralis"
 
     /// Per-chat override wins in both directions; otherwise the global setting.
     public static func isPrivate(_ store: AppStore, chatId: String) -> Bool {
@@ -46,7 +46,7 @@ public enum NotificationPolicy {
             threadId: chatId)
     }
 
-    /// Incoming call (decision 1). Private: "Hopla · Incoming call", no caller name.
+    /// Incoming call (decision 1). Private: "Auralis · Incoming call", no caller name.
     public static func callContent(
         _ store: AppStore, chatId: String, caller: String, genericCall: String
     ) -> NotificationContent {

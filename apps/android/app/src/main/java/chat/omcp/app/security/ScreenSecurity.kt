@@ -8,7 +8,7 @@ import android.view.Window
 import android.view.WindowManager
 
 /**
- * No screenshots anywhere in Hopla (REQUIREMENTS "Product decisions (2026-10-24)" item 5, SS1–SS2).
+ * No screenshots anywhere in Auralis (REQUIREMENTS "Product decisions (2026-10-24)" item 5, SS1–SS2).
  * Every activity window (ours and third-party, e.g. the QR scanner) gets FLAG_SECURE before
  * any content is drawn, so screenshots, screen recording, casting and the recent-apps
  * thumbnail are black. Compose dialogs and bottom sheets use SecureFlagPolicy.Inherit (the

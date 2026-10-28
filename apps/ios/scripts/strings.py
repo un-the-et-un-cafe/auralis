@@ -1,16 +1,60 @@
 #!/usr/bin/env python3
-"""Source of truth for Hopla iOS EN/FR strings. Writes Resources/{en,fr}.lproj/Localizable.strings
+"""Source of truth for Auralis iOS EN/FR strings. Writes Resources/{en,fr}.lproj/Localizable.strings
 (app) and NotificationService/{en,fr}.lproj. `--check` verifies every key used in Swift exists in
 both languages."""
 import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IOS = os.path.dirname(HERE)
 S = {
- "app_name": ("Hopla", "Hopla"),
- "tab_chats": ("Chats", "Discussions"), "tab_communities": ("Communities", "Communautés"),
+ "auralis_welcome_title": ("Connection,\ncloser to you.", "Le lien,\nau plus près."),
+ "auralis_benefit_mesh": ("Nearby messaging, even without Internet", "Des messages à proximité, même sans Internet"),
+ "auralis_benefit_private": ("End-to-end encrypted conversations", "Des discussions chiffrées de bout en bout"),
+ "auralis_benefit_identity": ("Your identity. No phone number required.", "Votre identité. Aucun numéro de téléphone requis."),
+ "auralis_tab_mesh": ("Mesh", "Mesh"),
+ "auralis_mesh_heading": ("A network made of people.", "Un réseau de personnes."),
+ "auralis_mesh_intro": ("See the connections and waiting messages reported by your device.", "Consultez les connexions et messages en attente signalés par votre appareil."),
+ "auralis_route_mesh": ("Mesh route", "Route mesh"),
+ "auralis_route_gateway": ("Gateway route", "Route passerelle"),
+ "auralis_route_mixed": ("Mixed routes", "Routes mixtes"),
+ "auralis_route_queued": ("Waiting for a route", "En attente d’une route"),
+ "auralis_nearby_peers": ("Nearby peers", "Pairs à proximité"),
+ "auralis_waiting_messages": ("Queued messages", "Messages en attente"),
+ "auralis_mesh_no_peers": ("No nearby peers reported yet. Keep Bluetooth enabled and open Auralis near another compatible device.", "Aucun pair signalé pour le moment. Activez le Bluetooth et ouvrez Auralis près d’un appareil compatible."),
+ "auralis_mesh_has_peers": ("Nearby connections are reported by the mesh core. Delivery still depends on a route to your contact.", "Les connexions proches sont signalées par le cœur mesh. La livraison dépend toujours d’une route vers votre contact."),
+ "auralis_mesh_add_detail": ("Connect in person with a QR code", "Connectez-vous en personne par QR code"),
+ "auralis_mesh_ios_title": ("Keep the mesh within reach", "Gardez le mesh à portée"),
+ "auralis_next_chapter": ("A NEXT CHAPTER · NOT AVAILABLE YET", "LA SUITE · PAS ENCORE DISPONIBLE"),
+ "auralis_chats_heading": ("Your people.\nYour conversations.", "Vos proches.\nVos discussions."),
+ "auralis_find_person": ("Find a person", "Rechercher une personne"),
+ "auralis_search_empty": ("No matching contacts. Try another name.", "Aucun contact trouvé. Essayez un autre nom."),
+ "auralis_start_conversation": ("Start a conversation", "Commencer une discussion"),
+ "auralis_thread_empty": ("Your conversation starts with a message.", "Votre discussion commence par un message."),
+ "auralis_your_identity": ("Your identity on the mesh", "Votre identité sur le mesh"),
+ "auralis_identity_qr_detail": ("A personal code to connect in person", "Un code personnel pour se connecter en personne"),
+ "auralis_your_control": ("Make it yours", "À votre manière"),
+ "auralis_onboarding_step": ("STEP %ld OF %ld", "ÉTAPE %ld SUR %ld"),
+ "auralis_contact_heading": ("A real connection.\nOne simple scan.", "Un vrai lien.\nUn simple scan."),
+ "auralis_gateway_heading": ("Be a bridge.", "Faites le lien."),
+ "auralis_gateway_intro": ("Help nearby peers reach the Internet. Forwards encrypted envelopes only; battery and data usage may increase.", "Aidez les pairs proches à accéder à Internet. Seules les enveloppes chiffrées sont relayées ; la consommation de batterie et de données peut augmenter."),
+ "auralis_gateway_usage": ("%ld MB of %ld MB today", "%ld Mo sur %ld Mo aujourd’hui"),
+ "auralis_gateway_privacy": ("Battery & privacy", "Batterie et confidentialité"),
+ "auralis_gateway_disclosure": ("Gateway mode keeps BLE active. Relays see encrypted envelopes and timing, not names or message text.", "Le mode passerelle garde le BLE actif. Les relais voient les enveloppes chiffrées et leur horaire, pas les noms ni le texte des messages."),
+ "auralis_store_forward_unavailable": ("Store-and-forward controls are not available in this beta.", "Les commandes de stockage et retransmission ne sont pas disponibles dans cette bêta."),
+ "auralis_gateway_routes": ("Understanding routes", "Comprendre les routes"),
+ "auralis_gateway_local": ("Local Bluetooth mesh", "Mesh Bluetooth local"),
+ "auralis_gateway_neighbor": ("Via a neighbour’s Internet", "Via l’Internet d’un voisin"),
+ "auralis_gateway_mixed": ("Mesh and gateway routes", "Routes mesh et passerelle"),
+ "auralis_gateway_waiting": ("Waiting for a path to your contact", "En attente d’une route vers votre contact"),
+ "auralis_gateway_enable": ("Enable gateway", "Activer la passerelle"),
+ "auralis_gateway_confirm": ("When on, your phone forwards only encrypted OMCP envelopes. You never see message content. Uses battery and may use mobile data.", "Une fois activé, votre téléphone ne relaie que des enveloppes OMCP chiffrées. Vous ne voyez jamais leur contenu. Cela utilise la batterie et peut consommer des données mobiles."),
+ "auralis_gateway_metered": ("Metered cellular", "Données mobiles facturées"),
+ "auralis_gateway_wifi_only": ("Keep Wi-Fi only", "Garder le Wi-Fi uniquement"),
+ "auralis_delivery_a11y": ("Delivery path: %@", "Route de livraison : %@"),
+ "app_name": ("Auralis", "Auralis"),
+ "tab_chats": ("Conversations", "Discussions"), "tab_communities": ("Communities", "Communautés"),
  "tab_live": ("Live", "Direct"), "tab_you": ("You", "Moi"),
  "coming_v02_title": ("Coming in v0.2", "Arrive en v0.2"),
- "communities_empty_body": ("Communities with roles, announcement channels, and topics will land in v0.2. Your chats stay here in Chats.", "Les communautés avec rôles, canaux d’annonces et sujets arrivent en v0.2. Vos discussions restent dans Discussions."),
+ "communities_empty_body": ("Communities with roles, announcement channels, and topics will land in v0.2. Your conversations remain in the Conversations tab.", "Les communautés avec rôles, canaux d’annonces et sujets arrivent en v0.2. Vos discussions restent dans l’onglet Discussions."),
  "live_empty_body": ("Livestreams need Wi‑Fi or Internet. Mesh can show status only. Full Live arrives in v0.2.", "Les directs nécessitent le Wi‑Fi ou Internet. Le mesh n’affiche que le statut. Le Direct complet arrive en v0.2."),
  "path_mesh": ("Via mesh", "Via le mesh"), "path_gateway": ("Via neighbour’s Internet", "Via l’Internet d’un voisin"),
  "path_mixed": ("Mixed paths", "Chemins mixtes"), "path_queued": ("Waiting for mesh", "En attente du mesh"),
@@ -25,21 +69,21 @@ S = {
  "gateway_bridging": ("Bridging now", "Relais actif"), "gateway_not_bridging": ("Not bridging on this network", "Pas de relais sur ce réseau"),
  "security_centre": ("Security centre", "Centre de sécurité"), "verified_contact": ("Verified contact", "Contact vérifié"),
  "unverified": ("Unverified", "Non vérifié"), "session": ("Session", "Session"),
- "chats_empty_title": ("No chats yet", "Aucune discussion"), "chats_empty_body": ("Add someone nearby with QR or NFC.", "Ajoutez quelqu’un à proximité par QR ou NFC."),
+ "chats_empty_title": ("Every connection starts here.", "Chaque lien commence ici."), "chats_empty_body": ("Meet nearby, scan a contact QR code, and start a private conversation.", "Rencontrez-vous, scannez un QR code contact et commencez une discussion privée."),
  "ios_companion_hint": ("For always-on mesh while phones sleep, an Android companion gateway nearby helps — iOS may pause BLE in the background.", "Pour un mesh toujours actif quand les téléphones dorment, une passerelle Android à proximité aide — iOS peut suspendre le BLE en arrière-plan."),
  "ios_ble_pause_callout": ("iOS may pause mesh in background — open the app to sync. An always-on Android companion nearby is recommended for gateway duty.", "iOS peut suspendre le mesh en arrière-plan — ouvrez l’app pour synchroniser. Un compagnon Android toujours actif est recommandé comme passerelle."),
  "ios_ble_tip_title": ("Background mesh on iOS", "Mesh en arrière-plan sur iOS"),
  "ios_ble_tip_body": ("iOS may pause BLE when the app is backgrounded. Use Gateway settings, or keep an Android companion nearby for always-on mesh.", "iOS peut suspendre le BLE quand l’app est en arrière-plan. Utilisez les réglages Passerelle, ou gardez un compagnon Android à proximité."),
  "ios_ble_tip_dismiss": ("Got it", "Compris"),
- "contact_add_title": ("Add contact", "Ajouter un contact"), "contact_add_subtitle": ("Add someone nearby with QR or NFC.", "Ajoutez quelqu’un à proximité par QR ou NFC."),
- "contact_add_scan_qr": ("Scan QR", "Scanner un QR"), "contact_add_scan_qr_desc": ("Point at their Hopla QR", "Visez son QR Hopla"),
+ "contact_add_title": ("Add contact", "Ajouter un contact"), "contact_add_subtitle": ("Meet nearby, scan a contact QR code, and start a private conversation.", "Rencontrez-vous, scannez un QR code contact et commencez une discussion privée."),
+ "contact_add_scan_qr": ("Scan QR", "Scanner un QR"), "contact_add_scan_qr_desc": ("Scan an Auralis or compatible OMCP contact code", "Scannez un code contact Auralis ou compatible OMCP"),
  "contact_add_my_qr": ("My QR", "Mon QR"), "contact_add_my_qr_desc": ("Let someone scan you", "Laissez quelqu’un vous scanner"),
- "my_qr_title": ("My QR code", "Mon QR code"), "my_qr_a11y": ("Your Hopla contact QR code", "Votre QR code contact Hopla"),
+ "my_qr_title": ("My QR code", "Mon QR code"), "my_qr_a11y": ("Your Auralis contact QR code", "Votre QR code contact Auralis"),
  "my_qr_copy": ("Copy full PeerID", "Copier le PeerID complet"),
- "my_qr_brightness": ("Screen brightness is raised while this code is shown. Ask them to scan from Hopla › Add contact.", "La luminosité est augmentée pendant l’affichage du code. Demandez-lui de scanner depuis Hopla › Ajouter un contact."),
+ "my_qr_brightness": ("Screen brightness is raised while this code is shown. Ask them to scan from Auralis › Add contact.", "La luminosité est augmentée pendant l’affichage du code. Demandez-lui de scanner depuis Auralis › Ajouter un contact."),
  "my_qr_privacy": ("Your code contains only your public PeerID — no phone number or location.", "Votre code ne contient que votre PeerID public — ni numéro ni position."),
- "scan_hint": ("Point at their Hopla QR code. It scans automatically.", "Visez le QR code Hopla. Le scan est automatique."),
- "scan_not_omcp_title": ("Not a Hopla contact code", "Ce n’est pas un code contact Hopla"),
+ "scan_hint": ("Point at their Auralis QR code. It scans automatically.", "Visez le QR code Auralis. Le scan est automatique."),
+ "scan_not_omcp_title": ("Not an OMCP contact code", "Ce n’est pas un code contact OMCP"),
  "scan_not_omcp_body": ("This QR isn’t an OMCP identity code. Ask them to open Add contact › Show my QR code.", "Ce QR n’est pas un code d’identité OMCP. Demandez-lui d’ouvrir Ajouter un contact › Afficher mon QR code."),
  "viewfinder_a11y": ("Camera viewfinder", "Viseur de l’appareil photo"),
  "camera_off_title": ("Camera access is off", "L’accès à l’appareil photo est désactivé"),
@@ -74,7 +118,7 @@ S = {
  "file_mesh_hint": ("Via mesh is slower for large files. It keeps sending in the background and resumes if %@ moves out of range.", "Via le mesh, les gros fichiers sont plus lents. L’envoi continue en arrière-plan et reprend si %@ s’éloigne."),
  "file_queue_hint": ("%@ isn’t reachable now. The file will send when they’re back in range.", "%@ n’est pas joignable. Le fichier partira à son retour à portée."),
  "file_queue": ("Queue", "Mettre en file"), "file_too_large_title": ("File is too large", "Fichier trop volumineux"),
- "file_too_large_body": ("%@ MB is over the %@ limit. Hopla can send files up to %@. Try a shorter clip or compress it first.", "%@ Mo dépasse la limite de %@. Hopla envoie des fichiers jusqu’à %@. Essayez un extrait plus court ou compressez-le."),
+ "file_too_large_body": ("%@ MB is over the %@ limit. Auralis can send files up to %@. Try a shorter clip or compress it first.", "%@ Mo dépasse la limite de %@. Auralis envoie des fichiers jusqu’à %@. Essayez un extrait plus court ou compressez-le."),
  "file_choose_another": ("Choose another", "Choisir un autre"),
  "file_state_received": ("%@ MB · Received", "%@ Mo · Reçu"),
  "file_integrity_checked": ("Integrity checked", "Intégrité vérifiée"),
@@ -94,7 +138,7 @@ S = {
  "file_read_error": ("Couldn’t read that file. Try another.", "Impossible de lire ce fichier. Essayez-en un autre."),
  "notif_title": ("Notifications", "Notifications"), "notif_row_desc": ("Sender and preview shown by default", "Expéditeur et aperçu affichés par défaut"),
  "notif_private": ("Private notifications", "Notifications privées"),
- "notif_private_footer": ("When on, notifications show only “Hopla · New message”: no sender, no preview, no picture.", "Activées, les notifications n’affichent que « Hopla · Nouveau message » : ni expéditeur, ni aperçu, ni photo."),
+ "notif_private_footer": ("When on, notifications show only “Auralis · New message”: no sender, no preview, no picture.", "Activées, les notifications n’affichent que « Auralis · Nouveau message » : ni expéditeur, ni aperçu, ni photo."),
  "notif_private_on": ("Private in this chat", "Privées dans cette discussion"), "notif_private_off": ("Not private in this chat", "Non privées dans cette discussion"),
  "notif_follow_global_on": ("Like all chats (private)", "Comme toutes les discussions (privées)"),
  "notif_follow_global_off": ("Like all chats (sender and preview)", "Comme toutes les discussions (expéditeur et aperçu)"),
@@ -102,15 +146,15 @@ S = {
  "notif_sample_text": ("See you at the market?", "On se voit au marché ?"),
  "notif_new_message": ("New message", "Nouveau message"), "notif_incoming_call": ("Incoming call", "Appel entrant"),
  "privacy_title": ("Privacy", "Confidentialité"), "privacy_row_desc": ("Screenshots are blocked", "Captures d’écran bloquées"),
- "privacy_screens_blocked": ("Screenshots and screen recordings of Hopla are always blank.", "Les captures et enregistrements d’écran de Hopla sont toujours vides."),
- "privacy_second_camera": ("Hopla can’t stop someone photographing the screen with a second camera.", "Hopla ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil."),
+ "privacy_screens_blocked": ("Screenshots and screen recordings of Auralis are always blank.", "Les captures et enregistrements d’écran de Auralis sont toujours vides."),
+ "privacy_second_camera": ("Auralis can’t stop someone photographing the screen with a second camera.", "Auralis ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil."),
  "capture_cover_title": ("Screen recording is on", "Enregistrement d’écran actif"),
- "capture_cover_body": ("Hopla hides your chats while the screen is recorded or mirrored.", "Hopla masque vos discussions pendant l’enregistrement ou la recopie de l’écran."),
- "about": ("About", "À propos"), "about_desc": ("Hopla · OMCP · MIT", "Hopla · OMCP · MIT"),
+ "capture_cover_body": ("Auralis hides your chats while the screen is recorded or mirrored.", "Auralis masque vos discussions pendant l’enregistrement ou la recopie de l’écran."),
+ "about": ("About", "À propos"), "about_desc": ("Auralis · Built on Hopla / OpenMeshChat · OMCP · MIT", "Auralis · Basé sur Hopla / OpenMeshChat · OMCP · MIT"),
  "backup_title": ("Backup and restore", "Sauvegarde et restauration"), "backup_row_desc": ("iCloud, Google Drive, recovery phrase", "iCloud, Google Drive, phrase de récupération"),
  "backup_banner": ("Secure your account: add a backup within 24 hours.", "Sécurisez votre compte : ajoutez une sauvegarde sous 24 heures."),
  "backup_required_title": ("Back up to continue", "Sauvegardez pour continuer"),
- "backup_required_body": ("Your 24 hours are up. Add one backup method to keep using Hopla.", "Les 24 heures sont écoulées. Ajoutez une méthode de sauvegarde pour continuer."),
+ "backup_required_body": ("Your 24 hours are up. Add one backup method to keep using Auralis.", "Les 24 heures sont écoulées. Ajoutez une méthode de sauvegarde pour continuer."),
  "backup_status": ("Backups", "Sauvegardes"), "backup_none": ("None yet", "Aucune"), "backup_last": ("Last cloud backup", "Dernière sauvegarde cloud"),
  "backup_password_section": ("Backup password", "Mot de passe de sauvegarde"),
  "backup_add": ("Back up now", "Sauvegarder maintenant"), "backup_now_change": ("Back up again / change password", "Resauvegarder / changer le mot de passe"),
@@ -138,14 +182,14 @@ S = {
  "ob_backup_icloud": ("Back up to iCloud", "Sauvegarder sur iCloud"), "ob_backup_drive": ("Back up to Google Drive", "Sauvegarder sur Google Drive"),
  "ob_backup_done": ("Backed up", "Sauvegardé"), "ob_show_words": ("Show my 24 words", "Afficher mes 24 mots"),
  "ob_continue": ("Continue", "Continuer"), "ob_remind_later": ("Remind me later", "Me le rappeler plus tard"),
- "ob_remind_footer": ("You can use Hopla for 24 hours, then you’ll need a backup to continue.", "Vous pouvez utiliser Hopla 24 heures, puis une sauvegarde sera nécessaire."),
+ "ob_remind_footer": ("You can use Auralis for 24 hours, then you’ll need a backup to continue.", "Vous pouvez utiliser Auralis 24 heures, puis une sauvegarde sera nécessaire."),
  "ob_words_footer": ("Write these words on paper, in order. Never share them.", "Notez ces mots sur papier, dans l’ordre. Ne les partagez jamais."),
  "ob_wrote_it_down": ("I wrote them down", "Je les ai notés"), "ob_back": ("Back", "Retour"),
  "ob_quiz_title": ("Check 3 words", "Vérifiez 3 mots"), "ob_quiz_word": ("Word #%ld", "Mot n°%ld"),
  "ob_quiz_wrong": ("That’s not the right word.", "Ce n’est pas le bon mot."), "ob_check": ("Check", "Vérifier"),
  "ob_done_title": ("You’re all set", "C’est prêt"), "ob_done_body": ("Show this code so people nearby can add you.", "Montrez ce code pour que les gens autour de vous vous ajoutent."),
  "ob_start_chatting": ("Start chatting", "Commencer à discuter"),
- "ob_restore_title": ("Welcome back", "Bon retour"), "ob_restore_found": ("We found a Hopla backup in %@. Restore it?", "Nous avons trouvé une sauvegarde Hopla sur %@. La restaurer ?"),
+ "ob_restore_title": ("Welcome back", "Bon retour"), "ob_restore_found": ("We found an Auralis-compatible backup in %@. Restore it?", "Nous avons trouvé une sauvegarde Auralis sur %@. La restaurer ?"),
  "ob_restore_honest": ("Forgot the password? Use your 24-word phrase instead.", "Mot de passe oublié ? Utilisez plutôt votre phrase de 24 mots."),
  "ob_restore": ("Restore", "Restaurer"), "ob_use_phrase": ("Use my 24 words", "Utiliser mes 24 mots"),
  "ob_start_fresh": ("Start fresh", "Repartir de zéro"), "ob_restore_locked": ("Too many tries. Wait %ld s.", "Trop d’essais. Attendez %ld s."),
@@ -169,7 +213,7 @@ S = {
  "media_resend_asked_note": ("%@ asked you to resend “%@”: “%@”. You no longer have it on this phone.", "%@ vous demande de renvoyer « %@ » : « %@ ». Vous ne l’avez plus sur ce téléphone."),
  "storage_title": ("Storage", "Stockage"),
  "storage_keep_title": ("Keep sent media", "Conserver les médias envoyés"),
- "storage_keep_body": ("Hopla keeps an encrypted copy of photos and files you send, so it can resend them if a contact restores a new phone. The oldest are deleted first. Burn-after-read and view-once media are never kept.", "Hopla conserve une copie chiffrée des photos et fichiers que vous envoyez, pour pouvoir les renvoyer si un contact restaure un nouveau téléphone. Les plus anciens sont supprimés en premier. Les médias à autodestruction et à vue unique ne sont jamais conservés."),
+ "storage_keep_body": ("Auralis keeps an encrypted copy of photos and files you send, so it can resend them if a contact restores a new phone. The oldest are deleted first. Burn-after-read and view-once media are never kept.", "Auralis conserve une copie chiffrée des photos et fichiers que vous envoyez, pour pouvoir les renvoyer si un contact restaure un nouveau téléphone. Les plus anciens sont supprimés en premier. Les médias à autodestruction et à vue unique ne sont jamais conservés."),
  "storage_keep_days": ("Keep for", "Conserver pendant"),
  "storage_keep_size": ("Up to", "Jusqu’à"),
  "storage_days": ("%ld days", "%ld jours"),
@@ -177,24 +221,29 @@ S = {
  "media_resend_send": ("Send request", "Envoyer la demande"),
  "media_banner": ("%ld media waiting for %@ · Your text came back. Photos and files return when they’re nearby (mesh or gateway).", "%ld médias en attente de %@ · Vos messages sont revenus. Photos et fichiers reviennent à proximité (mesh ou passerelle)."),
  "media_resend_asked": ("%@ asked you to resend “%@”. You no longer have it on this phone.", "%@ vous demande de renvoyer « %@ ». Vous ne l’avez plus sur ce téléphone."),
- "restored_notice": ("%@ restored Hopla on a new device · %@", "%@ a restauré Hopla sur un nouvel appareil · %@"),
+ "restored_notice": ("%@ restored Auralis on a new device · %@", "%@ a restauré Auralis sur un nouvel appareil · %@"),
  "restored_notice_link": ("Safety number changed · Verify", "Numéro de sécurité modifié · Vérifier"),
  "restored_pill": ("Restored, not verified", "Restauré, non vérifié"),
- "restored_preview": ("%@ restored Hopla · safety number changed", "%@ a restauré Hopla · numéro de sécurité modifié"),
+ "restored_preview": ("%@ restored Auralis · safety number changed", "%@ a restauré Auralis · numéro de sécurité modifié"),
  "restored_self_banner": ("You restored this account. Your contacts were notified and need to verify you again in person (QR).", "Vous avez restauré ce compte. Vos contacts ont été prévenus et doivent vous revérifier en personne (QR)."),
  "qr_stale": ("This QR code doesn’t match. It must be the one from their new device.", "Ce QR code ne correspond pas. Il doit venir de son nouvel appareil."),
  "cancel_action": ("Cancel", "Annuler"),
 }
 NSE = ["notif_new_message"]
 
-def esc(s): return s.replace("\\", "\\\\").replace('"', '\\"')
+def esc(s): return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+def rendered_strings(keys, language_index):
+    return "/* Generated by apps/ios/scripts/strings.py, edit there. */\n" + "".join(
+        f'"{key}" = "{esc(S[key][language_index])}";\n' for key in keys
+    )
+
 
 def write(dir_, keys):
     for i, lang in enumerate(["en", "fr"]):
         d = os.path.join(dir_, f"{lang}.lproj"); os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "Localizable.strings"), "w") as f:
-            f.write("/* Generated by apps/ios/scripts/strings.py, edit there. */\n")
-            for k in keys: f.write(f'"{k}" = "{esc(S[k][i])}";\n')
+        with open(os.path.join(d, "Localizable.strings"), "w", encoding="utf-8") as f:
+            f.write(rendered_strings(keys, i))
 
 def check():
     used = set(); bad = []
@@ -208,8 +257,19 @@ def check():
     for k in sorted(used):
         if k not in S and not k.endswith("_"): bad.append(k)
     for k, (en, fr) in S.items():
-        if en.count("%") != fr.count("%"): bad.append(k + " (format args)")
-    dyn = ["ob_error_" + e for e in ["identity", "backup", "wrongpw", "restore", "nokey", "badphrase"]] + \
+        if re.findall(r"%[0-9$.*+-]*[a-zA-Z@]+", en) != re.findall(r"%[0-9$.*+-]*[a-zA-Z@]+", fr):
+            bad.append(k + " (format args)")
+    # --check must catch stale generated resources, not merely keys present in this dictionary.
+    for relative, keys in [("OpenMeshChat/Resources", list(S)), ("NotificationService", NSE)]:
+        for i, lang in enumerate(["en", "fr"]):
+            filename = os.path.join(IOS, relative, f"{lang}.lproj", "Localizable.strings")
+            try:
+                with open(filename, encoding="utf-8") as resource:
+                    if resource.read() != rendered_strings(keys, i):
+                        bad.append(relative + "/" + lang + " (stale generated strings)")
+            except FileNotFoundError:
+                bad.append(relative + "/" + lang + " (missing generated strings)")
+    dyn = ["auralis_route_" + route for route in ["mesh", "gateway", "mixed", "queued"]] + ["ob_error_" + e for e in ["identity", "backup", "wrongpw", "restore", "nokey", "badphrase"]] + \
           ["method_" + m for m in ["icloud", "drive", "written"]] + ["burn_opt_" + o for o in ["-1", "0", "10", "60", "3600"]]
     bad += [k for k in dyn if k not in S]
     if bad: print("missing/invalid strings:", bad); sys.exit(1)
