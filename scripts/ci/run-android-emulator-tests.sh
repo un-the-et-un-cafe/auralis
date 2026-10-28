@@ -45,8 +45,10 @@ mv "$TOOLS/emulator" "$ANDROID_HOME/emulator"
 grep -Fx 'Pkg.Revision=37.2.12' "$ANDROID_HOME/emulator/source.properties"
 cp "$(dirname "$0")/android-emulator-package.xml" "$ANDROID_HOME/emulator/package.xml"
 EMULATOR="$ANDROID_HOME/emulator/emulator"
-"$EMULATOR" -version | tee "$REPORTS/emulator-version.txt"
-"$EMULATOR" -accel-check | tee "$REPORTS/acceleration.txt"
+# Use the headless executable for preflight too: the GUI binary links host
+# PulseAudio/Qt libraries that a minimal hosted runner may lack.
+"$EMULATOR" -no-window -version | tee "$REPORTS/emulator-version.txt"
+"$EMULATOR" -no-window -accel-check | tee "$REPORTS/acceleration.txt"
 
 # Exact official archives, not sdkmanager's changing latest image revision.
 IMAGE_FILE="x86_64-${API}_r$(printf '%02d' "$IMAGE_REVISION").zip"
