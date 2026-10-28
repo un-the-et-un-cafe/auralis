@@ -105,7 +105,7 @@ dependencies {
     // Restore job (DESIGN_SPEC §5.86): expedited work + ongoing notification.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Drive backup: Google Identity Services AuthorizationClient (scope drive.appdata only).
-    implementation("com.google.android.gms:play-services-auth:21.3.0")
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
     // UniFFI Kotlin bindings load libomcp_ffi.so through JNA.
     implementation("net.java.dev.jna:jna:5.15.0@aar")
     // QR: generate with ZXing core; scan with zxing-android-embedded (no Play services).
