@@ -48,7 +48,12 @@ runs:
         set -o pipefail
         "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
           "platform-tools" "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0"
+        test "$(sed -n 's/^Pkg\.Revision[[:space:]]*=[[:space:]]*//p' \
+          "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties")" = "$NDK_VERSION"
+        # Override both supported aliases: the hosted image can export a different
+        # ANDROID_NDK_ROOT even when cargo-ndk correctly prefers NDK_HOME.
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
         echo "ANDROID_AVDMANAGER=$SDK_CLI/bin/avdmanager" >> "$GITHUB_ENV"
         rustc --version --verbose
         java -version

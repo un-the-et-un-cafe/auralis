@@ -53,7 +53,7 @@ jobs:
           rustup show active-toolchain
           rustup component add rustfmt clippy
           rustc --version --verbose
-      - name: Test source invariant guard
+      - name: Test CI safety helpers and source invariant guard
         run: python3 -m unittest discover -s scripts/tests -v
       - name: Verify audited OMCP source invariants
         run: python3 scripts/check_protocol_invariants.py
@@ -124,12 +124,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Require existing KVM access
+      - name: Inspect KVM and grant only this disposable runner UID access
         run: |
           mkdir -p apps/android/app/build/reports/emulator
           { uname -a; id; if [[ -e /dev/kvm ]]; then stat /dev/kvm; fi; } | tee apps/android/app/build/reports/emulator/host.txt
-          test "$(uname -m)" = x86_64
-          test -c /dev/kvm && test ! -L /dev/kvm && test -r /dev/kvm && test -w /dev/kvm
+          python3 scripts/ci/kvm_access.py prepare
       - name: Set up Android build tools
         uses: ./.github/actions/setup-android-build
       - name: Build native core and instrumentation APKs
@@ -152,6 +151,9 @@ jobs:
             apps/android/app/build/outputs/androidTest-results/
           if-no-files-found: warn
           retention-days: 14
+      - name: Revoke only this job's KVM UID grant
+        if: ${{ always() }}
+        run: python3 scripts/ci/kvm_access.py cleanup
 
   ios:
     name: ios
@@ -184,7 +186,46 @@ jobs:
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
-      - name: Build and run bridge and real app UI tests
+      - name: Build simulator app and tests with local ad-hoc signatures
+        env:
+          SIMULATOR_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          # Simulator-only local signing needs no account/certificate/profile.
+          # Disabling it strips Keychain entitlements and breaks real persistence.
+          xcodebuild -project OpenMeshChat.xcodeproj -scheme OpenMeshChat \
+            -destination "id=$SIMULATOR_UDID" \
+            -resultBundlePath build/Auralis-build.xcresult \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            build-for-testing
+      - name: Verify simulator signature and existing Keychain entitlement
+        run: |
+          APP=build/DerivedData/Build/Products/Debug-iphonesimulator/OpenMeshChat.app
+          mkdir -p build/Signing
+          codesign --verify --deep --strict "$APP"
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          import re
+          import shutil
+          # Xcode embeds simulator entitlements in a Mach-O segment, not necessarily
+          # in the ad-hoc signature. Inspect its generated linker input, then the
+          # real Keychain roundtrip test below proves runtime access actually works.
+          candidates = list(Path("build/DerivedData/Build/Intermediates.noindex").rglob("OpenMeshChat.app-Simulated.xcent"))
+          assert len(candidates) == 1, candidates
+          shutil.copyfile(candidates[0], "build/Signing/app-simulator-entitlements.plist")
+          with candidates[0].open("rb") as stream:
+              entitlements = plistlib.load(stream)
+          # Matches the existing app entitlement. Xcode may synthesize a simulator
+          # prefix; never accept wildcard, extra, or unrelated shared groups.
+          groups = entitlements.get("keychain-access-groups")
+          assert isinstance(groups, list) and len(groups) == 1, entitlements
+          assert isinstance(groups[0], str) and re.fullmatch(r"(?:[A-Za-z0-9]+\.)?chat\.auralis\.app", groups[0]), entitlements
+          app_identifier = entitlements.get("application-identifier")
+          assert app_identifier is None or app_identifier == groups[0], entitlements
+          print("Verified generated simulator entitlements contain the existing app-only Keychain group.")
+          PY
+      - name: Run bridge and real app UI tests
         env:
           SIMULATOR_UDID: ${{ steps.sim.outputs.udid }}
         run: |
@@ -194,13 +235,16 @@ jobs:
             -derivedDataPath build/DerivedData \
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -maximum-test-execution-time-allowance 300 \
-            CODE_SIGNING_ALLOWED=NO build test
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            test-without-building
       - name: Upload simulator test results
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: auralis-ios-test-results-${{ github.sha }}
-          path: apps/ios/build/Auralis-tests.xcresult
+          path: |
+            apps/ios/build/Auralis-*.xcresult
+            apps/ios/build/Signing/
           if-no-files-found: warn
           retention-days: 14
 

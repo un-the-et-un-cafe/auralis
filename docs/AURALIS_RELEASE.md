@@ -25,19 +25,37 @@ simulator on iOS 18.5 for the full `OpenMeshChat` test scheme. No real account,
 OAuth setup, sample conversations, simulated cloud provider or privacy bypass is
 injected. Tests use generated synthetic identities and test data only.
 
+iOS simulator test builds use local ad-hoc signatures (`CODE_SIGN_IDENTITY=-`)
+without a signing certificate, development team, provisioning account or profile.
+CI verifies the signature and generated simulator entitlement input's existing
+app-only Keychain group before a real Keychain insert/update/readback regression
+proves runtime access. Run `40696797061` proved that disabling simulator
+signing removed its entitlements (`errSecMissingEntitlement`, `-34018`), so the
+app correctly refused to complete onboarding without saving its identity. This
+test-build fix does not change Keychain accessibility, entitlement scope, screen
+privacy or the unsigned **device** archive workflow.
+
 These tests exercise selected onboarding, cancellation, navigation, persistence
 and permission/privacy behavior; they are not exhaustive accessibility or visual
 acceptance. Physical Bluetooth interoperability and real cloud backup are **not**
 covered. Merely adding the jobs is not a passing runtime result: retain the
 successful run and native reports for the exact reviewed SHA.
 
-The required Android runtime matrix first checks `/dev/kvm` is a non-symlink
-character device with existing read/write access for the runner, then checks
-`emulator -accel-check` and requires `-accel on`. Missing access fails the gate.
-There is no `chmod`, device ownership/ACL change, permissive SELinux setting, or
-software-CPU fallback. Diagnose a failing runner before proposing an explicitly
-authorized, narrowly scoped ephemeral runner configuration change. Never apply
-hosted-runner setup instructions to a user's computer. See
+The required Android runtime matrix first checks the real root-owned `/dev/kvm`
+character device and existing access. Run `40696797061` demonstrated that the
+hosted runner UID lacked access to its `root:kvm` mode `0660` device. Following
+explicit authorization, `scripts/ci/kvm_access.py` may add **only the current
+unprivileged runner UID** read/write access, and only on disposable GitHub-hosted
+Linux x86_64 runners with that exact baseline ACL. Unexpected device/ACL state
+fails closed. The owner, group and other permissions remain unchanged. An
+`always()` cleanup revokes the job's UID grant; hard runner termination also
+discards the disposable machine. Existing access needs no ACL change.
+
+The emulator still checks `-accel-check` and requires `-accel on`. There is no
+global `chmod`, device ownership change, group-membership expansion, persistent
+udev rule, permissive SELinux setting, or software-CPU fallback. Missing KVM or
+denied ACL tooling fails the gate without retrying a permission change. Never
+apply hosted-runner setup instructions to a user's computer. See
 [GitHub's KVM availability announcement](https://github.blog/changelog/2024-04-02-github-actions-hardware-accelerated-android-virtualization-now-available/)
 and [Android's acceleration reference](https://developer.android.com/studio/run/emulator-acceleration).
 

@@ -19,6 +19,8 @@ final class AuralisSmokeTests: XCTestCase {
         app.launch()
         let started = app.buttons["onboarding.getStarted"]
         XCTAssertTrue(started.waitForExistence(timeout: 30), "Use an erased simulator; this tests a real fresh install.")
+        XCTAssertGreaterThan(app.windows.firstMatch.frame.height, 480,
+                             "The app must use the simulator's native geometry, not 320×480 legacy compatibility mode.")
 
         // Cancelling recovery must return to welcome, without retaining pasted words.
         tap(app.buttons["onboarding.restorePhrase"], in: app)
@@ -35,6 +37,8 @@ final class AuralisSmokeTests: XCTestCase {
         tap(started, in: app)
         XCTAssertTrue(app.textFields["onboarding.displayName"].waitForExistence(timeout: 5))
         tap(app.buttons["onboarding.profileNext"], in: app)
+        XCTAssertTrue(app.navigationBars["Secure your account"].waitForExistence(timeout: 10),
+                      "Identity creation/persistence did not reach Secure your account. Check the real Keychain roundtrip test and app-host signing; do not treat this as an offscreen button.")
         tap(app.buttons["onboarding.showWords"], in: app)
         tap(app.buttons["onboarding.wordsCancel"], in: app)
         tap(app.buttons["onboarding.remindLater"], in: app)

@@ -5,6 +5,26 @@ import HoplaKit
 @testable import OpenMeshChat
 
 final class AppLifecycleTests: XCTestCase {
+    func testActualKeychainInsertUpdateAndReadBack() throws {
+        // Exercise the app host's actual entitlements, not only injected SecItem closures.
+        // A unique synthetic item never touches recovery phrases, storage keys or cloud keys.
+        let account = "auralis.test.roundtrip.\(UUID().uuidString)"
+        defer { Keychain.delete(account: account, synchronizable: false) }
+        let first = Data([0x41, 0x55, 0x52])
+        let updated = Data([0x41, 0x4c, 0x49, 0x53])
+        _ = try XCTUnwrap(Keychain.write(first, account: account, synchronizable: false) ? true : nil,
+                      "The app host must carry real Keychain entitlements; do not replace this test with an in-memory store.")
+        XCTAssertEqual(Keychain.read(account: account), first)
+        XCTAssertTrue(Keychain.write(updated, account: account, synchronizable: false))
+        XCTAssertEqual(Keychain.read(account: account), updated)
+    }
+
+    func testLaunchScreenMetadataOptsIntoNativeDisplayGeometry() {
+        XCTAssertNotNil(Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])
+        XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen_Generation"),
+                     "Generation is an Xcode build setting, not a valid raw launch-screen Info.plist entry.")
+    }
+
     func testKeychainUpdateDoesNotAttemptInsertAfterAccessFailure() {
         var adds = 0
         let saved = Keychain.write(Data([1]), account: "test", synchronizable: false,

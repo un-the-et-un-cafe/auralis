@@ -53,8 +53,9 @@ appropriate; they are not proofs of provider connectivity or real-device BLE beh
 
 The XcodeGen `OpenMeshChat` scheme now includes both:
 
-- `OpenMeshChatTests`: existing real-Rust bridge tests plus five `AppLifecycleTests`
-  (Keychain replacement outcomes, idle/resume backup gate, failed identity-load routing).
+- `OpenMeshChatTests`: existing real-Rust bridge tests plus seven `AppLifecycleTests`
+  (Keychain replacement outcomes, actual Keychain insert/update/readback, idle/resume backup
+  gate, failed identity-load routing, and native launch-screen metadata).
 - `OpenMeshChatUITests/AuralisSmokeTests/testFreshOnboardingCancellationNavigationSettingsAndRelaunch`:
   actual app onboarding with **Remind me later**, restore-input cancellation/clearing,
   recovery-card cancellation, contact/tab/back navigation, backup/privacy/notification/
@@ -74,9 +75,29 @@ capture. The single ordered smoke retains its state to verify a genuine relaunch
 - `python3 -m unittest discover -s apps/ios/scripts -p 'test_*.py'` — **5 passed**.
 - `git diff --check -- apps/ios` — passed.
 
-Native XCTest, SwiftUI/UIKit/CoreBluetooth type checking, XcodeGen generation, and the new UI
-smoke cannot run on this Linux executor. They are included in the hosted simulator CI and
-must pass there before this tranche is considered natively validated. The real-Rust Swift
-bridge must also be rerun against the coordinated core changes. Physical iPhone/Android
-interop, background BLE, secure capture behavior, Keychain entitlements, Face ID/passcode,
-and real iCloud/Google account operations still require provisioned-device acceptance.
+Native XCTest and SwiftUI/UIKit/CoreBluetooth type checking cannot run on this Linux
+executor. Hosted run [40696797061](https://github.com/un-the-et-un-cafe/auralis/actions/runs/40696797061)
+subsequently built the native app and passed all 13 then-current lifecycle/real-Rust bridge
+tests. The real-app UI smoke passed recovery cancellation/clearing and reached Profile, but
+correctly stopped when creating the persisted identity failed. Decoded xcresult accessibility
+and unified-log records establish the actual cause: UI-test app PID 23620 remained on Profile
+with the identity error, and Security returned `-34018`, reporting that the client had neither
+`application-identifier` nor `keychain-access-groups` entitlements. This was not an offscreen
+selector, delayed transition, or reason to substitute in-memory persistence.
+
+The simulator build had disabled code signing. The coordinated CI correction uses local
+ad-hoc simulator signing and checks entitlements before execution; it does not provision a
+team/certificate or change the unsigned device-release artifact. A new real-Keychain test uses
+only a unique synthetic account and removes that item afterward. The UI smoke now explicitly
+asserts arrival at Secure your account before looking for recovery controls.
+
+The same artifact exposed a separate 320×480 legacy app viewport on the iPhone 16 simulator.
+The raw Info.plist incorrectly contained `UILaunchScreen_Generation` (a generation setting),
+not Apple's `UILaunchScreen` dictionary. That metadata is corrected and guarded by native
+metadata and UI-geometry assertions; screen-security code remains unchanged.
+
+**The signing correction, two new native tests, launch metadata correction, and the remainder
+of the UI journey still need a new hosted run.** No full UI pass is claimed from the failed run.
+Physical iPhone/Android interop, background BLE, secure capture behavior, device Keychain
+entitlements, Face ID/passcode, and real iCloud/Google account operations still require
+provisioned-device acceptance.
