@@ -14,7 +14,7 @@ path = "src/lib.rs"
 # Classical Noise building blocks (Noise_IK_25519_ChaChaPoly_BLAKE2b)
 blake2 = "=0.10.6"
 chacha20poly1305 = "=0.10.1"
-x25519-dalek = { version = "=2.0.1", features = ["static_secrets"] }
+x25519-dalek = { version = "=3.0.0", features = ["static_secrets"] }
 
 # PQ KEM (FIPS 203) for suite OMCP-2026-A hybrid
 # Requires rustc >= 1.87 (via ctutils); CI uses dtolnay stable.
