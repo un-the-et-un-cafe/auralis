@@ -100,7 +100,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    implementation("androidx.fragment:fragment-ktx:1.9.1")
     implementation("androidx.biometric:biometric:1.1.0")
     // Restore job (DESIGN_SPEC §5.86): expedited work + ongoing notification.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
