@@ -115,8 +115,12 @@ STAGE=wake-screen
 # Normal font size for private appearance review; not accessibility-test evidence.
 "$ADB" -s "$ANDROID_SERIAL" shell settings put system font_scale 1.0
 STAGE=private-ui-capture
-"$ADB" -s "$ANDROID_SERIAL" install -r app/build/outputs/apk/uiCapture/app-uiCapture.apk
-"$ADB" -s "$ANDROID_SERIAL" install -r app/build/outputs/apk/androidTest/uiCapture/app-uiCapture-androidTest.apk
+INSTALLER="$(dirname "$0")/install-capture-apk.py"
+AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+python3 "$INSTALLER" "$ADB" "$AAPT" "$ANDROID_SERIAL" "$EMULATOR_PID" \
+  chat.auralis.app.uicapture app/build/outputs/apk/uiCapture/app-uiCapture.apk
+python3 "$INSTALLER" "$ADB" "$AAPT" "$ANDROID_SERIAL" "$EMULATOR_PID" \
+  chat.auralis.app.uicapture.test app/build/outputs/apk/androidTest/uiCapture/app-uiCapture-androidTest.apk
 for theme in light dark; do
   if [[ "$theme" == dark ]]; then night=yes; else night=no; fi
   "$ADB" -s "$ANDROID_SERIAL" shell cmd uimode night "$night"
