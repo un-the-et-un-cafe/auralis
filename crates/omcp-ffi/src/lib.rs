@@ -1504,6 +1504,69 @@ impl OmcpNode {
             .collect())
     }
 
+    /// Bounded read-only lookup for an explicitly recoverable cancelled file.
+    /// Cleanup must already have completed; this never retires a capability.
+    pub fn recoverable_received_file(
+        &self,
+        contact_id: String,
+        msg_id_hex: String,
+    ) -> Result<Option<ReceivedFile>, FfiError> {
+        let peer = parse_id(&contact_id)?;
+        let id = parse_msg_id(&msg_id_hex)?;
+        let node = self.inner.lock();
+        if !node.contacts.contains_key(&peer) {
+            return Ok(None);
+        }
+        Ok(node
+            .db
+            .cancelled_received_file_for_request(&peer, &id)?
+            .map(receipt_to_ffi))
+    }
+
+    /// Explicit confirmed recovery. Durable retirement, message state and the
+    /// existing MEDIA_REQUEST outbox entry commit together before queue mutation.
+    pub fn request_cancelled_received_file(&self, receipt: ReceivedFile) -> Result<(), FfiError> {
+        let token = parse_receipt_token(&receipt.receipt_token_hex)?;
+        let peer = parse_id(&receipt.contact_id)?;
+        let id = parse_msg_id(&receipt.transfer_id_hex)?;
+        if token.message_id != id {
+            return Err(invalid("receipt message mismatch"));
+        }
+        let mut node = self.inner.lock();
+        if !node.contacts.contains_key(&peer) {
+            return Err(invalid("unknown contact"));
+        }
+        let expected = node
+            .db
+            .cancelled_received_file_for_request(&peer, &id)?
+            .ok_or_else(|| invalid("receipt is not recoverable"))?;
+        if receipt_to_ffi(expected.clone()) != receipt {
+            return Err(invalid("receipt metadata changed"));
+        }
+        // Volatile work must not coexist with a cancelled generation. Keep all
+        // state unchanged if an inconsistent live transfer is observed.
+        if node.files.incoming.contains_key(&id)
+            || node.files.verified.contains_key(&id)
+            || node
+                .files
+                .out
+                .values()
+                .any(|q| q.iter().any(|f| f.id == id))
+        {
+            return Err(invalid("conflicting live file transfer"));
+        }
+        let q = node
+            .db
+            .request_cancelled_received_file(&expected, random_id16()?, now_ms())?;
+        node.queues.entry(q.peer).or_default().push_back(Queued {
+            envelope_id: q.id,
+            created_ms: q.created_ms,
+            inner: Zeroizing::new(q.inner.clone()),
+            control: q.control,
+        });
+        Ok(())
+    }
+
     pub fn cancelled_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
         Ok(self
             .inner

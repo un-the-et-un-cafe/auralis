@@ -229,6 +229,8 @@ interface OmcpCore {
 
     fun markReceivedFileMissing(transferId: String, expectedLocalPath: String): Boolean = false
     fun pendingReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun recoverableReceivedFile(contactId: String, transferId: String): ReceiveReceiptInfo? = null
+    fun requestCancelledReceivedFile(receipt: ReceiveReceiptInfo): Unit = error("cancelled receipt request unavailable")
     fun validateReceivedFileForRepair(receiptToken: String): ReceiveReceiptInfo = error("receipt repair validation unavailable")
     fun cancelledReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
     fun acknowledgeReceivedFileCleanup(receiptToken: String): Boolean = error("receipt cleanup unavailable")

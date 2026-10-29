@@ -223,6 +223,22 @@ public struct LocalReceiptRepairAction: Equatable, Sendable {
     let identityEpoch: UInt64
 }
 
+/// One-shot confirmation snapshot; only the repository can issue it.
+public struct CancelledReceiptRequestAction: Equatable, Sendable {
+    public let receipt: ReceiveReceiptInfo
+    let identityEpoch: UInt64
+    let actionId: UUID
+}
+
+/// Confirmation state shared by the view and callback tests. Dismissal never invokes work.
+public struct CancelledFileRequestConfirmation {
+    private var action: (() -> Void)?
+    public init() {}
+    public mutating func present(_ action: @escaping () -> Void) { self.action = action }
+    public mutating func dismiss() { action = nil }
+    public mutating func confirm() { let captured = action; action = nil; captured?() }
+}
+
 public protocol ReceiveFileVerifier: AnyObject {
     func update(_ bytes: Data) throws
     func finish() throws
@@ -545,6 +561,8 @@ public protocol OmcpCore: AnyObject {
     func commitReceivedFile(_ receiptToken: String, path: String) throws
     func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier
     func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo
+    func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo?
+    func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws
     @discardableResult func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool
 
     /// Import `RestoredBackup.history` into the local store.
@@ -640,6 +658,8 @@ public extension OmcpCore {
     func retryReceivedFiles() throws -> [ReceiveReceiptInfo] { try pendingReceivedFiles() }
     func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data { throw CoreError.storageUnavailable("receipt blocks unavailable") }
     func commitReceivedFile(_ receiptToken: String, path: String) throws { throw CoreError.storageUnavailable("receipt commit unavailable") }
+    func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo? { nil }
+    func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws { throw CoreError.storageUnavailable("cancelled request unavailable") }
     func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo { throw CoreError.storageUnavailable("repair validation unavailable") }
     func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier { throw CoreError.storageUnavailable("receipt verifier unavailable") }
     func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool { throw CoreError.storageUnavailable("missing-file transition unavailable") }

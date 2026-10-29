@@ -30,6 +30,10 @@ public final class FakeOmcpCore: OmcpCore {
     public var receiptCancelError: CoreError?
     public var receiptRetryError: CoreError?
     public var receiptCleanupAckError: CoreError?
+    public var recoverableReceiptError: CoreError?
+    public var cancelledRequestError: CoreError?
+    public private(set) var cancelledRequestCount = 0
+    private var cleanedCancelledReceipts: [String: ReceiveReceiptInfo] = [:]
     private var cancelledReceipts: [String: ReceiveReceiptInfo] = [:]
     public var cancelPreservingReceived = false
     public var receiptEnumerationError: CoreError?
@@ -49,7 +53,22 @@ public final class FakeOmcpCore: OmcpCore {
     public func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { Array(cancelledReceipts.values.prefix(32)) }
     public func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool {
         if let error = receiptCleanupAckError { throw error }
-        return cancelledReceipts.removeValue(forKey: receiptToken) != nil
+        guard let receipt = cancelledReceipts.removeValue(forKey: receiptToken) else { return false }
+        cleanedCancelledReceipts[receiptToken] = receipt
+        return true
+    }
+    public func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo? {
+        if let error = recoverableReceiptError { throw error }
+        guard book[contactId] != nil, receiptRows[msgId]?.file?.state == .failed else { return nil }
+        return cleanedCancelledReceipts.values.first { $0.contactId == contactId && $0.transferId == msgId }
+    }
+    public func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws {
+        if let error = cancelledRequestError { throw error }
+        guard try recoverableReceivedFile(receipt.contactId, msgId: receipt.transferId) == receipt,
+              var row = receiptRows[receipt.transferId] else { throw CoreError.invalid("stale cancelled receipt") }
+        cleanedCancelledReceipts.removeValue(forKey: receipt.receiptToken)
+        row.file?.state = .requested; receiptRows[receipt.transferId] = row
+        cancelledRequestCount += 1
     }
     public func retryReceivedFiles() throws -> [ReceiveReceiptInfo] {
         if let error = receiptRetryError { throw error }

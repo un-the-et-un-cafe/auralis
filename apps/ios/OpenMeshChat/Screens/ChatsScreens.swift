@@ -381,15 +381,26 @@ struct ChatThreadView: View {
                 if m.burn != nil { burnBubble(m) }
                 else if let f = m.file {
                     let repair = model.repo.localReceiptRepairs[m.id]
+                    let requestAgain = model.repo.cancelledReceiptRequests[m.id]
                     FileBubble(file: f, mine: m.mine, peerName: model.repo.contact(contactId)?.displayName ?? "",
                                onCancel: { model.repo.cancelFile(contactId, transferId: m.id) },
                                onRetry: { model.repo.retryReceivedFiles() },
+                               onRequestAgain: requestAgain.map { action in { model.repo.requestCancelledFileAgain(action) } },
                                onRepair: repair.map { action in { model.repo.repairLocalReceivedFile(action) } },
                                onOpen: { if let p = f.localPath {
                                    model.repo.prepareReceivedFileForOpening(m.id, path: p) { safe in
                                        if let safe { previewURL = URL(fileURLWithPath: safe) }
                                    }
                                } })
+                        .onAppear { if f.state == .failed { model.repo.showCancelledFileRequest(contactId, msgId: m.id) } }
+                        .onChange(of: f.state) { state in
+                            if state == .failed { model.repo.showCancelledFileRequest(contactId, msgId: m.id) }
+                            else { model.repo.hideCancelledFileRequest(m.id) }
+                        }
+                        .onChange(of: model.repo.cancelledRequestRevision) { _ in
+                            if f.state == .failed { model.repo.showCancelledFileRequest(contactId, msgId: m.id) }
+                        }
+                        .onDisappear { model.repo.hideCancelledFileRequest(m.id) }
                 }
                 else { Text(m.text) }
             }
@@ -432,7 +443,10 @@ struct FileBubble: View {
     let peerName: String
     let onCancel: () -> Void
     let onRetry: () -> Void
+    let onRequestAgain: (() -> Void)?
     let onRepair: (() -> Void)?
+    @State private var confirmingRequest = false
+    @State private var requestConfirmation = CancelledFileRequestConfirmation()
     @State private var confirmingRepair = false
     @State private var repairSnapshot: (() -> Void)?
     let onOpen: () -> Void
@@ -496,6 +510,10 @@ struct FileBubble: View {
                     }
                 }
             }
+            if file.state == .failed, let onRequestAgain {
+                Button(L("file_request_again")) { requestConfirmation.present(onRequestAgain); confirmingRequest = true }
+                    .frame(minHeight: 44)
+            }
             ProgressView(value: file.fraction).tint(tint)
                 .accessibilityValue(L("file_progress_a11y", Int(file.fraction * 100)))
             if file.state == .received { Text(L("file_integrity_checked")).font(.caption2).foregroundStyle(c.ink3) }
@@ -504,6 +522,12 @@ struct FileBubble: View {
         .frame(maxWidth: 300, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { if file.state == .received { onOpen() } }
+        .confirmationDialog(L("file_request_again"), isPresented: $confirmingRequest, titleVisibility: .visible) {
+            Button(L("file_request_again")) { requestConfirmation.confirm() }
+            Button(L("cancel"), role: .cancel) { requestConfirmation.dismiss() }
+        } message: { Text(L("file_request_again_explanation")) }
+        .onChange(of: confirmingRequest) { shown in if !shown { requestConfirmation.dismiss() } }
+        .onDisappear { requestConfirmation.dismiss(); confirmingRequest = false }
         .confirmationDialog(L("file_repair_local"), isPresented: $confirmingRepair, titleVisibility: .visible) {
             Button(L("file_repair_confirm"), role: .destructive) { let action = repairSnapshot; repairSnapshot = nil; action?() }
             Button(L("cancel"), role: .cancel) { repairSnapshot = nil }

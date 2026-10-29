@@ -129,6 +129,15 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     public func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo {
         try call { Self.receipt(try n().validateReceivedFileForRepair(receiptTokenHex: receiptToken)) }
     }
+    public func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo? {
+        try call { try n().recoverableReceivedFile(contactId: contactId, msgIdHex: msgId).map(Self.receipt) }
+    }
+    public func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws {
+        try call { try n().requestCancelledReceivedFile(receipt: OmcpFFI.ReceivedFile(
+            transferIdHex: receipt.transferId, contactId: receipt.contactId, name: receipt.name,
+            mime: receipt.mime, size: receipt.size, receiptTokenHex: receipt.receiptToken,
+            contentHashHex: receipt.contentHash, blockCount: receipt.blockCount)) }
+    }
     public func pendingReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().pendingReceivedFiles().map(Self.receipt) } }
     public func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().cancelledReceivedFiles().map(Self.receipt) } }
     @discardableResult public func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool {

@@ -3587,3 +3587,216 @@ fn native_verifier_rekeyed_metadata_takes_precedence_over_wrong_content() {
     assert_eq!(message.file.as_ref().unwrap().state, st::FILE_FINALIZING);
     assert!(message.file.as_ref().unwrap().local_path.is_none());
 }
+
+#[test]
+fn cancelled_request_again_is_atomic_restart_safe_and_rotates_receive_capability() {
+    let (a, b, la, lb, phrase, dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let file = files::build_outgoing([151; 16], "again", "binary", b"verified again").unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let old = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    assert!(b.cancel_file(old.transfer_id_hex.clone()).unwrap());
+    assert!(b
+        .recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+        .unwrap()
+        .is_none());
+    assert!(b.request_cancelled_received_file(old.clone()).is_err());
+    b.acknowledge_received_file_cleanup(old.receipt_token_hex.clone())
+        .unwrap();
+    let before = b.inner.lock().db.message(&file.id).unwrap().unwrap();
+    drop((b, la, lb));
+    let b = open_node(&phrase, "Bob", dir.path());
+    assert_eq!(
+        b.recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+            .unwrap(),
+        Some(old.clone())
+    );
+    // An older random-ID request can remain queued; explicit retirement adds
+    // one new envelope, not an exactly-once network-delivery guarantee.
+    b.inner
+        .lock()
+        .queue_control(
+            &peer,
+            AppContent::MediaControl(core_burn::MediaControl::new(
+                core_burn::CONTROL_MEDIA_REQUEST,
+                file.id,
+                parse_id(&old.content_hash_hex).unwrap(),
+            )),
+        )
+        .unwrap();
+    let queued_before = b.inner.lock().db.outbox().unwrap().len();
+    b.request_cancelled_received_file(old.clone()).unwrap();
+    let after = b.inner.lock().db.message(&file.id).unwrap().unwrap();
+    let mut expected = before.clone();
+    expected.file.as_mut().unwrap().state = st::FILE_REQUESTED;
+    assert_eq!(
+        after, expected,
+        "request preserves ownership and all file metadata"
+    );
+    let durable = b.inner.lock().db.outbox().unwrap();
+    assert_eq!(durable.len(), queued_before + 1);
+    let q = durable.last().unwrap();
+    let expected_wire = core_burn::encode_app(
+        None,
+        &AppContent::MediaControl(core_burn::MediaControl::new(
+            core_burn::CONTROL_MEDIA_REQUEST,
+            file.id,
+            parse_id(&old.content_hash_hex).unwrap(),
+        )),
+    )
+    .unwrap();
+    assert_eq!(q.inner, expected_wire);
+    assert!(q.control && !q.burn);
+    assert!(b.inner.lock().queues[&peer]
+        .iter()
+        .any(|v| v.envelope_id == q.id && v.inner.as_slice() == q.inner));
+    assert!(b.request_cancelled_received_file(old.clone()).is_err());
+    assert_eq!(b.inner.lock().db.outbox().unwrap(), durable);
+    drop(b);
+    let b = open_node(&phrase, "Bob", dir.path());
+    assert_eq!(b.inner.lock().db.outbox().unwrap(), durable);
+    assert!(b.inner.lock().queues[&peer]
+        .iter()
+        .any(|v| v.envelope_id == q.id));
+    assert!(b.request_cancelled_received_file(old.clone()).is_err());
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let fresh = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    assert_ne!(fresh.receipt_token_hex, old.receipt_token_hex);
+    assert_eq!(receipt_bytes(&b, &fresh), b"verified again");
+    assert!(b
+        .read_received_file_block(old.receipt_token_hex.clone(), 0)
+        .is_err());
+    assert!(b
+        .commit_received_file(old.receipt_token_hex.clone(), "/private/stale".into())
+        .is_err());
+    assert!(b
+        .acknowledge_received_file_cleanup(old.receipt_token_hex)
+        .is_err());
+}
+
+#[test]
+fn cancelled_request_again_failure_never_mutates_volatile_or_durable_state() {
+    let (a, b, _la, _lb, _phrase, dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let file = files::build_outgoing([152; 16], "again", "binary", b"data").unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let old = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    b.cancel_file(old.transfer_id_hex.clone()).unwrap();
+    b.acknowledge_received_file_cleanup(old.receipt_token_hex.clone())
+        .unwrap();
+    let before = b.inner.lock().db.message(&file.id).unwrap();
+    let durable = b.inner.lock().db.outbox().unwrap();
+    let queue_count: usize = b.inner.lock().queues.values().map(|q| q.len()).sum();
+    let db = rusqlite::Connection::open(dir.path().join("omcp.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_request_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT, 'injected request failure'); END;").unwrap();
+    assert!(b.request_cancelled_received_file(old.clone()).is_err());
+    assert_eq!(b.inner.lock().db.message(&file.id).unwrap(), before);
+    assert_eq!(b.inner.lock().db.outbox().unwrap(), durable);
+    assert_eq!(
+        b.inner
+            .lock()
+            .queues
+            .values()
+            .map(|q| q.len())
+            .sum::<usize>(),
+        queue_count
+    );
+    assert_eq!(
+        b.recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+            .unwrap(),
+        Some(old.clone())
+    );
+    db.execute_batch("DROP TRIGGER fail_request_outbox")
+        .unwrap();
+    b.request_cancelled_received_file(old).unwrap();
+}
+
+#[test]
+fn cancelled_request_again_rejects_changed_confirmation_and_deleted_message() {
+    let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let file = files::build_outgoing([153; 16], "again", "binary", b"data").unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let old = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    b.cancel_file(old.transfer_id_hex.clone()).unwrap();
+    b.acknowledge_received_file_cleanup(old.receipt_token_hex.clone())
+        .unwrap();
+    for n in 0..5 {
+        let mut wrong = old.clone();
+        match n {
+            0 => wrong.contact_id = hex::encode([99; 32]),
+            1 => wrong.name.push('!'),
+            2 => wrong.transfer_id_hex = hex::encode([99; 16]),
+            3 => {
+                wrong.receipt_token_hex =
+                    format!("{}{}", &old.receipt_token_hex[..32], hex::encode([0; 32]))
+            }
+            _ => wrong.size += 1,
+        }
+        assert!(b.request_cancelled_received_file(wrong).is_err());
+    }
+    assert_eq!(
+        b.recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+            .unwrap(),
+        Some(old.clone())
+    );
+    b.inner.lock().db.delete_message(&file.id).unwrap();
+    assert!(b
+        .recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+        .unwrap()
+        .is_none());
+    assert!(b.request_cancelled_received_file(old).is_err());
+    assert!(b.inner.lock().db.message(&file.id).unwrap().is_none());
+}
+
+#[test]
+fn cancelled_request_again_requires_live_and_persisted_contact() {
+    let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let file = files::build_outgoing([154; 16], "again", "binary", b"data").unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let old = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    b.cancel_file(old.transfer_id_hex.clone()).unwrap();
+    b.acknowledge_received_file_cleanup(old.receipt_token_hex.clone())
+        .unwrap();
+    let contact = b.inner.lock().contacts.remove(&peer).unwrap();
+    assert!(b
+        .recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+        .unwrap()
+        .is_none());
+    assert!(b.request_cancelled_received_file(old.clone()).is_err());
+    b.inner.lock().contacts.insert(peer, contact);
+    b.inner.lock().db.delete_contact(&peer).unwrap();
+    assert!(b
+        .recoverable_received_file(old.contact_id.clone(), old.transfer_id_hex.clone())
+        .unwrap()
+        .is_none());
+    assert!(b.request_cancelled_received_file(old).is_err());
+    assert_eq!(
+        b.inner
+            .lock()
+            .db
+            .message(&file.id)
+            .unwrap()
+            .unwrap()
+            .file
+            .unwrap()
+            .state,
+        st::FILE_FAILED
+    );
+}

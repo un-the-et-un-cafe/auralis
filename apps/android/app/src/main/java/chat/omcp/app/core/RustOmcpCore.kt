@@ -49,6 +49,11 @@ class RustOmcpCore : OmcpCore {
 
     override fun markReceivedFileMissing(transferId: String, expectedLocalPath: String) = n().markReceivedFileMissing(transferId, expectedLocalPath)
     override fun pendingReceivedFiles() = n().pendingReceivedFiles().map { it.toReceipt() }
+    override fun recoverableReceivedFile(contactId: String, transferId: String) = n().recoverableReceivedFile(contactId, transferId)?.toReceipt()
+    override fun requestCancelledReceivedFile(receipt: ReceiveReceiptInfo) = n().requestCancelledReceivedFile(chat.omcp.ffi.ReceivedFile(
+        receipt.transferId, receipt.contactId, receipt.name, receipt.mime, receipt.size.toULong(),
+        receipt.receiptToken, receipt.contentHash, receipt.blockCount.toUInt(),
+    ))
     override fun validateReceivedFileForRepair(receiptToken: String) = n().validateReceivedFileForRepair(receiptToken).toReceipt()
     override fun cancelledReceivedFiles() = n().cancelledReceivedFiles().map { it.toReceipt() }
     override fun acknowledgeReceivedFileCleanup(receiptToken: String) = n().acknowledgeReceivedFileCleanup(receiptToken)

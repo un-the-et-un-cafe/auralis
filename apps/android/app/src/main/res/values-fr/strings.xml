@@ -311,4 +311,6 @@
     <string name="file_receive_retry_notice">Certains fichiers reçus attendent leur enregistrement. Touchez pour réessayer.</string>
     <string name="file_repair_local">Réparer la copie locale</string>
     <string name="file_repair_confirm">Remplacer la copie locale endommagée à partir de la copie chiffrée vérifiée sur cet appareil ? Aucun nouveau transfert ne sera demandé.</string>
+    <string name="file_request_again">Redemander ce fichier</string>
+    <string name="file_request_again_confirm">Demander à votre contact de renvoyer ce fichier ? La copie locale annulée a été supprimée. Votre contact doit encore disposer du fichier.</string>
 </resources>

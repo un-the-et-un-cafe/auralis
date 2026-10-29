@@ -568,6 +568,107 @@ impl Store {
             s.put_message(&m)
         })
     }
+    /// Bounded per-message lookup for explicit user-requested network recovery.
+    /// A cancelled generation remains ineligible until native cleanup is ACKed.
+    pub fn cancelled_received_file_for_request(
+        &self,
+        peer: &[u8; 32],
+        id: &[u8; 16],
+    ) -> Result<Option<ReceivedFileReceipt>> {
+        self.transaction(|s| Ok(s.cancelled_request_candidate(peer, id)?.map(|r| r.receipt)))
+    }
+    fn cancelled_request_candidate(
+        &self,
+        peer: &[u8; 32],
+        id: &[u8; 16],
+    ) -> Result<Option<ReceiptRec>> {
+        if self
+            .get::<ContactRec>(Table::Contacts, peer)?
+            .is_none_or(|contact| contact.peer != *peer)
+        {
+            return Ok(None);
+        }
+        let Some(rec) = self.receipt(id)? else {
+            return Ok(None);
+        };
+        if rec.receipt.peer != *peer
+            || rec.state != CANCELLED
+            || !rec.cleanup_done
+            || rec.message_deleted
+        {
+            return Ok(None);
+        }
+        self.receipt_message(&rec)?;
+        if rec
+            .locator
+            .as_ref()
+            .is_none_or(|locator| locator.len() != 16)
+        {
+            return Ok(None);
+        }
+        if self.get::<OutFileRec>(Table::OutFiles, id)?.is_some()
+            || self.get::<OutboxRec>(Table::Outbox, id)?.is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(rec))
+    }
+    /// Retire exactly one cleaned cancelled generation and durably queue the
+    /// existing MEDIA_REQUEST control atomically. The caller may enqueue the
+    /// returned control in memory only after this transaction has committed.
+    /// No import, replay or ordinary retry invokes this explicit transition.
+    pub fn request_cancelled_received_file(
+        &self,
+        expected: &ReceivedFileReceipt,
+        envelope_id: [u8; 16],
+        now: u64,
+    ) -> Result<OutboxRec> {
+        self.transaction(|s| {
+            let rec = s
+                .cancelled_request_candidate(&expected.peer, &expected.token.message_id)?
+                .ok_or_else(refused)?;
+            if rec.receipt != *expected {
+                return Err(refused());
+            }
+            let locator: [u8; 16] = rec
+                .locator
+                .as_deref()
+                .and_then(|v| v.try_into().ok())
+                .ok_or_else(refused)?;
+            if s.message(&envelope_id)?.is_some()
+                || s.get::<OutboxRec>(Table::Outbox, &envelope_id)?.is_some()
+                || s.get::<OutFileRec>(Table::OutFiles, &envelope_id)?
+                    .is_some()
+                || s.has_receipt(&envelope_id)?
+            {
+                return Err(refused());
+            }
+            let q = OutboxRec {
+                id: envelope_id,
+                peer: expected.peer,
+                created_ms: now,
+                inner: crate::burn::encode_app(
+                    None,
+                    &crate::burn::AppContent::MediaControl(crate::burn::MediaControl::new(
+                        crate::burn::CONTROL_MEDIA_REQUEST,
+                        locator,
+                        expected.hash,
+                    )),
+                )?,
+                control: true,
+                burn: false,
+            };
+            let mut message = s.receipt_message(&rec)?;
+            let file = message.file.as_mut().ok_or_else(refused)?;
+            file.state = FILE_REQUESTED;
+            file.done_bytes = 0;
+            file.local_path = None;
+            s.del_raw(Table::ReceiveIndex, &expected.token.message_id)?;
+            s.put_message(&message)?;
+            s.put_outbox(&q, None)?;
+            Ok(q)
+        })
+    }
     /// Return at most 32 outstanding cleanup generations. A sealed durable
     /// cursor advances even when a platform cannot delete an individual file,
     /// so repeated bounded passes fairly reach later obligations after restart.
@@ -1436,5 +1537,274 @@ mod tests {
         assert!(observed.load(Ordering::SeqCst));
         assert!(s.pending_received_files().unwrap().is_empty());
         assert_eq!(s.message(&[1; 16]).unwrap().unwrap().peer, [8; 32]);
+    }
+    fn request_contact(s: &Store) {
+        s.put_contact(&ContactRec {
+            peer: PEER,
+            name: "peer".into(),
+            verified: false,
+            device: None,
+            dh: None,
+        })
+        .unwrap();
+    }
+    fn cleaned_cancelled(s: &Store, id: u8) -> ReceivedFileReceipt {
+        request_contact(s);
+        let r = stage(s, id, PEER, b"payload");
+        assert!(s.cancel_received_file(&PEER, &[id; 16]).unwrap());
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        r
+    }
+    #[test]
+    fn cancelled_request_eligibility_full_snapshot_and_locator_fail_closed() {
+        let s = Store::open_in_memory(&KEY).unwrap();
+        request_contact(&s);
+        let r = stage(&s, 1, PEER, b"payload");
+        assert!(s
+            .cancelled_received_file_for_request(&PEER, &[1; 16])
+            .unwrap()
+            .is_none());
+        assert!(s.cancel_received_file(&PEER, &[1; 16]).unwrap());
+        assert!(s
+            .cancelled_received_file_for_request(&PEER, &[1; 16])
+            .unwrap()
+            .is_none());
+        assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert_eq!(
+            s.cancelled_received_file_for_request(&PEER, &[1; 16])
+                .unwrap(),
+            Some(r.clone())
+        );
+        assert!(s
+            .cancelled_received_file_for_request(&[3; 32], &[1; 16])
+            .unwrap()
+            .is_none());
+        let before = s.message(&[1; 16]).unwrap();
+        for field in 0..8 {
+            let mut stale = r.clone();
+            match field {
+                0 => stale.token.nonce[0] ^= 1,
+                1 => stale.peer[0] ^= 1,
+                2 => stale.hash[0] ^= 1,
+                3 => stale.size += 1,
+                4 => stale.name.push('x'),
+                5 => stale.mime.push('x'),
+                6 => stale.blocks += 1,
+                _ => stale.token.message_id[0] ^= 1,
+            }
+            assert!(s
+                .request_cancelled_received_file(&stale, [8; 16], 9)
+                .is_err());
+            assert_eq!(s.message(&[1; 16]).unwrap(), before);
+            assert!(s.outbox().unwrap().is_empty());
+        }
+        for locator in [None, Some(vec![1; 15]), Some(vec![1; 17])] {
+            let mut rec = s.receipt(&[1; 16]).unwrap().unwrap();
+            rec.locator = locator.clone();
+            s.put_receipt(&rec).unwrap();
+            let mut m = before.clone().unwrap();
+            m.file.as_mut().unwrap().locator = locator;
+            s.put(Table::Messages, &m.id, Some(&m.peer), &m).unwrap();
+            assert!(s
+                .cancelled_received_file_for_request(&PEER, &[1; 16])
+                .unwrap()
+                .is_none());
+            assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+            assert_eq!(s.message(&[1; 16]).unwrap(), Some(m));
+            assert!(s.outbox().unwrap().is_empty());
+        }
+        s.delete_message(&[1; 16]).unwrap();
+        assert!(s
+            .cancelled_received_file_for_request(&PEER, &[1; 16])
+            .unwrap()
+            .is_none());
+        assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+    }
+    #[test]
+    fn cancelled_request_rejects_transfer_and_envelope_namespace_collisions() {
+        for collision in 0..6 {
+            let s = Store::open_in_memory(&KEY).unwrap();
+            let r = cleaned_cancelled(&s, 1);
+            let id = if collision < 2 { [1; 16] } else { [8; 16] };
+            let q = OutboxRec {
+                id,
+                peer: PEER,
+                created_ms: 0,
+                inner: vec![7],
+                control: false,
+                burn: false,
+            };
+            let f = OutFileRec {
+                id,
+                peer: PEER,
+                name: "conflict".into(),
+                size: 1,
+                total: 1,
+                offer: vec![7],
+            };
+            match collision {
+                0 | 2 => s.put(Table::Outbox, &id, Some(&PEER), &q).unwrap(),
+                1 | 3 => s.put(Table::OutFiles, &id, Some(&PEER), &f).unwrap(),
+                4 => s.put_message(&message(8, PEER, b"other")).unwrap(),
+                _ => {
+                    let mut rec = s.receipt(&[1; 16]).unwrap().unwrap();
+                    rec.receipt.token.message_id = id;
+                    rec.message_deleted = true;
+                    rec.cleanup_done = false;
+                    s.put_receipt(&rec).unwrap();
+                }
+            }
+            let before = s.message(&[1; 16]).unwrap();
+            let queue_before = s.outbox().unwrap();
+            if collision < 2 {
+                assert!(s
+                    .cancelled_received_file_for_request(&PEER, &[1; 16])
+                    .unwrap()
+                    .is_none());
+            }
+            assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+            assert_eq!(s.message(&[1; 16]).unwrap(), before);
+            assert_eq!(s.outbox().unwrap(), queue_before);
+            assert!(s.has_receipt(&[1; 16]).unwrap());
+        }
+    }
+    #[test]
+    fn cancelled_request_write_and_commit_failure_roll_back_every_mutation() {
+        let s = Store::open_in_memory(&KEY).unwrap();
+        let r = cleaned_cancelled(&s, 1);
+        let before = s.message(&[1; 16]).unwrap();
+        s.conn.execute_batch("CREATE TRIGGER reject_request BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT,'request insert fault'); END;").unwrap();
+        assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+        s.conn.execute_batch("DROP TRIGGER reject_request").unwrap();
+        assert_eq!(s.message(&[1; 16]).unwrap(), before);
+        assert_eq!(
+            s.cancelled_received_file_for_request(&PEER, &[1; 16])
+                .unwrap(),
+            Some(r.clone())
+        );
+        assert!(s.outbox().unwrap().is_empty());
+        s.conn.authorizer(Some(deny_commit));
+        assert!(s.request_cancelled_received_file(&r, [8; 16], 9).is_err());
+        s.conn
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        assert_eq!(s.message(&[1; 16]).unwrap(), before);
+        assert_eq!(
+            s.cancelled_received_file_for_request(&PEER, &[1; 16])
+                .unwrap(),
+            Some(r)
+        );
+        assert!(s.outbox().unwrap().is_empty());
+    }
+    #[test]
+    fn cancelled_request_restart_preserves_control_and_owner_with_fresh_receive_nonce() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("request.db");
+        let s = Store::open(&path, &KEY).unwrap();
+        request_contact(&s);
+        let mut m = message(1, PEER, b"payload");
+        m.mine = true;
+        m.status = STATUS_SENT;
+        m.text = "original history".into();
+        s.put_message(&m).unwrap();
+        let r = s.stage_received_file(&PEER, &m.id, b"payload").unwrap();
+        s.cancel_received_file(&PEER, &m.id).unwrap();
+        s.acknowledge_received_file_cleanup(&r.token).unwrap();
+        let mut expected = s.message(&m.id).unwrap().unwrap();
+        expected.file.as_mut().unwrap().state = FILE_REQUESTED;
+        let q = s.request_cancelled_received_file(&r, [8; 16], 123).unwrap();
+        assert_eq!(q.id, [8; 16]);
+        assert_eq!(q.peer, PEER);
+        assert_eq!(q.created_ms, 123);
+        assert!(q.control);
+        assert!(!q.burn);
+        assert_eq!(
+            q.inner,
+            crate::burn::encode_app(
+                None,
+                &crate::burn::AppContent::MediaControl(crate::burn::MediaControl::new(
+                    crate::burn::CONTROL_MEDIA_REQUEST,
+                    [1; 16],
+                    r.hash
+                ))
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            crate::burn::decode_app(&q.inner).unwrap(),
+            (
+                None,
+                crate::burn::AppContent::MediaControl(crate::burn::MediaControl::new(
+                    crate::burn::CONTROL_MEDIA_REQUEST,
+                    [1; 16],
+                    r.hash
+                ))
+            )
+        );
+        assert_eq!(s.message(&m.id).unwrap(), Some(expected.clone()));
+        assert!(s.request_cancelled_received_file(&r, [9; 16], 124).is_err());
+        assert_eq!(s.outbox().unwrap(), vec![q.clone()]);
+        drop(s);
+        let s = Store::open(&path, &KEY).unwrap();
+        assert_eq!(s.outbox().unwrap(), vec![q]);
+        assert_eq!(s.message(&m.id).unwrap(), Some(expected));
+        assert!(s.read_received_block(&r.token, 0).is_err());
+        assert!(s.commit_received_file(&r.token, "/late").is_err());
+        assert!(s
+            .cancelled_received_file_for_request(&PEER, &m.id)
+            .unwrap()
+            .is_none());
+        let fresh = s.stage_received_file(&PEER, &m.id, b"payload").unwrap();
+        let queue_before = s.outbox().unwrap();
+        assert!(s.request_cancelled_received_file(&r, [9; 16], 125).is_err());
+        assert_eq!(s.pending_received_files().unwrap(), vec![fresh.clone()]);
+        assert_eq!(s.outbox().unwrap(), queue_before);
+        assert_ne!(fresh.token, r.token);
+        assert_eq!(fresh.hash, r.hash);
+        assert_eq!(
+            s.read_received_block(&fresh.token, 0).unwrap().as_slice(),
+            b"payload"
+        );
+        assert!(s.commit_received_file(&r.token, "/late").is_err());
+        assert!(s.message(&m.id).unwrap().unwrap().mine);
+    }
+    #[test]
+    fn cancelled_request_contact_deletion_and_existing_controls_are_safe() {
+        let s = Store::open_in_memory(&KEY).unwrap();
+        let r = cleaned_cancelled(&s, 1);
+        let before = s.message(&[1; 16]).unwrap();
+        s.delete_contact(&PEER).unwrap();
+        assert!(s
+            .cancelled_received_file_for_request(&PEER, &[1; 16])
+            .unwrap()
+            .is_none());
+        assert!(s.request_cancelled_received_file(&r, [8; 16], 1).is_err());
+        assert_eq!(s.message(&[1; 16]).unwrap(), before);
+        assert!(s.has_receipt(&[1; 16]).unwrap());
+        assert!(s.outbox().unwrap().is_empty());
+        request_contact(&s);
+        let old_control = OutboxRec {
+            id: [7; 16],
+            peer: PEER,
+            created_ms: 0,
+            inner: crate::burn::encode_app(
+                None,
+                &crate::burn::AppContent::MediaControl(crate::burn::MediaControl::new(
+                    crate::burn::CONTROL_MEDIA_REQUEST,
+                    [1; 16],
+                    r.hash,
+                )),
+            )
+            .unwrap(),
+            control: true,
+            burn: false,
+        };
+        s.put_outbox(&old_control, None).unwrap();
+        // Existing replay-safe wire controls are not deduplicated or deleted.
+        // The explicit transition inserts exactly one NEW durable control.
+        let queued = s.request_cancelled_received_file(&r, [8; 16], 1).unwrap();
+        assert_eq!(s.outbox().unwrap(), vec![old_control, queued]);
+        assert!(s.request_cancelled_received_file(&r, [9; 16], 2).is_err());
+        assert_eq!(s.outbox().unwrap().len(), 2);
     }
 }

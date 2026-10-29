@@ -92,6 +92,9 @@ data class ReceiptRepairAction(
     val identityEpoch: Long,
 )
 
+/** A cancelled-generation request requires a separate explicit confirmation capability. */
+data class ReceiptRequestAction(val actionId: String, val receipt: chat.omcp.app.core.ReceiveReceiptInfo, val identityEpoch: Long)
+
 /**
  * Single source of truth for identity, contacts, messages and path status.
  *
@@ -146,6 +149,10 @@ class MeshRepository(
     private var identityEpoch = 0L
     private val _repairableReceipts = MutableStateFlow<Map<String, ReceiptRepairAction>>(emptyMap())
     val repairableReceipts: StateFlow<Map<String, ReceiptRepairAction>> = _repairableReceipts.asStateFlow()
+    private val _requestableReceipts = MutableStateFlow<Map<String, ReceiptRequestAction>>(emptyMap())
+    val requestableReceipts = _requestableReceipts.asStateFlow()
+    private val _receiptEligibilityRevision = MutableStateFlow(0L)
+    val receiptEligibilityRevision = _receiptEligibilityRevision.asStateFlow()
     /** Encrypted chat backup (Drive appDataFolder); null when not configured. */
     @Volatile var chatBackup: chat.omcp.app.backup.ChatBackupSync? = null
 
@@ -282,6 +289,8 @@ class MeshRepository(
 
     private fun loadCore(phrase: String, name: String) {
         identityEpoch++
+        _requestableReceipts.value = emptyMap()
+        _receiptEligibilityRevision.update { it + 1 }
         _repairableReceipts.value = emptyMap()
         val path = dbPath ?: run {
             core.load(phrase, name)
@@ -308,6 +317,11 @@ class MeshRepository(
         _messages.value = core.contacts()
             .associate { c -> c.id to core.storedMessages(c.id).map(::toChatMessage) }
             .filterValues { it.isNotEmpty() }
+        _requestableReceipts.update { known -> known.filter { (id, action) ->
+            action.identityEpoch == identityEpoch && _messages.value[action.receipt.contactId].orEmpty().any {
+                it.id == id && it.file?.state == FileAttachment.State.Failed
+            }
+        } }
         val pending = core.pendingReceivedFiles().associateBy { it.transferId }
         _repairableReceipts.update { known -> known.filter { (id, action) ->
             action.identityEpoch == identityEpoch && pending[id] == action.receipt
@@ -505,6 +519,7 @@ class MeshRepository(
         val finalizationOk = retryFileFinalizationNow()
         val ok = missingOk && finalizationOk
         _receiveFailure.value = !ok
+        _receiptEligibilityRevision.update { it + 1 }
         ok
     }
 
@@ -512,6 +527,7 @@ class MeshRepository(
         val sink = checkNotNull(receiptSink) { "receipt cleanup sink unavailable" }
         sink.discard(receipt) // Exact generation only; sink syncs its directory before returning.
         core.acknowledgeReceivedFileCleanup(receipt.receiptToken)
+        _receiptEligibilityRevision.update { it + 1 }
     }
 
     private fun retryFileFinalizationNow(): Boolean {
@@ -531,6 +547,38 @@ class MeshRepository(
         for (receipt in pending) if (!finalizeReceipt(receipt)) failed = true
         _receiveFailure.value = failed
         return !failed
+    }
+
+    /** UI supplies at most one bounded visible page. Discovery never requests media. */
+    fun discoverRequestableFiles(contactId: String, visibleIds: List<String>): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val actions = mutableMapOf<String, ReceiptRequestAction>()
+        for (id in visibleIds.distinct().take(32)) {
+            if (_messages.value[contactId].orEmpty().none { it.id == id && it.file?.state == FileAttachment.State.Failed }) continue
+            val receipt = core.recoverableReceivedFile(contactId, id) ?: continue
+            check(receipt.contactId == contactId && receipt.transferId == id)
+            val existing = _requestableReceipts.value[id]
+            actions[id] = existing?.takeIf { it.receipt == receipt && it.identityEpoch == identityEpoch }
+                ?: ReceiptRequestAction(java.util.UUID.randomUUID().toString(), receipt, identityEpoch)
+        }
+        _requestableReceipts.value = actions
+        true
+    }
+
+    fun requestCancelledFileAgain(transferId: String, expectedAction: String): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val action = _requestableReceipts.value[transferId] ?: return@receiptTask false
+        if (action.actionId != expectedAction || action.identityEpoch != identityEpoch) return@receiptTask false
+        // Consume before attempting the transaction: double-clicks cannot enqueue two requests.
+        _requestableReceipts.update { it - transferId }
+        try {
+            if (core.recoverableReceivedFile(action.receipt.contactId, transferId) != action.receipt) return@receiptTask false
+            core.requestCancelledReceivedFile(action.receipt)
+            loadMessages()
+            kick?.kick(action.receipt.contactId)
+            true
+        } finally {
+            // Rediscovery only; even after transaction failure a new confirmation is required.
+            _receiptEligibilityRevision.update { it + 1 }
+        }
     }
 
     /** Only an explicit UI request may enter repair; eligibility alone never mutates a file. */

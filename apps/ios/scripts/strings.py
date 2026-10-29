@@ -6,6 +6,8 @@ import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IOS = os.path.dirname(HERE)
 S = {
+ "file_request_again": ("Request this file again", "Redemander ce fichier"),
+ "file_request_again_explanation": ("Send a new request to the sender for this cancelled file. It may be unavailable, and network data may be used.", "Envoyez une nouvelle demande à l’expéditeur pour ce fichier annulé. Il peut être indisponible et des données réseau peuvent être utilisées."),
  "file_repair_local": ("Repair local copy", "Réparer la copie locale"),
  "file_repair_confirm": ("Replace damaged copy", "Remplacer la copie endommagée"),
  "file_repair_explanation": ("Replace the damaged local copy using verified encrypted data already on this device. No network request will be sent.", "Remplacez la copie locale endommagée avec les données chiffrées vérifiées déjà présentes sur cet appareil. Aucune requête réseau ne sera envoyée."),

@@ -86,9 +86,9 @@ unknown read/verification/core-state errors and uncertain ownership preserve
 both existing file and encrypted spool. Ordinary Retry never overwrites a
 full-size corrupt candidate. The separate, explicit **Repair local copy** action
 is described below; it is not startup/reconnect automation. Cancellation still
-retains the Failed tombstone rather than authorizing same-ID refetch. Once
-cancelled, requesting the same logical transfer again remains separate work;
-the sender can send a new attachment/new message ID. New creation never replaces
+retains the Failed tombstone rather than implicitly authorizing same-ID refetch.
+After exact-generation cleanup, the separate confirmed request-again action
+below may retire that capability; the sender can also send a new attachment/new ID. New creation never replaces
 an existing file. This is not a filesystem atomic-rename claim or protection against a
 hostile process sharing the app UID.
 
@@ -150,8 +150,32 @@ is exposed. Ordinary Retry stays nondestructive for full-size mismatches.
 
 This action repairs a Pending local candidate using already verified bytes; it
 is not a network re-request, cancelled-generation retirement or import bypass.
-Explicit request-again after cancellation, physical-device interruption and
-cross-client interoperability remain separate validation/work items.
+It does not invoke the separate cancelled-generation request action below.
+
+## Explicit request after cancellation (candidate)
+
+A bounded per-message lookup exposes an action only for a matching Failed file
+with a CANCELLED receipt whose exact-generation cleanup is acknowledged. Deleted
+messages, incomplete cleanup, stale ownership, invalid locators, absent contacts
+and conflicting outgoing work do not authorize recovery. Native visible-history
+lookups are bounded and serialized off the UI thread; receipt capabilities are
+not displayed or logged. Confirmation captures the complete receipt snapshot,
+identity epoch and action identity, not only a message ID. Dismissal, startup,
+reconnect, history import and ordinary Retry never invoke this operation.
+
+One store transaction checks that snapshot again, preserves peer/ownership/hash/
+size/name/MIME/locator and history fields, retires the old receipt, changes Failed
+to Requested, and persists a fresh existing-protocol MEDIA_REQUEST envelope.
+The payload uses the original protocol encoder; no wire fields/constants change.
+Only after commit is that durable record added to the volatile transport queue.
+Failed transactions preserve both tombstone and history with no volatile enqueue;
+restart restores the committed outbox. A second click with the old capability
+cannot create a second request. Historical already-queued requests can coexist:
+this guarantees one new envelope per successful explicit action, not exactly-once
+network delivery. Replayed same-peer content remains size/hash-bound. The next
+verified receive creates a fresh random capability; old reads, commits and cleanup
+ACKs never authorize it. Recovery still depends on the partner retaining a copy;
+this is not a delivery guarantee or an automatic network retry policy.
 
 ## Validation boundaries
 

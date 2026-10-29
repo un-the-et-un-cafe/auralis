@@ -169,6 +169,7 @@ class ChatThreadViewModel(
 
     /** Cancel an in-flight transfer (Sending / Receiving / Queued bubble). */
     fun cancelTransfer(transferId: String) { ioScope.launch { try { repo.cancelFile(contactId, transferId) } catch (_: Exception) { _fileError.value = true } } }
+    fun requestCancelledFileAgain(transferId: String, actionId: String) { ioScope.launch { try { if (!repo.requestCancelledFileAgain(transferId, actionId).get()) _fileError.value = true } catch (_: Exception) { _fileError.value = true } } }
     fun repairLocalFile(transferId: String, actionId: String) { ioScope.launch { try { if (!repo.repairLocalFile(transferId, actionId).get()) _fileError.value = true } catch (_: Exception) { _fileError.value = true } } }
     fun retryFileFinalization() { ioScope.launch { try { if (!repo.retryFileFinalization().get()) _fileError.value = true } catch (_: Exception) { _fileError.value = true } } }
 

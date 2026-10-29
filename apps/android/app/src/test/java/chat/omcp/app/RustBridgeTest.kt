@@ -138,10 +138,19 @@ class RustBridgeTest {
             assertTrue(bob.cancelFile(receipt.transferId))
             assertTrue(bob.pendingReceivedFiles().isEmpty())
             assertEquals(receipt, bob.cancelledReceivedFiles().single())
+            assertNull(bob.recoverableReceivedFile(receipt.contactId, receipt.transferId))
             // This bridge test has no native files: exercise the DB capability ACK only.
             assertTrue(bob.acknowledgeReceivedFileCleanup(receipt.receiptToken))
             assertFalse(bob.acknowledgeReceivedFileCleanup(receipt.receiptToken))
             assertTrue(bob.cancelledReceivedFiles().isEmpty())
+            assertEquals(receipt, bob.recoverableReceivedFile(receipt.contactId, receipt.transferId))
+            org.junit.Assert.assertThrows(Exception::class.java) { bob.requestCancelledReceivedFile(receipt.copy(name = "wrong")) }
+            assertEquals(receipt, bob.recoverableReceivedFile(receipt.contactId, receipt.transferId))
+            bob.requestCancelledReceivedFile(receipt)
+            assertNull(bob.recoverableReceivedFile(receipt.contactId, receipt.transferId))
+            assertEquals("Requested", bob.storedMessages(receipt.contactId).single { it.id == receipt.transferId }.file!!.state)
+            org.junit.Assert.assertThrows(Exception::class.java) { bob.requestCancelledReceivedFile(receipt) }
+            org.junit.Assert.assertThrows(Exception::class.java) { bob.readReceivedFileBlock(receipt.receiptToken, 0) }
         } finally { la.close(); lb.close() }
     }
 

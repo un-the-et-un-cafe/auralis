@@ -114,16 +114,25 @@ public final class MeshRepository {
     private let receivePublisher: (@escaping () -> Void) -> Void
     public private(set) var receiveFinalizationErrors: [String: String] = [:]
     public private(set) var localReceiptRepairs: [String: LocalReceiptRepairAction] = [:]
+    public private(set) var cancelledRequestRevision: UInt64 = 0
+    public private(set) var cancelledReceiptRequests: [String: CancelledReceiptRequestAction] = [:]
+    // These two maps are accessed only inside the receipt lifecycle gate.
+    private var visibleCancelledRequests: [String: String] = [:]
+    private var issuedCancelledRequests: [String: CancelledReceiptRequestAction] = [:]
     private let repairEpochLock = NSLock()
     private var repairEpoch: UInt64 = 0
     private func currentRepairEpoch() -> UInt64 {
         repairEpochLock.lock(); defer { repairEpochLock.unlock() }; return repairEpoch
     }
     private func invalidateRepairActions() {
+        visibleCancelledRequests.removeAll()
+        issuedCancelledRequests.removeAll()
         repairEpochLock.lock(); repairEpoch &+= 1; let epoch = repairEpoch; repairEpochLock.unlock()
         receivePublisher { [weak self] in
             guard let self, self.currentRepairEpoch() == epoch else { return }
             self.localReceiptRepairs.removeAll()
+            self.cancelledReceiptRequests.removeAll()
+            self.cancelledRequestRevision = epoch
         }
     }
     private func serializeReceipts<T>(_ work: () throws -> T) rethrows -> T {
@@ -524,6 +533,9 @@ public final class MeshRepository {
                     self.publishReceiveState("cleanup", error: nil)
                 }
                 catch { self.publishReceiveState("cleanup", error: "Private file cleanup is waiting for storage.") }
+                for (id, contact) in self.visibleCancelledRequests {
+                    self.refreshCancelledFileRequest(contact, msgId: id)
+                }
             }
         }
     }
@@ -536,6 +548,9 @@ public final class MeshRepository {
                 throw CoreError.storageUnavailable("cleanup acknowledgement changed")
             }
             publishReceiveState(receipt.transferId, error: nil)
+            if let contact = visibleCancelledRequests[receipt.transferId] {
+                refreshCancelledFileRequest(contact, msgId: receipt.transferId)
+            }
         } catch { publishReceiveState(receipt.transferId, error: "Transfer cancelled; private file cleanup is waiting for storage.") }
     }
 
@@ -570,6 +585,78 @@ public final class MeshRepository {
             // Keep sealed bytes and Finalizing, including when filesystem work
             // completed but the DB commit failed. Startup can verify and retry.
             publishReceiveState(receipt.transferId, error: "Verified file is waiting to be saved.")
+        }
+    }
+
+    /// A bounded lookup for a currently visible Failed bubble, never a network request.
+    public func showCancelledFileRequest(_ contactId: String, msgId: String) {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                guard self.visibleCancelledRequests[msgId] != nil || self.visibleCancelledRequests.count < 32 else { return }
+                self.visibleCancelledRequests[msgId] = contactId
+                self.refreshCancelledFileRequest(contactId, msgId: msgId)
+            }
+        }
+    }
+    public func hideCancelledFileRequest(_ msgId: String) {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                self.visibleCancelledRequests.removeValue(forKey: msgId)
+                self.issuedCancelledRequests.removeValue(forKey: msgId)
+                self.publishCancelledRequest(msgId, action: nil)
+            }
+        }
+    }
+    private func publishCancelledRequest(_ id: String, action: CancelledReceiptRequestAction?) {
+        receivePublisher { [weak self] in
+            guard let self else { return }
+            self.cancelledReceiptRequests[id] = action.flatMap { $0.identityEpoch == self.currentRepairEpoch() ? $0 : nil }
+            self.changed()
+        }
+    }
+    private func refreshCancelledFileRequest(_ contactId: String, msgId: String) {
+        let receipt: ReceiveReceiptInfo?
+        do { receipt = try core.recoverableReceivedFile(contactId, msgId: msgId) }
+        catch {
+            issuedCancelledRequests.removeValue(forKey: msgId)
+            publishCancelledRequest(msgId, action: nil)
+            publishReceiveState(msgId, error: "Request availability could not be checked. Retry when storage is available.")
+            return
+        }
+        let action = receipt.map { receipt in
+            if let existing = issuedCancelledRequests[msgId], existing.receipt == receipt,
+               existing.identityEpoch == currentRepairEpoch() { return existing }
+            return CancelledReceiptRequestAction(receipt: receipt, identityEpoch: currentRepairEpoch(), actionId: UUID())
+        }
+        issuedCancelledRequests[msgId] = action
+        publishCancelledRequest(msgId, action: action)
+    }
+    /// Only the explicit confirmation callback may invoke this one-shot action.
+    public func requestCancelledFileAgain(_ action: CancelledReceiptRequestAction) {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                let receipt = action.receipt
+                guard action.identityEpoch == self.currentRepairEpoch(),
+                      self.issuedCancelledRequests[receipt.transferId] == action else { return }
+                self.issuedCancelledRequests.removeValue(forKey: receipt.transferId)
+                self.publishCancelledRequest(receipt.transferId, action: nil)
+                do {
+                    guard try self.core.recoverableReceivedFile(receipt.contactId, msgId: receipt.transferId) == receipt else {
+                        throw CoreError.invalid("cancelled request changed")
+                    }
+                    try self.core.requestCancelledReceivedFile(receipt)
+                    self.publishReceiveState(receipt.transferId, error: nil)
+                    self.receivePublisher { [weak self] in self?.kick?.kick(receipt.contactId) }
+                } catch {
+                    self.publishReceiveState(receipt.transferId, error: "Request could not be saved. The file remains unavailable.")
+                    if self.visibleCancelledRequests[receipt.transferId] == receipt.contactId {
+                        self.refreshCancelledFileRequest(receipt.contactId, msgId: receipt.transferId)
+                    }
+                }
+            }
         }
     }
 

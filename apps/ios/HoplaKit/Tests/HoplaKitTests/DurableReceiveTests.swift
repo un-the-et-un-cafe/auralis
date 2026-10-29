@@ -49,6 +49,95 @@ final class DurableReceiveTests: XCTestCase {
         core.injectReceipt(r, bytes: bytes, mine: mine)
         return (repo, core, r, bytes)
     }
+    func testCancelledRequestConfirmationDismissAndDoubleConfirmNeverRepeatCallback() {
+        var confirmation = CancelledFileRequestConfirmation()
+        var calls = 0
+        confirmation.present { calls += 1 }
+        XCTAssertEqual(calls, 0)
+        confirmation.dismiss()
+        confirmation.confirm()
+        XCTAssertEqual(calls, 0)
+        confirmation.present { calls += 1 }
+        confirmation.confirm()
+        confirmation.confirm()
+        XCTAssertEqual(calls, 1)
+    }
+
+    func testCancelledRequestRequiresCleanupAndExplicitOneShotConfirmation() throws {
+        let (repo, core, r, _) = try fixture(size: 1)
+        XCTAssertTrue(try core.cancelFile(r.transferId))
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        XCTAssertNil(repo.cancelledReceiptRequests[r.transferId])
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+        XCTAssertTrue(try core.acknowledgeReceivedFileCleanup(r.receiptToken))
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        let action = try XCTUnwrap(repo.cancelledReceiptRequests[r.transferId])
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        XCTAssertEqual(repo.cancelledReceiptRequests[r.transferId], action, "harmless rediscovery preserves confirmation identity")
+        XCTAssertEqual(core.cancelledRequestCount, 0, "show/dismiss is not consent")
+        repo.requestCancelledFileAgain(action)
+        repo.requestCancelledFileAgain(action)
+        XCTAssertEqual(core.cancelledRequestCount, 1)
+        XCTAssertEqual(repo.messages[r.contactId]?.first?.file?.state, .requested)
+        XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+    }
+    func testCancelledRequestFailureNeedsFreshActionAndStaleDisappearanceIsRefused() throws {
+        let (repo, core, r, _) = try fixture(size: 1)
+        _ = try core.cancelFile(r.transferId); _ = try core.acknowledgeReceivedFileCleanup(r.receiptToken)
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        let old = try XCTUnwrap(repo.cancelledReceiptRequests[r.transferId])
+        repo.hideCancelledFileRequest(r.transferId)
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        repo.requestCancelledFileAgain(old)
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+        let action = try XCTUnwrap(repo.cancelledReceiptRequests[r.transferId])
+        core.cancelledRequestError = .storageUnavailable("commit failure")
+        repo.requestCancelledFileAgain(action)
+        XCTAssertEqual(repo.messages[r.contactId]?.first?.file?.state, .failed)
+        let fresh = try XCTUnwrap(repo.cancelledReceiptRequests[r.transferId])
+        XCTAssertNotEqual(fresh, action)
+        core.cancelledRequestError = nil
+        repo.requestCancelledFileAgain(action)
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+        repo.requestCancelledFileAgain(fresh)
+        XCTAssertEqual(core.cancelledRequestCount, 1)
+    }
+    func testCancelledRequestReloadAndMetadataReplacementInvalidateCapturedAction() throws {
+        let (repo, core, r, _) = try fixture(size: 1)
+        _ = try core.cancelFile(r.transferId); _ = try core.acknowledgeReceivedFileCleanup(r.receiptToken)
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        let old = try XCTUnwrap(repo.cancelledReceiptRequests[r.transferId])
+        let revision = repo.cancelledRequestRevision
+        try repo.saveIdentity(phrase: core.generateRecoveryPhrase(), name: "Reload")
+        XCTAssertNotEqual(repo.cancelledRequestRevision, revision)
+        repo.requestCancelledFileAgain(old)
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+        // The view observes revision and re-registers even when state/id did not change.
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        XCTAssertNotNil(repo.cancelledReceiptRequests[r.transferId])
+        // Eligibility is rediscovered from the core after a repository restart.
+        let restarted = MeshRepository(core: core, store: repo.store)
+        restarted.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        let current = try XCTUnwrap(restarted.cancelledReceiptRequests[r.transferId])
+        var changed = r; changed.receiptToken = r.transferId + String(repeating: "d", count: 64)
+        core.injectReceipt(changed, bytes: Data([1]))
+        restarted.requestCancelledFileAgain(current)
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+    }
+
+    func testCancelledLookupStorageRecoveryUsesExplicitRetryWithoutRequesting() throws {
+        let (repo, core, r, _) = try fixture(size: 1)
+        _ = try core.cancelFile(r.transferId); _ = try core.acknowledgeReceivedFileCleanup(r.receiptToken)
+        core.recoverableReceiptError = .storageUnavailable("locked")
+        repo.showCancelledFileRequest(r.contactId, msgId: r.transferId)
+        XCTAssertNil(repo.cancelledReceiptRequests[r.transferId])
+        XCTAssertNotNil(repo.receiveFinalizationErrors[r.transferId])
+        core.recoverableReceiptError = nil
+        repo.retryReceivedFiles()
+        XCTAssertNotNil(repo.cancelledReceiptRequests[r.transferId])
+        XCTAssertEqual(core.cancelledRequestCount, 0)
+    }
+
     func testBoundedStreamingAndReadbackAtBlockBoundaries() throws {
         for size in [0, 1, 65_535, 65_536, 65_537] {
             let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }

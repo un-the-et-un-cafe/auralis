@@ -310,4 +310,6 @@
     <string name="file_receive_retry_notice">Some received files are waiting to be saved. Tap to retry.</string>
     <string name="file_repair_local">Repair local copy</string>
     <string name="file_repair_confirm">Replace the damaged local copy using the verified encrypted copy on this device? This does not request a new transfer.</string>
+    <string name="file_request_again">Request this file again</string>
+    <string name="file_request_again_confirm">Ask your contact to send this file again? The cancelled local copy has been cleaned up. This sends a new request; your contact must still have the file.</string>
 </resources>

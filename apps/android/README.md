@@ -274,3 +274,20 @@ write/sync/exclusive-create errors; `RustBridgeTest` exercises generated binding
 Rust verifier. These new Android SDK/emulator tests are **not yet run** at this private
 WIP checkpoint. Real-device crash/protected-storage and Hopla interoperability checks
 remain separate release gates; source review or JVM fakes do not establish them.
+
+### Explicit request after cancelled-copy cleanup
+
+A separate **Request this file again** confirmation is offered only for a Failed receipt
+whose cancelled generation has completed durable private-file cleanup. Discovery checks
+at most 32 currently visible Failed message IDs per serialized IO pass; scrolling signals
+are conflated while a pass runs. Discovery, restart and dismissal never send a request.
+Confirmation captures immutable full receipt metadata, identity epoch and an action nonce.
+Unchanged discovery preserves a live action, while reload/rekey/new generation or an
+attempted request invalidates the old confirmation. Acceptance rechecks the exact live
+recoverable capability, calls the core atomic durable request API, reloads authoritative
+history and only then kicks transport. No legacy missing-media helper or automatic
+re-request is used. Failed cleanup, unknown store errors and stale actions fail closed;
+transaction failure preserves Failed history and requires a new confirmation. No
+receipt token is displayed or logged. The sender must still have the original media.
+This checkpoint requires exact-head hosted Compose and Android runtime tests; local
+narrow API compilation and host/JVM checks are not device evidence.

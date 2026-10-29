@@ -262,6 +262,45 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(received.messages.values.flatMap { $0 }.first { $0.id == id }?.file?.state, .received)
     }
 
+    func testCancelledRequestUsesRealCleanupGateAndOneShotRequest() throws {
+        let (sender, sent) = try node("Sender")
+        // Disable automatic serving of sealed sent-media copies so the test
+        // observes the existing application-facing MEDIA_REQUEST event.
+        _ = try sender.setKeptMediaSettings(KeptMediaPrefs(maxDays: 90, maxBytes: 0), nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let (receiver, received) = try node("Receiver")
+        let peer = try sent.addContact(qr: try receiver.qrPayload(), action: .chatWithoutVerifying)
+        _ = try received.addContact(qr: try sender.qrPayload(), action: .chatWithoutVerifying)
+        let a = try sender.openInitiatorLink(peer.id), b = try receiver.openResponderLink()
+        try pump(a, b, try a.start(), into: sent, received)
+        let id = try sent.sendFile(peer.id, name: "photo", mime: "application/octet-stream", bytes: Data([1, 2, 3]))
+        try pump(a, b, try a.flush(), into: sent, received)
+        a.close(); b.close()
+        let receipt = try XCTUnwrap(receiver.pendingReceivedFiles().first)
+        XCTAssertTrue(try receiver.cancelFile(id))
+        received.showCancelledFileRequest(receipt.contactId, msgId: id)
+        XCTAssertNil(received.cancelledReceiptRequests[id])
+        // No native sink was ever installed, therefore no plaintext copy exists.
+        XCTAssertTrue(try receiver.acknowledgeReceivedFileCleanup(receipt.receiptToken))
+        received.showCancelledFileRequest(receipt.contactId, msgId: id)
+        let action = try XCTUnwrap(received.cancelledReceiptRequests[id])
+        received.requestCancelledFileAgain(action)
+        received.requestCancelledFileAgain(action)
+        XCTAssertEqual(received.messages.values.flatMap { $0 }.first { $0.id == id }?.file?.state, .requested)
+        XCTAssertNil(try receiver.recoverableReceivedFile(receipt.contactId, msgId: id))
+        XCTAssertEqual(sender.keptMediaUsage().count, 0)
+        // queuedFor intentionally excludes controls; observe the actual existing
+        // MEDIA_REQUEST protocol event instead of inventing queue telemetry.
+        let requestLink = try receiver.openInitiatorLink(receipt.contactId)
+        let responseLink = try sender.openResponderLink()
+        defer { requestLink.close(); responseLink.close() }
+        var requests: [MediaRequestInfo] = []
+        try pump(requestLink, responseLink, try requestLink.start(), into: received, sent) { toSender, output in
+            if toSender { requests.append(contentsOf: output.mediaRequests) }
+        }
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.msgId, id)
+    }
+
     /// File transfer through the real core: 64 KiB chunks drained over several flushes.
     func testFileTransferIn64kChunks() throws {
         let (ca, ra) = try node("Ana")
