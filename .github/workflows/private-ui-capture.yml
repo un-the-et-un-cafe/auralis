@@ -1,0 +1,74 @@
+name: Private Android UI capture
+on:
+  push:
+    branches: [feat/private-ui-capture]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    name: Android API 35 fictional-data capture
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Grant only this disposable runner UID KVM access
+        run: python3 scripts/ci/kvm_access.py prepare
+      - name: Set up Android build tools
+        uses: ./.github/actions/setup-android-build
+      - name: Build isolated capture app and test-only fixture
+        working-directory: apps/android
+        run: |
+          OMCP_ABIS=x86_64 ./scripts/build-rust.sh
+          ./gradlew -PAURALIS_UI_CAPTURE=true assembleUiCapture assembleUiCaptureAndroidTest --no-daemon --console=plain
+      - name: Capture implemented screens with fictional content
+        working-directory: apps/android
+        run: ../../scripts/ci/run-private-ui-capture.sh 35
+      - name: Record exact provenance without including keys or recovery phrases
+        env:
+          CAPTURE_SHA: ${{ github.sha }}
+          CAPTURE_RUN: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('apps/android/app/build/private-ui-captures')
+          files = sorted(root.glob('*/*.png'))
+          assert len(files) == 18, f'Expected 9 real app captures in each theme; got {len(files)}'
+          manifest = {
+              'commit': os.environ['CAPTURE_SHA'],
+              'run': os.environ['CAPTURE_RUN'],
+              'platform': 'Android API 35, Pixel 2 emulator, normal font scale',
+              'applicationId': 'chat.auralis.app.uicapture',
+              'fixture': 'Fictional Alex and Sam; real onboarding, QR import and local queued message. No live delivery claimed.',
+              'difference': 'Unmodified production screens. Instrumentation temporarily clears FLAG_SECURE during each PNG capture and restores it in finally. No production capture bypass.',
+              'purpose': 'Private appearance review only. Not release validation or iOS App Store screenshots. Refresh against final release before store use.',
+              'files': {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
+          }
+          (root / 'PROVENANCE.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+      - name: Encrypt private captures before artifact storage
+        run: |
+          # Only the corresponding private key in the review workspace can decrypt this.
+          # Public repository readers must never receive plaintext screenshots.
+          cd apps/android/app/build/private-ui-captures
+          zip -qr "$RUNNER_TEMP/private-ui-captures.zip" .
+          cd "$GITHUB_WORKSPACE"
+          openssl cms -encrypt -binary -aes-256-gcm \
+            -in "$RUNNER_TEMP/private-ui-captures.zip" \
+            -out "$RUNNER_TEMP/private-ui-captures.cms" -outform DER \
+            scripts/ci/ui-capture-public-certificate.pem
+          rm "$RUNNER_TEMP/private-ui-captures.zip"
+      - name: Upload encrypted captures only, never PNGs or capture APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: encrypted-android-ui-captures-${{ github.sha }}
+          path: ${{ runner.temp }}/private-ui-captures.cms
+          if-no-files-found: error
+          retention-days: 7
+      - name: Revoke only this job's KVM UID grant
+        if: ${{ always() }}
+        run: python3 scripts/ci/kvm_access.py cleanup

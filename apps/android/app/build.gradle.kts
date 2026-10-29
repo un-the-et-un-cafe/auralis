@@ -22,6 +22,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Opt-in, disposable capture variant; normal debug/release and their tests are unchanged.
+val uiCapture = providers.gradleProperty("AURALIS_UI_CAPTURE").orNull == "true"
+
 android {
     namespace = "chat.omcp.app"
     compileSdk = 35
@@ -55,6 +58,18 @@ android {
             // Deliberate opt-in only. Normal debug builds must not claim durable cloud backup.
             buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", simulatedDriveBackup.toString())
         }
+    }
+
+    if (uiCapture) {
+        buildTypes.create("uiCapture") {
+            initWith(buildTypes.getByName("debug"))
+            applicationIdSuffix = ".uicapture"
+            matchingFallbacks += "debug"
+            buildConfigField("boolean", "SIMULATED_DRIVE_BACKUP", "false")
+            buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"\"")
+        }
+        testBuildType = "uiCapture"
+        sourceSets.getByName("androidTest").java.setSrcDirs(listOf("src/uiCaptureTest/java"))
     }
 
     compileOptions {
