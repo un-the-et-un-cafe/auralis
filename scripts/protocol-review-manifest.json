@@ -60,12 +60,14 @@
     {
       "path": "crates/omcp-core/src/store/mod.rs",
       "upstream_sha256": "0446a3a0b91a863966e46b2dc51fd1854cc79670dc5de34fe1e3a555f5f13b43",
-      "accepted_sha256": "8d5a2f5e8be3e9943f6e2f8ffab6aa09f606e22c72d05a27451c4f7bd6f162fe",
-      "rationale": "Append local schema v3 replay tombstones, atomic transport-acceptance persistence and owned nested transactions with sticky quarantine after failed rollback. No OMCP wire or history-backup format change; native downgrade/recovery limitations remain documented.",
+      "accepted_sha256": "a68470f1e5d3cfce901eb285be9b5e7577748997ac60d86d76379e2d63d07589",
+      "rationale": "Append local schema v3 replay tombstones, atomic transport-acceptance persistence and owned nested transactions with sticky quarantine after failed rollback. No OMCP wire or history-backup format change; native downgrade/recovery limitations remain documented. Authenticate existing storage keys and accepted identity before migrations/journal configuration; reject missing authentication metadata and initialize fresh schema/key-check atomically.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
-        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate"
+        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
+        "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
       ]
     },
     {
@@ -82,12 +84,14 @@
     {
       "path": "crates/omcp-core/src/store/tests.rs",
       "upstream_sha256": "b7219ea9b6ecee154b66b8b0271ee099a67a644b23f25d805d6deb25c25d6ec1",
-      "accepted_sha256": "64170aadcf9f35e819f4e584bdb66fabf257b92ee90eeaf4e6318c01a486c5f5",
-      "rationale": "Add transaction, rollback-failure quarantine, migration, ownership, bounded replay and reopen regressions; baseline tests retained.",
+      "accepted_sha256": "f4a62f0beb640e7a67d33d5cc24ee42e56901958193bd0e79c52180bca9a530b",
+      "rationale": "Add transaction, rollback-failure quarantine, migration, ownership, bounded replay and reopen regressions; baseline tests retained. Add six fail-closed opening regressions for wrong key/owner, legacy owner, newer schema, missing key-check, nonempty unversioned data and atomic initial key-check failure; legacy migration fixture now includes its genuine sealed key-check.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
-        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate"
+        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
+        "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
       ]
     },
     {
@@ -105,8 +109,8 @@
     {
       "path": "crates/omcp-ffi/src/lib.rs",
       "upstream_sha256": "007c6835f5da2c339446b50d01ba5451f5b111f25418d2289bcb8cb24a192c24",
-      "accepted_sha256": "86791fa404ab1aed4f7e78e2201bba081f75ff7b49393bd771f28d460d6512dc",
-      "rationale": "Retain prior admission/ownership bounds; add opaque local batch commit/abort, peer reservations, success-only authenticated replay handling and burn provenance checks. Preserve packet/crypto encoding. OS acceptance is not peer delivery; receive-file finalization remains a documented v1 gap.",
+      "accepted_sha256": "31c1cb475c6ce6e74d0f3bf4abaf1295f4f0d76ad20ecd47b329afbf06b29e9d",
+      "rationale": "Retain prior admission/ownership bounds; add opaque local batch commit/abort, peer reservations, success-only authenticated replay handling and burn provenance checks. Preserve packet/crypto encoding. OS acceptance is not peer delivery; receive-file finalization remains a documented v1 gap. Parse recovery identity before touching the database and validate current/legacy store owner before migrations. Public API integration tests verify no database creation for invalid identity and no migration for another identity.",
       "evidence": [
         "handshake_rejects_malformed_order_counts_and_oversized_chunks_and_releases_buffers",
         "active_links_are_bounded_and_drop_shutdown_and_input_errors_release_slots",
@@ -114,7 +118,9 @@
         "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28",
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
-        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate"
+        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
+        "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
       ]
     },
     {

@@ -304,4 +304,6 @@
     <string name="storage_days">%1$d jours</string>
     <string name="storage_usage">%1$d éléments · %2$s utilisés</string>
     <string name="message_transport_accepted">Remis au Bluetooth · Non confirmé</string>
+    <string name="store_blocked_title">Stockage local indisponible</string>
+    <string name="store_blocked_body">Auralis ne peut pas ouvrir votre compte enregistré. La base de données n’a pas été réinitialisée. Déverrouillez cet appareil ou utilisez une version compatible, puis réessayez. Si le problème persiste, redémarrez Auralis.</string>
 </resources>

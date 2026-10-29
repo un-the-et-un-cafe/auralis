@@ -10,6 +10,8 @@ final class DefaultsAppStore: AppStore {
     private let storageKeyAccount = "omcp.storageKey"
     init(_ d: UserDefaults = .standard) { self.d = d }
 
+    var hasSavedIdentity: Bool { Keychain.mayContain(account: phraseAccount) || onboarded }
+
     var recoveryPhrase: String? {
         get { Keychain.read(account: phraseAccount).map { String(decoding: $0, as: UTF8.self) } }
         set {
@@ -21,6 +23,8 @@ final class DefaultsAppStore: AppStore {
 
     /// Local-store key: Keychain, AfterFirstUnlockThisDeviceOnly (BLE background needs it
     /// after first unlock), never synced and never in device backups.
+    var hasSavedStorageKey: Bool { Keychain.mayContain(account: storageKeyAccount) }
+
     var storageKey: Data? {
         get { Keychain.read(account: storageKeyAccount) }
         set {
@@ -64,6 +68,13 @@ enum Keychain {
          kSecAttrService as String: service,
          kSecAttrAccount as String: account,
          kSecAttrSynchronizable as String: sync ? kCFBooleanTrue! : kCFBooleanFalse!]
+    }
+
+    /// Only item-not-found proves absence; locked/unavailable Keychain fails closed.
+    static func mayContain(account: String) -> Bool {
+        var q = query(account, false)
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(q as CFDictionary, nil) != errSecItemNotFound
     }
 
     static func read(account: String, synchronizable: Bool = false) -> Data? {

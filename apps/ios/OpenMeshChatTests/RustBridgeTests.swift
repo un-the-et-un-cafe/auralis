@@ -109,7 +109,7 @@ final class RustBridgeTests: XCTestCase {
         }
     }
 
-    func testUnreadableStoreIsSetAsideNotFatal() throws {
+    func testUnreadableStoreIsPreservedAndCanRetry() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omcp-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -117,9 +117,17 @@ final class RustBridgeTests: XCTestCase {
         let store = InMemoryAppStore()
         let c1 = RustOmcpCore()
         try MeshRepository(core: c1, store: store, dbPath: db).saveIdentity(phrase: try c1.generateRecoveryPhrase(), name: "Ben")
+        let originalKey = try XCTUnwrap(store.storageKey)
+        let originalBytes = try Data(contentsOf: URL(fileURLWithPath: db))
         store.storageKey = Data(repeating: 7, count: 32) // e.g. Keychain reset
-        XCTAssertTrue(MeshRepository(core: RustOmcpCore(), store: store, dbPath: db).restore())
-        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.hasPrefix("omcp-store.db.unreadable-") })
+        let repo = MeshRepository(core: RustOmcpCore(), store: store, dbPath: db)
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: db)), originalBytes)
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: dir.path).contains { $0.contains(".unreadable-") })
+        store.storageKey = originalKey
+        XCTAssertTrue(repo.restore())
+        XCTAssertFalse(repo.storageBlocked)
     }
 
     func testLinkedAndPolicyFromCore() {

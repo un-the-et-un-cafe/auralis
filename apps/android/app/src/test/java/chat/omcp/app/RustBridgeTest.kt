@@ -356,14 +356,22 @@ class RustBridgeTest {
     }
 
     @Test
-    fun unreadableStoreIsSetAsideNotFatal() {
+    fun unreadableStoreIsPreservedAndCanRetry() {
         val dir = kotlin.io.path.createTempDirectory("omcp-store").toFile()
         val db = File(dir, "omcp-store.db").path
         val store = InMemoryAppStore()
         Side("Bob", 1L, store, db)
+        val originalKey = store.storageKey!!.copyOf()
+        val originalBytes = File(db).readBytes()
         store.storageKey = ByteArray(32) { 7 } // e.g. Keystore wiped
-        val b = Side("Bob", 2L, store, db)
-        assertTrue(b.repo.onboarded.value)
-        assertTrue(dir.listFiles()!!.any { it.name.startsWith("omcp-store.db.unreadable-") })
+        val repo = MeshRepository(RustOmcpCore(), store, db)
+        assertFalse(repo.retryRestore())
+        assertTrue(repo.storageBlocked.value)
+        assertFalse(repo.onboarded.value)
+        assertArrayEquals(originalBytes, File(db).readBytes())
+        assertFalse(dir.listFiles()!!.any { it.name.contains(".unreadable-") })
+        store.storageKey = originalKey
+        assertTrue(repo.retryRestore())
+        assertFalse(repo.storageBlocked.value)
     }
 }

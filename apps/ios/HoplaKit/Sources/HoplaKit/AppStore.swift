@@ -8,6 +8,7 @@ public let remindWindowMs: Int64 = 24 * 60 * 60 * 1000
 /// Persistent app state. iOS impl: `DefaultsAppStore` (phrase in the Keychain); tests: `InMemoryAppStore`.
 public protocol AppStore: AnyObject {
     var recoveryPhrase: String? { get set }
+    var hasSavedIdentity: Bool { get }
     var displayName: String? { get set }
     var contacts: [Contact] { get set }
     var onboarded: Bool { get set }
@@ -30,6 +31,12 @@ public protocol AppStore: AnyObject {
     var backupRemindDeadlineMs: Int64 { get set }
     /// 256-bit key of the encrypted local store. On device: Keychain, this device only.
     var storageKey: Data? { get set }
+    var hasSavedStorageKey: Bool { get }
+}
+
+public extension AppStore {
+    var hasSavedIdentity: Bool { recoveryPhrase != nil || onboarded }
+    var hasSavedStorageKey: Bool { storageKey != nil }
 }
 
 public final class InMemoryAppStore: AppStore {

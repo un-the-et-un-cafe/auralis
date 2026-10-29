@@ -21,8 +21,9 @@
 //! - **Ids are opaque**: `id = BLAKE3-keyed(id_key, table ‖ 0x00 ‖ natural id)`,
 //!   `grp` (chat / file grouping) likewise. The file reveals row counts, sizes
 //!   and insertion order (`seq`) — not peers, names, text or ids.
-//! - **Schema migrations** are numbered SQL batches applied in one transaction
-//!   each, tracked with `PRAGMA user_version` ([`SCHEMA_VERSION`]). A store
+//! - **Schema migrations** are numbered SQL batches applied atomically together
+//!   with initial key-check creation, tracked with `PRAGMA user_version`
+//!   ([`SCHEMA_VERSION`]). A store
 //!   written by a newer app is refused instead of being guessed at.
 //! - **Burn after read**: burn content lives only in the `burn` table, sealed
 //!   under its own random per-message key (the [`crate::burn::BurnStore`] key);
@@ -199,52 +200,92 @@ pub struct Store {
 impl Store {
     /// Open (creating and migrating if needed) the store at `path`.
     pub fn open(path: &Path, storage_key: &[u8; 32]) -> Result<Self> {
-        Self::init(Connection::open(path).map_err(db)?, storage_key)
+        Self::init(Connection::open(path).map_err(db)?, storage_key, None)
     }
 
     /// In-memory store (tests, or a node without persistence).
     pub fn open_in_memory(storage_key: &[u8; 32]) -> Result<Self> {
-        Self::init(Connection::open_in_memory().map_err(db)?, storage_key)
+        Self::init(Connection::open_in_memory().map_err(db)?, storage_key, None)
     }
 
-    fn init(conn: Connection, storage_key: &[u8; 32]) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; PRAGMA temp_store = MEMORY;",
+    /// Open for a known identity. Authenticate an existing owner (including the
+    /// legacy identity) before changing journal configuration or schema. Binding
+    /// and legacy re-keying remain the caller's explicit subsequent operation.
+    pub fn open_for_owner(
+        path: &Path,
+        storage_key: &[u8; 32],
+        peer_id: &[u8; 32],
+        legacy_id: &[u8; 32],
+    ) -> Result<Self> {
+        Self::init(
+            Connection::open(path).map_err(db)?,
+            storage_key,
+            Some((peer_id, legacy_id)),
         )
-        .map_err(db)?;
-        let mut s = Self {
+    }
+
+    fn init(
+        conn: Connection,
+        storage_key: &[u8; 32],
+        owners: Option<(&[u8; 32], &[u8; 32])>,
+    ) -> Result<Self> {
+        let s = Self {
             conn,
             transaction_depth: Cell::new(0),
             poisoned: Cell::new(false),
             row_key: Zeroizing::new(blake3::derive_key(CTX_ROW, storage_key)),
             id_key: Zeroizing::new(blake3::derive_key(CTX_ID, storage_key)),
         };
-        s.migrate()?;
-        s.check_key()?;
+        s.validate_open(owners)?;
+        // SQLite itself may recover a hot journal when opening/reading a file.
+        // We never delete that journal or replace an unreadable database.
+        s.conn.execute_batch(
+            "PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; PRAGMA temp_store = MEMORY;",
+        ).map_err(db)?;
+        // Schema and first key-check are committed together. Failed creation
+        // must not leave an initialized schema without authentication metadata.
+        s.transaction(|s| {
+            let v = s.validate_open(owners)?;
+            for (i, sql) in MIGRATIONS.iter().enumerate().skip(v as usize) {
+                s.conn.execute_batch(sql).map_err(db)?;
+                s.conn
+                    .execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                    .map_err(db)?;
+            }
+            s.check_key(v == 0)
+        })?;
         Ok(s)
     }
 
-    fn migrate(&mut self) -> Result<()> {
-        let v: u32 = self
-            .conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(db)?;
+    fn validate_open(&self, owners: Option<(&[u8; 32], &[u8; 32])>) -> Result<u32> {
+        let v = self.schema_version()?;
         if v > SCHEMA_VERSION {
             return Err(OmcpError::Store("store schema is newer than this app"));
         }
-        for (i, sql) in MIGRATIONS.iter().enumerate().skip(v as usize) {
-            let tx = self.conn.transaction().map_err(db)?;
-            tx.execute_batch(sql).map_err(db)?;
-            tx.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+        if v == 0 {
+            let objects: u64 = self
+                .conn
+                .query_row("SELECT COUNT(*) FROM sqlite_schema", [], |r| r.get(0))
                 .map_err(db)?;
-            tx.commit().map_err(db)?;
+            if objects != 0 {
+                return Err(OmcpError::Store("unversioned store is not empty"));
+            }
+        } else {
+            self.check_key(false)?;
+            if let Some((peer, legacy)) = owners {
+                if let Some(owner) = self.get_raw(Table::Meta, b"owner")? {
+                    if owner.as_slice() != peer && owner.as_slice() != legacy {
+                        return Err(OmcpError::Store("store belongs to another identity"));
+                    }
+                }
+            }
         }
-        Ok(())
+        Ok(v)
     }
 
     /// The key-check row lives at a fixed, unkeyed id so a wrong storage key is
     /// detected (AEAD failure) instead of silently starting an empty store.
-    fn check_key(&self) -> Result<()> {
+    fn check_key(&self, allow_create: bool) -> Result<()> {
         const RID: [u8; 32] = [0; 32];
         let aad = Self::aad(Table::Meta, &RID);
         let ct: Option<Vec<u8>> = self
@@ -261,6 +302,7 @@ impl Store {
                 Ok(p) if p.as_slice() == KEY_CHECK => Ok(()),
                 _ => Err(OmcpError::StoreAuth),
             },
+            None if !allow_create => Err(OmcpError::StoreAuth),
             None => {
                 let c = xseal(&self.row_key, &aad, KEY_CHECK)?;
                 self.conn

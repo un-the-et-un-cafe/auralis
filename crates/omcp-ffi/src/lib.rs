@@ -727,7 +727,12 @@ impl OmcpNode {
                 .try_into()
                 .map_err(|_| invalid("storage key must be 32 bytes"))?,
         );
-        let db = Store::open(std::path::Path::new(&db_path), &key)?;
+        // Parse identity before touching the database, then authenticate its
+        // existing owner before any schema migration or journal-mode change.
+        let seed = recovery::phrase_to_seed(&phrase)?;
+        let peer_id = core_device::peer_id_from_seed(&seed)?;
+        let legacy_id = core_device::legacy_dh_public(&seed)?;
+        let db = Store::open_for_owner(std::path::Path::new(&db_path), &key, &peer_id, &legacy_id)?;
         Self::build(phrase, display_name, db)
     }
 }

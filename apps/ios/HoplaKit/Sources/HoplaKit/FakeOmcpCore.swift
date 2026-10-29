@@ -13,6 +13,16 @@ public final class FakeOmcpCore: OmcpCore {
     private var burns: [String: (text: String, mime: String?, live: Bool, opened: Bool, spec: BurnSpec)] = [:]
     private var counter = 0
     public var maxFile: UInt64 = 50_000_000
+    /// Deterministic store-open failure injection for repository tests.
+    public var storageOpenError: CoreError?
+    public private(set) var storageOpenCount = 0
+
+    @discardableResult
+    public func open(phrase: String, displayName: String, dbPath: String, storageKey: Data) throws -> Identity {
+        storageOpenCount += 1
+        if let error = storageOpenError { throw error }
+        return try load(phrase: phrase, displayName: displayName)
+    }
 
     public init() {}
 

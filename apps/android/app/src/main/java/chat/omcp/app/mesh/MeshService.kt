@@ -29,6 +29,11 @@ class MeshService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        val repo = (application as OmcpApplication).repository
+        if (repo.storageBlocked.value) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         MeshNotifications.ensureChannels(this)
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
@@ -47,7 +52,6 @@ class MeshService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val repo = (application as OmcpApplication).repository
         if (transport == null && repo.core.identity() != null) {
             transport = BleMeshTransport(this, repo).also { it.start() }
         }

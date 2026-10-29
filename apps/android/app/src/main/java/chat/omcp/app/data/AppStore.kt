@@ -6,6 +6,7 @@ import chat.omcp.app.core.Contact
 interface AppStore {
     /** Recovery phrase (the identity master secret). Sealed with a Keystore key on device. */
     var recoveryPhrase: String?
+    val hasSavedIdentity: Boolean get() = recoveryPhrase != null
     var displayName: String?
     var contacts: List<Contact>
     /** Global "Private notifications" (REQUIREMENTS Notifications v0.1.2). Off by default: sender + preview shown. */
@@ -32,6 +33,7 @@ interface AppStore {
     var restoreLockedUntilMs: Long
     /** 256-bit key of the encrypted local store. On device it is sealed with a Keystore key. */
     var storageKey: ByteArray?
+    val hasSavedStorageKey: Boolean get() = storageKey != null
 }
 
 class InMemoryAppStore : AppStore {

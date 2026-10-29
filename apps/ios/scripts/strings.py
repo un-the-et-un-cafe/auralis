@@ -6,6 +6,9 @@ import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IOS = os.path.dirname(HERE)
 S = {
+ "store_blocked_title": ("Local storage unavailable", "Stockage local indisponible"),
+ "store_blocked_body": ("Auralis could not open your saved account. Your database has not been reset. Unlock this device or return to a compatible app version, then try again. If it still fails, restart Auralis.", "Auralis ne peut pas ouvrir votre compte enregistré. La base de données n’a pas été réinitialisée. Déverrouillez cet appareil ou utilisez une version compatible, puis réessayez. Si le problème persiste, redémarrez Auralis."),
+ "store_retry": ("Try again", "Réessayer"),
  "auralis_welcome_title": ("Connection,\ncloser to you.", "Le lien,\nau plus près."),
  "auralis_benefit_mesh": ("Nearby messaging, even without Internet", "Des messages à proximité, même sans Internet"),
  "auralis_benefit_private": ("End-to-end encrypted conversations", "Des discussions chiffrées de bout en bout"),

@@ -105,6 +105,23 @@ class MeshRepository(
     val status: StateFlow<MeshStatus> = _status.asStateFlow()
     private val _onboarded = MutableStateFlow(false)
     val onboarded: StateFlow<Boolean> = _onboarded.asStateFlow()
+    private val _storageBlocked = MutableStateFlow(false)
+    val storageBlocked: StateFlow<Boolean> = _storageBlocked.asStateFlow()
+
+    /** Retry only the existing store. Never rename, delete or reset it after a failure. */
+    fun retryRestore(): Boolean = try {
+        restore()
+    } catch (_: Exception) {
+        _storageBlocked.value = true
+        _onboarded.value = false
+        false
+    }
+
+    private fun hasStoreArtifacts(): Boolean = dbPath?.let { path ->
+        listOf(path, "$path-journal", "$path-wal", "$path-shm").any {
+            !java.nio.file.Files.notExists(java.nio.file.Paths.get(it))
+        }
+    } ?: false
 
     val appStore: AppStore get() = store
 
@@ -123,7 +140,13 @@ class MeshRepository(
 
     /** Load an existing identity from the store; returns true if onboarded. */
     fun restore(): Boolean {
-        val phrase = store.recoveryPhrase ?: return false
+        val phrase = store.recoveryPhrase ?: run {
+            if (hasStoreArtifacts() || store.hasSavedIdentity) {
+                throw chat.omcp.app.core.StorageUnavailableException("saved identity unavailable")
+            }
+            _storageBlocked.value = false
+            return false
+        }
         loadCore(phrase, store.displayName ?: "Me")
         store.contacts.forEach { core.restoreContact(it) }
         // Contacts used to live in plain SharedPreferences: once in the encrypted store, drop them.
@@ -131,6 +154,7 @@ class MeshRepository(
         loadMessages()
         refresh()
         _restoredAtMs.value = runCatching { core.deviceInfo()?.restoredAtMs }.getOrNull()
+        _storageBlocked.value = false
         _onboarded.value = true
         return true
     }
@@ -236,16 +260,18 @@ class MeshRepository(
             core.load(phrase, name)
             return
         }
-        val key = store.storageKey ?: core.generateStorageKey().also { store.storageKey = it }
-        try {
-            core.open(phrase, name, path, key)
-        } catch (e: chat.omcp.app.core.StorageUnavailableException) {
-            // Unreadable with this key (Keystore reset, other identity, newer app): its data is
-            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
-            java.io.File(path).renameTo(java.io.File("$path.unreadable-${clock()}"))
-            java.io.File("$path-journal").delete()
-            core.open(phrase, name, path, key)
+        val key = store.storageKey ?: run {
+            if (hasStoreArtifacts() || store.hasSavedStorageKey) {
+                throw chat.omcp.app.core.StorageUnavailableException("existing store key unavailable")
+            }
+            core.generateStorageKey().also {
+                store.storageKey = it
+                if (store.storageKey?.contentEquals(it) != true) {
+                    throw chat.omcp.app.core.StorageUnavailableException("storage key could not be saved")
+                }
+            }
         }
+        core.open(phrase, name, path, key)
         // Keep sent media: age limit is applied on start too (size limit on every insert).
         runCatching { core.evictKeptMedia(clock()) }
     }

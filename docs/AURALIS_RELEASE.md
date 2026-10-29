@@ -287,9 +287,12 @@ not fix or claim receive-side crash safety.
 
 **Safe downgrade/store-error recovery is also a v1 release gate.** The Rust
 schema-v3 refusal in older schema-v2 code is not sufficient: Android and iOS
-`MeshRepository.loadCore` catch generic store-unavailable errors, attempt to
-rename the database, delete its rollback journal, and open a fresh store.
+older `MeshRepository.loadCore` implementations caught generic store-unavailable
+errors, attempted to rename the database, deleted its rollback journal, and
+opened a fresh store.
 Downgrading may silently take that path; original database/journal preservation
-is not guaranteed. Classify errors and implement non-destructive, explicit
-recovery before claiming downgrade safety. The sender-ACK stage and its Rust
-failed-rollback quarantine do not fix this native recovery behavior.
+is not guaranteed for those older binaries. The current store-opening safety
+checkpoint authenticates key/owner before migrations and removes the automatic
+native reset, offering blocked startup and retry. Native SDK/runtime validation
+is still required, and the receive-file durable-finalization gate remains open.
+No safe downgrade or v1 release is claimed.

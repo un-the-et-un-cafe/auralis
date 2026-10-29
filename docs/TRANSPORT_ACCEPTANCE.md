@@ -94,13 +94,14 @@ The append-only **schema v2 → v3** migration creates the received table/index 
 one transaction. Existing encrypted rows, history format and backup formats are
 unchanged. **Downgrade is unsafe:** the older Rust schema-v2 store refuses to open
 a database upgraded to v3, but this is not a safe application-level downgrade
-guard. Android and iOS `MeshRepository.loadCore` currently catch generic
-store-unavailable errors, attempt to rename the database, delete its `-journal`,
-and open a fresh store. Older native binaries may therefore enter that recovery
+guard. Earlier Android and iOS `MeshRepository.loadCore` implementations caught
+store-unavailable errors, attempted to rename the database, deleted its `-journal`,
+and opened a fresh store. Older native binaries may therefore enter that recovery
 path rather than visibly refuse the downgrade; preservation of the original
 database and journal is not guaranteed. Do not replace the app binary as a
-rollback strategy. Safe native error classification and non-destructive recovery
-remain a v1 release gate. Restoring supported backups is a separate explicit
+rollback strategy. The current store-opening safety checkpoint removes that
+automatic reset and provides fail-closed startup/retry. Native runtime validation
+remains a v1 release gate; changing new source cannot repair older binaries. Restoring supported backups is a separate explicit
 recovery operation and does not restore the local replay window.
 
 The Rust store now tracks nesting owned by live transaction guards. A failed

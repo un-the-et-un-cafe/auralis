@@ -23,8 +23,8 @@ per identity, written by the Rust core; the apps only hold the key.
     The DB is in Application Support, excluded from device backup,
     `completeUntilFirstUserAuthentication`.
 - A sealed key-check row makes a wrong key fail cleanly (`FfiError::Storage`); the store
-  is bound to one identity. The apps move an unreadable store aside
-  (`omcp-store.db.unreadable-<ms>`) and start fresh instead of locking the user out.
+  is bound to one identity. The apps preserve a refused database and its journal,
+  show a blocked-storage screen, and offer retry without replacing the store or key.
 
 ## Burn after read (PROTOCOL §19.1, REQUIREMENTS B1/B5)
 
@@ -102,3 +102,18 @@ the contact (v0.1.4a migration) and are not part of any backup.
 - No storage passphrase (PROTOCOL §4 "optional passphrase") and no remote wipe.
 - iOS uses the Keychain, not the Secure Enclave, for the storage key (the Enclave only
   holds P-256 keys; wrapping through it is a possible follow-up).
+
+### Fail-closed store opening
+
+Opening an existing store now authenticates its storage key before migrations or
+journal-mode changes. The native FFI entry point also checks the stored owner
+against the requested current/legacy identity before these changes. A newer
+schema, missing key-check in a versioned database, or nonempty unversioned
+database is refused, not silently initialized. A genuinely new store creates
+its schema and key-check in one transaction. Authenticated legacy owner rebinding
+remains supported.
+
+A refusal does not authorize deleting the database or its journal. SQLite may
+itself recover a hot journal while opening or reading a file; this change is not
+a guarantee that an operating-system-level read leaves every byte untouched.
+These checks preserve the existing row encryption and OMCP wire protocol.

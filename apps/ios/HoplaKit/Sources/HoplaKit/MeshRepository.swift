@@ -97,14 +97,20 @@ public final class MeshRepository {
     public var genericBody = "New message"
     private let clock: () -> Int64
     /// Encrypted local store (Rust core). nil = everything in memory (tests, previews).
-    private let dbPath: String?
+    private var dbPath: String?
+    private let dbPathProvider: (() -> String?)?
+    private let persistentStoreRequired: Bool
+    public private(set) var storageBlocked = false
     public private(set) var messages: [String: [ChatMessage]] = [:]
 
-    public init(core: OmcpCore, store: AppStore, dbPath: String? = nil,
+    public init(core: OmcpCore, store: AppStore, dbPath: String? = nil, persistentStoreRequired: Bool = false,
+                dbPathProvider: (() -> String?)? = nil,
                 clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.core = core
         self.store = store
         self.dbPath = dbPath
+        self.dbPathProvider = dbPathProvider
+        self.persistentStoreRequired = persistentStoreRequired
         self.clock = clock
     }
 
@@ -112,37 +118,63 @@ public final class MeshRepository {
 
     /// Load identity + contacts from the store on launch. Returns false if there is no identity yet.
     @discardableResult public func restore() -> Bool {
-        guard let phrase = store.recoveryPhrase else { return false }
-        guard (try? loadCore(phrase: phrase, name: store.displayName ?? "Me")) != nil else { return false }
+        resolveStorePathIfNeeded()
+        guard let phrase = store.recoveryPhrase else {
+            storageBlocked = hasStoreArtifacts() || store.hasSavedIdentity || (persistentStoreRequired && dbPath == nil)
+            onChange?()
+            return false
+        }
+        do {
+            try loadCore(phrase: phrase, name: store.displayName ?? "Me")
+        } catch {
+            storageBlocked = true
+            onChange?()
+            return false
+        }
+        storageBlocked = false
         for c in store.contacts { try? core.restoreContact(c) }
         // Contacts used to live in plain UserDefaults: once in the encrypted store, drop them.
         if dbPath != nil, !store.contacts.isEmpty { store.contacts = [] }
         loadMessages()
         restoredAtMs = core.deviceInfo()?.restoredAtMs
+        onChange?()
         return true
     }
 
+    /// Unknown filesystem errors are not evidence that an existing store is absent.
+    private func hasStoreArtifacts() -> Bool {
+        guard let path = dbPath else { return false }
+        return [path, path + "-journal", path + "-wal", path + "-shm"].contains { candidate in
+            do {
+                _ = try FileManager.default.attributesOfItem(atPath: candidate)
+                return true
+            } catch let error as NSError {
+                return !(error.domain == NSCocoaErrorDomain && (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError))
+            }
+        }
+    }
+
+    /// Retry directory availability only until the app-defined canonical path resolves.
+    /// Once resolved, retries never switch an existing account to another database.
+    private func resolveStorePathIfNeeded() {
+        if persistentStoreRequired && dbPath == nil { dbPath = dbPathProvider?() }
+    }
+
     private func loadCore(phrase: String, name: String) throws {
+        resolveStorePathIfNeeded()
         guard let path = dbPath else {
+            guard !persistentStoreRequired else { throw CoreError.storageUnavailable("store directory unavailable") }
             try core.load(phrase: phrase, displayName: name)
             return
         }
         let key: Data
         if let k = store.storageKey { key = k } else {
+            guard !hasStoreArtifacts(), !store.hasSavedStorageKey else { throw CoreError.storageUnavailable("existing store key unavailable") }
             key = try core.generateStorageKey()
             store.storageKey = key
             guard store.storageKey == key else { throw CoreError.storageUnavailable("keychain write failed") }
         }
-        do {
-            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
-        } catch CoreError.storageUnavailable {
-            // Unreadable with this key (Keychain reset, other identity, newer app): its data is
-            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
-            let fm = FileManager.default
-            try? fm.moveItem(atPath: path, toPath: "\(path).unreadable-\(clock())")
-            try? fm.removeItem(atPath: "\(path)-journal")
-            try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
-        }
+        try core.open(phrase: phrase, displayName: name, dbPath: path, storageKey: key)
     }
 
     /// Reload chats from the core's encrypted store (after a restart or a restore).

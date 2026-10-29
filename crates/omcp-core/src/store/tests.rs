@@ -530,9 +530,10 @@ fn v1_store_migrates_to_kept_media_schema() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("omcp.db");
     {
-        let c = Connection::open(&path).unwrap();
-        c.execute_batch(MIGRATIONS[0]).unwrap();
-        c.execute_batch("PRAGMA user_version = 1").unwrap();
+        let s = Store::open(&path, &KEY).unwrap();
+        s.conn
+            .execute_batch("DROP TABLE received; DROP TABLE kept_media; PRAGMA user_version = 1")
+            .unwrap();
     }
     let s = Store::open(&path, &KEY).unwrap();
     assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
@@ -1094,4 +1095,147 @@ fn v2_to_v3_migration_failure_rolls_back_partial_ddl_and_preserves_history() {
     );
     s.record_received(&PEER, &[1; 16]).unwrap();
     assert!(s.received_before(&PEER, &[1; 16]).unwrap());
+}
+
+/// Authentication refusal must not migrate, reset, or change journal mode.
+#[test]
+fn open_authenticates_key_and_owner_before_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy.db");
+    {
+        let s = Store::open(&path, &KEY).unwrap();
+        s.bind_owner(&PEER).unwrap();
+        s.put_message(&msg(1, "keep history", 1)).unwrap();
+        s.conn
+            .execute_batch("DROP TABLE received; PRAGMA user_version=2; PRAGMA journal_mode=WAL;")
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        Store::open_for_owner(&path, &[9; 32], &PEER, &[8; 32]).err(),
+        Some(OmcpError::StoreAuth)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(
+        Store::open_for_owner(&path, &KEY, &[9; 32], &[8; 32]).err(),
+        Some(OmcpError::Store("store belongs to another identity"))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    {
+        let c = Connection::open(&path).unwrap();
+        let mode: String = c
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        let v: u32 = c
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 2);
+    }
+    let s = Store::open_for_owner(&path, &KEY, &PEER, &[8; 32]).unwrap();
+    assert_eq!(s.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(s.messages(&PEER).unwrap()[0].text, "keep history");
+}
+
+#[test]
+fn versioned_store_without_key_check_is_not_silently_reinitialized() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing-key.db");
+    {
+        let s = Store::open(&path, &KEY).unwrap();
+        s.put_message(&msg(1, "keep", 1)).unwrap();
+        s.conn
+            .execute(
+                "DELETE FROM meta WHERE id=?1",
+                params![[0u8; 32].as_slice()],
+            )
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(Store::open(&path, &KEY).err(), Some(OmcpError::StoreAuth));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn unversioned_nonempty_database_is_preserved() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foreign.db");
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch("CREATE TABLE valuable(data TEXT); INSERT INTO valuable VALUES('keep');")
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        Store::open(&path, &KEY).err(),
+        Some(OmcpError::Store("unversioned store is not empty"))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn authenticated_legacy_owner_can_migrate_then_rebind() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("legacy-owner.db");
+    let legacy = [7; 32];
+    {
+        let s = Store::open(&path, &KEY).unwrap();
+        s.bind_owner(&legacy).unwrap();
+        s.conn
+            .execute_batch("DROP TABLE received; PRAGMA user_version=2;")
+            .unwrap();
+    }
+    let s = Store::open_for_owner(&path, &KEY, &PEER, &legacy).unwrap();
+    assert!(s.rebind_owner(&legacy, &PEER).unwrap());
+    drop(s);
+    assert!(Store::open_for_owner(&path, &KEY, &PEER, &legacy).is_ok());
+}
+
+#[test]
+fn failed_fresh_key_creation_rolls_back_all_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("failed-new.db");
+    let conn = Connection::open(&path).unwrap();
+    conn.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+        AuthAction::Insert { table_name: "meta" } => Authorization::Deny,
+        _ => Authorization::Allow,
+    }));
+    assert!(Store::init(conn, &KEY, None).is_err());
+    let conn = Connection::open(&path).unwrap();
+    let objects: u64 = conn
+        .query_row("SELECT COUNT(*) FROM sqlite_schema", [], |r| r.get(0))
+        .unwrap();
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(objects, 0);
+    assert_eq!(version, 0);
+    drop(conn);
+    assert!(Store::open(&path, &KEY).is_ok());
+}
+
+#[test]
+fn newer_schema_refusal_preserves_journal_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("future.db");
+    {
+        let s = Store::open(&path, &KEY).unwrap();
+        s.conn
+            .execute_batch(&format!(
+                "PRAGMA user_version={}; PRAGMA journal_mode=WAL",
+                SCHEMA_VERSION + 1
+            ))
+            .unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        Store::open_for_owner(&path, &KEY, &PEER, &[7; 32]).err(),
+        Some(OmcpError::Store("store schema is newer than this app"))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let conn = Connection::open(&path).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
 }
