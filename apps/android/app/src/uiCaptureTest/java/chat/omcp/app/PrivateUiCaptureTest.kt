@@ -1,5 +1,6 @@
 package chat.omcp.app
 
+import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.compose.ui.test.*
@@ -31,10 +32,15 @@ class PrivateUiCaptureTest {
     private fun click(id: Int) = compose.onNodeWithText(text(id)).performScrollTo().performClick()
     private fun tab(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
 
-    private fun capture(name: String) {
+    private fun capture(name: String, marker: Int) {
         assertEquals("uiCapture", BuildConfig.BUILD_TYPE)
         assertEquals("chat.auralis.app.uicapture", instrumentation.targetContext.packageName)
+        compose.onNodeWithText(text(marker)).assertIsDisplayed()
         compose.waitForIdle()
+        val markerObject = device.wait(Until.findObject(By.text(text(marker))), 5000)
+        assertNotNull("Expected displayed hero text in the real accessibility hierarchy", markerObject)
+        val bounds = markerObject!!.visibleBounds
+        assertFalse("Hero text must have visible screen bounds", bounds.isEmpty)
         val output = File(instrumentation.targetContext.getExternalFilesDir(null), "ui-captures")
         assertTrue(output.isDirectory || output.mkdirs())
         compose.runOnIdle {
@@ -42,9 +48,50 @@ class PrivateUiCaptureTest {
             compose.activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
         try {
-            // Wait for the compositor to apply the test-only window flag transition.
-            SystemClock.sleep(300)
-            assertTrue(device.takeScreenshot(File(output, "$name.png")))
+            // The secure-flag transition can recreate a compositor surface after Compose
+            // becomes semantically idle. Require redraw, accessibility readiness and three
+            // identical actual compositor frames, not a single arbitrary early screenshot.
+            SystemClock.sleep(1000)
+            compose.runOnIdle {
+                compose.activity.window.decorView.requestLayout()
+                compose.activity.window.decorView.invalidate()
+            }
+            instrumentation.waitForIdleSync()
+            device.waitForIdle(2000)
+            val deadline = SystemClock.elapsedRealtime() + 10000
+            var previous: Bitmap? = null
+            var stableCount = 0
+            var captured = false
+            while (SystemClock.elapsedRealtime() < deadline) {
+                compose.onNodeWithText(text(marker)).assertIsDisplayed()
+                val current = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
+                stableCount = if (previous?.sameAs(current) == true) stableCount + 1 else 1
+                previous?.recycle()
+                previous = current
+                if (stableCount >= 3) {
+                    // A semantically present but visually absent hero is not a valid capture.
+                    // Inspect the real screenshot pixels under the accessibility text bounds.
+                    var min = 255
+                    var max = 0
+                    for (y in bounds.top.coerceAtLeast(0) until bounds.bottom.coerceAtMost(current.height)) {
+                        for (x in bounds.left.coerceAtLeast(0) until bounds.right.coerceAtMost(current.width)) {
+                            val pixel = current.getPixel(x, y)
+                            val brightness = (((pixel shr 16) and 255) + ((pixel shr 8) and 255) + (pixel and 255)) / 3
+                            min = minOf(min, brightness)
+                            max = maxOf(max, brightness)
+                        }
+                    }
+                    assertTrue("Hero text absent from stable compositor pixels", max - min >= 40)
+                    File(output, "$name.png").outputStream().use {
+                        assertTrue(current.compress(Bitmap.CompressFormat.PNG, 100, it))
+                    }
+                    captured = true
+                    break
+                }
+                SystemClock.sleep(500)
+            }
+            previous?.recycle()
+            assertTrue("Compositor did not settle within 10 seconds", captured)
         } finally {
             compose.runOnIdle {
                 compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -83,60 +130,31 @@ class PrivateUiCaptureTest {
         assertFalse(chat.omcp.app.mesh.MeshPermissions.hasBle(compose.activity))
     }
 
-    @Test fun captureImplementedScreensWithFictionalLocalData() {
+    @Test fun captureMissingWelcomeAndMeshWithFictionalLocalData() {
         assertEquals("uiCapture", BuildConfig.BUILD_TYPE)
         assertEquals("chat.auralis.app.uicapture", instrumentation.targetContext.packageName)
         assertFalse(BuildConfig.SIMULATED_DRIVE_BACKUP)
         assertEquals("", BuildConfig.GOOGLE_OAUTH_CLIENT_ID)
         assertTrue(app.repository.core is RustOmcpCore)
         assertNull("Only a fresh disposable install is allowed", app.repository.core.identity())
-        capture("01-welcome")
+        capture("01-welcome", R.string.auralis_welcome_headline)
         click(R.string.onb_get_started)
         compose.onNodeWithText(text(R.string.onb_display_name)).performTextInput("Alex")
         hideKeyboard()
-        capture("02-profile")
         click(R.string.cta_continue)
         // Never enter or capture recovery-word screens.
         click(R.string.backup_remind_later)
         click(R.string.onb_start_chatting)
         tab(R.string.tab_chats).assertIsSelected()
-        capture("03-empty-chats")
-        // Follow the already validated real-app smoke's permission order.
         tab(R.string.tab_mesh).performClick()
         click(R.string.onb_find_nearby)
         denyPermissions(required = true)
         tab(R.string.tab_mesh).assertIsSelected()
-        assertFalse(chat.omcp.app.mesh.MeshPermissions.hasBle(compose.activity))
-        tab(R.string.tab_chats).performClick()
-
-        val peer = RustOmcpCore().also { it.load(it.generateRecoveryPhrase(), "Sam") }
-        compose.onNodeWithContentDescription(text(R.string.contact_add_title)).performClick()
-        click(R.string.contact_add_peer_id)
-        compose.onNodeWithText("omcp:1:…").performScrollTo().performTextInput(peer.qrPayload())
-        click(R.string.cta_continue)
-        click(R.string.chat_without_verifying)
-        denyPermissions(required = false)
-        compose.onNodeWithTag("message-composer").performTextInput("See you at the park at 3!")
-        hideKeyboard()
-        capture("04-message-draft")
-        compose.onNodeWithContentDescription(text(R.string.file_send)).performClick()
-        hideKeyboard()
-        compose.runOnIdle {
-            val message = app.repository.messages.value.values.flatten().single()
-            assertEquals("See you at the park at 3!", message.text)
-            assertEquals(chat.omcp.app.data.ChatMessage.Status.Queued, message.status)
-            assertEquals("Sam", app.repository.contacts.value.single().displayName)
-        }
-        capture("05-queued-message")
-        device.pressBack()
-        compose.waitForIdle()
-        tab(R.string.tab_chats).assertIsSelected()
-        capture("06-chat-list")
-        tab(R.string.tab_mesh).performClick()
-        capture("07-mesh")
-        tab(R.string.tab_you).performClick()
-        capture("08-you")
-        click(R.string.backup_settings_title)
-        capture("09-backup-settings")
+        compose.onNodeWithText(text(R.string.auralis_mesh_eyebrow)).performScrollTo()
+        compose.onNodeWithText(text(R.string.auralis_nearby_connections)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.auralis_waiting_messages)).assertIsDisplayed()
+        assertEquals(0, app.repository.status.value.nearbyPeers)
+        assertTrue(app.repository.messages.value.values.flatten().isEmpty())
+        capture("07-mesh", R.string.auralis_mesh_title)
     }
 }

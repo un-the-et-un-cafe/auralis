@@ -39,19 +39,19 @@ jobs:
           import hashlib, json, os
           from pathlib import Path
           root = Path('apps/android/app/build/private-ui-captures')
-          names = {'01-welcome.png', '02-profile.png', '03-empty-chats.png', '04-message-draft.png', '05-queued-message.png', '06-chat-list.png', '07-mesh.png', '08-you.png', '09-backup-settings.png'}
+          names = {'01-welcome.png', '07-mesh.png'}
           files = sorted(p for p in root.glob('*/*.png') if p.parent.name in {'light', 'dark'} and p.name in names)
           root.mkdir(parents=True, exist_ok=True)
           if os.environ['CAPTURE_RESULT'] == 'success':
-              assert len(files) == 18, f'Expected 9 real app captures in each theme; got {len(files)}'
+              assert len(files) == 4, f'Expected Welcome and Mesh captures in each theme; got {len(files)}'
           manifest = {
               'commit': os.environ['CAPTURE_SHA'],
               'captureTestResult': os.environ['CAPTURE_RESULT'],
-              'completeSet': len(files) == 18,
+              'completeSet': len(files) == 4,
               'run': os.environ['CAPTURE_RUN'],
               'platform': 'Android API 35, Pixel 2 emulator, normal font scale',
               'applicationId': 'chat.auralis.app.uicapture',
-              'fixture': 'Fictional Alex and Sam; real onboarding, QR import and local queued message. No live delivery claimed.',
+              'fixture': 'Fictional Alex; real onboarding and nearby-permission denial. Mesh has zero nearby peers and zero queued messages. Supplemental Welcome/Mesh-only run; no live delivery claimed.',
               'difference': 'Unmodified production screens. Instrumentation temporarily clears FLAG_SECURE during each PNG capture and restores it in finally. No production capture bypass.',
               'purpose': 'Private appearance review only. Not release validation or iOS App Store screenshots. Refresh against final release before store use.',
               'files': {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
