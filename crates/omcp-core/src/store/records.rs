@@ -33,6 +33,8 @@ pub const FILE_MISSING: u8 = 8;
 pub const FILE_REQUESTED: u8 = 9;
 /// The partner answered that it no longer has the file ("Ask to resend").
 pub const FILE_UNAVAILABLE: u8 = 10;
+/// Verified bytes are durable in the sealed spool, awaiting a synced private file.
+pub const FILE_FINALIZING: u8 = 11;
 
 /// [`MessageStatus`] for an in-chat system notice (e.g. the restore notice, RS1).
 pub const STATUS_SYSTEM: u8 = 3;

@@ -532,7 +532,7 @@ fn v1_store_migrates_to_kept_media_schema() {
     {
         let s = Store::open(&path, &KEY).unwrap();
         s.conn
-            .execute_batch("DROP TABLE received; DROP TABLE kept_media; PRAGMA user_version = 1")
+            .execute_batch("DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received; DROP TABLE kept_media; PRAGMA user_version = 1")
             .unwrap();
     }
     let s = Store::open(&path, &KEY).unwrap();
@@ -1005,7 +1005,7 @@ fn v2_store_migrates_to_receive_tombstones_without_changing_history_rows() {
         let s = Store::open(&path, &KEY).unwrap();
         s.put_message(&msg(1, "existing history", 1)).unwrap();
         s.conn
-            .execute_batch("DROP TABLE received; PRAGMA user_version = 2;")
+            .execute_batch("DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received; PRAGMA user_version = 2;")
             .unwrap();
     }
     let s = Store::open(&path, &KEY).unwrap();
@@ -1060,7 +1060,7 @@ fn v2_to_v3_migration_failure_rolls_back_partial_ddl_and_preserves_history() {
         // creates its table and first index, then fails on its second index.
         s.conn
             .execute_batch(
-                "DROP TABLE received;
+                "DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received;
              PRAGMA user_version = 2;
              CREATE INDEX received_grp ON messages(seq);",
             )
@@ -1107,7 +1107,7 @@ fn open_authenticates_key_and_owner_before_migration() {
         s.bind_owner(&PEER).unwrap();
         s.put_message(&msg(1, "keep history", 1)).unwrap();
         s.conn
-            .execute_batch("DROP TABLE received; PRAGMA user_version=2; PRAGMA journal_mode=WAL;")
+            .execute_batch("DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received; PRAGMA user_version=2; PRAGMA journal_mode=WAL;")
             .unwrap();
     }
     let before = std::fs::read(&path).unwrap();
@@ -1182,7 +1182,7 @@ fn authenticated_legacy_owner_can_migrate_then_rebind() {
         let s = Store::open(&path, &KEY).unwrap();
         s.bind_owner(&legacy).unwrap();
         s.conn
-            .execute_batch("DROP TABLE received; PRAGMA user_version=2;")
+            .execute_batch("DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received; PRAGMA user_version=2;")
             .unwrap();
     }
     let s = Store::open_for_owner(&path, &KEY, &PEER, &legacy).unwrap();

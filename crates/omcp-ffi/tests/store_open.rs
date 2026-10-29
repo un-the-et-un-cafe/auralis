@@ -33,7 +33,7 @@ fn other_identity_does_not_migrate_existing_store() {
     );
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.execute_batch("DROP TABLE received; PRAGMA user_version=2; PRAGMA journal_mode=WAL")
+        conn.execute_batch("DROP TABLE receive_blocks; DROP TABLE receive_index; DROP TABLE received; PRAGMA user_version=2; PRAGMA journal_mode=WAL")
             .unwrap();
     }
     let before = std::fs::read(&path).unwrap();

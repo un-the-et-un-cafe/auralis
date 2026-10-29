@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "upstream_commit": "233210d5b13f443798428d126266c520999ad387",
   "changes": [
     {
@@ -60,38 +60,47 @@
     {
       "path": "crates/omcp-core/src/store/mod.rs",
       "upstream_sha256": "0446a3a0b91a863966e46b2dc51fd1854cc79670dc5de34fe1e3a555f5f13b43",
-      "accepted_sha256": "a68470f1e5d3cfce901eb285be9b5e7577748997ac60d86d76379e2d63d07589",
-      "rationale": "Append local schema v3 replay tombstones, atomic transport-acceptance persistence and owned nested transactions with sticky quarantine after failed rollback. No OMCP wire or history-backup format change; native downgrade/recovery limitations remain documented. Authenticate existing storage keys and accepted identity before migrations/journal configuration; reject missing authentication metadata and initialize fresh schema/key-check atomically.",
+      "accepted_sha256": "77b979a1787a6561de304459ce45a842485345c8bef2b5fc98840c6adfbe33fa",
+      "rationale": "Append local schema v3 replay tombstones, atomic transport-acceptance persistence and owned nested transactions with sticky quarantine after failed rollback. No OMCP wire or history-backup format change; native downgrade/recovery limitations remain documented. Authenticate existing storage keys and accepted identity before migrations/journal configuration; reject missing authentication metadata and initialize fresh schema/key-check atomically. Append schema v4 sealed receipt tables and transactionally guard message/outgoing mutations, deletion, rekey and history import; no wire or native receive activation.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
         "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
         "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
-        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending.",
+        "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
       ]
     },
     {
       "path": "crates/omcp-core/src/store/records.rs",
       "upstream_sha256": "b58be46179d72335b2c49ef9e9e42f55ddba1a356e0f888c20eb2a8a002ef432",
-      "accepted_sha256": "122fd97d7f97aaf7dbe87b3cd501a2e5c6e757aac7a1a6eba8a3bea218044cd7",
-      "rationale": "Add content-free authenticated peer/message replay metadata inside existing sealed local rows; no network fields added.",
+      "accepted_sha256": "185c1e51aa955e5b8c98a084db681937e77a5ea9cc0d236e35970c9cfb23e97d",
+      "rationale": "Add content-free authenticated peer/message replay metadata inside existing sealed local rows; no network fields added.Append local FILE_FINALIZING=11 without renumbering existing states; no wire encoding change.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
-        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate"
+        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
+        "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
       ]
     },
     {
       "path": "crates/omcp-core/src/store/tests.rs",
       "upstream_sha256": "b7219ea9b6ecee154b66b8b0271ee099a67a644b23f25d805d6deb25c25d6ec1",
-      "accepted_sha256": "f4a62f0beb640e7a67d33d5cc24ee42e56901958193bd0e79c52180bca9a530b",
-      "rationale": "Add transaction, rollback-failure quarantine, migration, ownership, bounded replay and reopen regressions; baseline tests retained. Add six fail-closed opening regressions for wrong key/owner, legacy owner, newer schema, missing key-check, nonempty unversioned data and atomic initial key-check failure; legacy migration fixture now includes its genuine sealed key-check.",
+      "accepted_sha256": "926980f2527606b32957e37a38f66d0d91d64dbbb7111925552463dfc83cdb9d",
+      "rationale": "Add transaction, rollback-failure quarantine, migration, ownership, bounded replay and reopen regressions; baseline tests retained. Add six fail-closed opening regressions for wrong key/owner, legacy owner, newer schema, missing key-check, nonempty unversioned data and atomic initial key-check failure; legacy migration fixture now includes its genuine sealed key-check. Update old-schema fixtures to remove new v4 tables before testing authentication and migrations; refusal assertions retained.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
         "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
         "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
-        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending.",
+        "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
       ]
     },
     {
@@ -140,8 +149,8 @@
     {
       "path": "crates/omcp-ffi/src/tests.rs",
       "upstream_sha256": "3fc9835a54f7042f5d474bb539d2481d4d0ee2a2bb80bfbccb29daf5c2190880",
-      "accepted_sha256": "9f6b72b9a2bde6bad0b50eaebd86fc8b61cd2b45e1dee0c656b3f09dc73687c5",
-      "rationale": "Retain baseline regressions and add transport failure/commit/replay/interleaving, ownership, burn provenance and unused outbound-cache coverage; golden-wire fixtures unchanged. Replace invalid individual-mnemonic-word backup plaintext scan with deterministic public-header collision regression and full secret representation checks; test-only, backup format and cryptography unchanged.",
+      "accepted_sha256": "7759415a3dc19330a4063237adac1ec9c69796d3a363d7c74303a9727b81866f",
+      "rationale": "Retain baseline regressions and add transport failure/commit/replay/interleaving, ownership, burn provenance and unused outbound-cache coverage; golden-wire fixtures unchanged. Replace invalid individual-mnemonic-word backup plaintext scan with deterministic public-header collision regression and full secret representation checks; test-only, backup format and cryptography unchanged. Compare exposed schema version with core SCHEMA_VERSION instead of obsolete literal 3; wrong-key and identity refusal tests retained.",
       "evidence": [
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
@@ -150,7 +159,24 @@
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
         "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
-        "2026-10-29 independent parent review of exact test-only delta; synthetic device fixture reproduces old assertion failure against real encrypted export; dedicated-target 258 Rust tests, Clippy warnings denied and formatting passed"
+        "2026-10-29 independent parent review of exact test-only delta; synthetic device fixture reproduces old assertion failure against real encrypted export; dedicated-target 258 Rust tests, Clippy warnings denied and formatting passed",
+        "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
+      ]
+    }
+  ],
+  "additions": [
+    {
+      "path": "crates/omcp-core/src/store/receipts.rs",
+      "accepted_sha256": "0513c7e115d58f0f6654db18fac3535f6e415fc631744512625cc5a72e6c96af",
+      "rationale": "Explicit new protected local-store module: unused core receipt APIs, sealed 64 KiB blocks, atomic staging/finalization/cancellation, ownership and token checks, 128 MiB ciphertext/row/reservation admission budget, deletion/rekey/backup safeguards. No native/FFI flow enabled and no scope exclusion.",
+      "evidence": [
+        "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate",
+        "13 receipt regressions cover size boundaries through 50 MB, admission/accounting, corruption, wrong ownership/token, disk full/busy/read-only/commit failure, abrupt subprocess exits and cross-connection guard race",
+        "receipt_restart_cancel_and_deleted_token_never_recreate_message: actual disk-backed Store journal DELETE and synchronous FULL=2 verified; no power-loss guarantee"
       ]
     }
   ]

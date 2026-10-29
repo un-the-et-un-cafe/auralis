@@ -47,7 +47,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::burn::{BurnHeader, BurnSnapshot};
 use crate::error::{OmcpError, Result};
 
+mod receipts;
 mod records;
+pub use receipts::*;
 pub use records::*;
 
 #[cfg(test)]
@@ -91,6 +93,11 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE received(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
      CREATE INDEX received_seq ON received(seq);
      CREATE INDEX received_grp ON received(grp, seq);",
+    // v4: sealed durable verified-receive spool (local-only, no wire change).
+    "CREATE TABLE receive_index(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX receive_index_grp ON receive_index(grp, seq);
+     CREATE TABLE receive_blocks(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX receive_blocks_grp ON receive_blocks(grp, seq);",
 ];
 
 const KEPT_INDEX_GRP: &[u8] = b"kept-index";
@@ -115,6 +122,8 @@ enum Table {
     BurnKeys,
     KeptMedia,
     Received,
+    ReceiveIndex,
+    ReceiveBlocks,
 }
 
 impl Table {
@@ -131,6 +140,8 @@ impl Table {
             Table::BurnKeys => "burn_keys",
             Table::KeptMedia => "kept_media",
             Table::Received => "received",
+            Table::ReceiveIndex => "receive_index",
+            Table::ReceiveBlocks => "receive_blocks",
         }
     }
 }
@@ -365,6 +376,7 @@ impl Store {
                 m.peer = *new;
                 s.put(Table::Messages, &m.id, Some(new), &m)?;
             }
+            s.rekey_receipts(old, new)?;
             for mut q in s.list::<OutboxRec>(Table::Outbox, Some(old))? {
                 q.peer = *new;
                 s.put(Table::Outbox, &q.id, Some(new), &q)?;
@@ -631,7 +643,16 @@ impl Store {
         self.put(Table::Contacts, &c.peer, None, c)
     }
     pub fn delete_contact(&self, peer: &[u8; 32]) -> Result<()> {
-        self.del_raw(Table::Contacts, peer)
+        self.transaction(|s| {
+            for r in s
+                .pending_received_files()?
+                .into_iter()
+                .filter(|r| r.peer == *peer)
+            {
+                s.cancel_received_file(peer, &r.token.message_id)?;
+            }
+            s.del_raw(Table::Contacts, peer)
+        })
     }
     pub fn contacts(&self) -> Result<Vec<ContactRec>> {
         self.list(Table::Contacts, None)
@@ -654,27 +675,33 @@ impl Store {
     /// Insert or update a message (keeps its original position). Burn messages
     /// never store content: `text` is cleared defensively.
     pub fn put_message(&self, m: &MessageRec) -> Result<()> {
-        let mut m = m.clone();
-        if m.burn.is_some() {
-            m.text.zeroize();
-            m.text.clear();
-        }
-        self.put(Table::Messages, &m.id, Some(&m.peer), &m)?;
-        let chat = self.chat(&m.peer)?;
-        if chat.as_ref().is_none_or(|c| m.time_ms > c.last_ms) {
-            self.put_chat(&ChatRec {
-                peer: m.peer,
-                last_ms: m.time_ms,
-                last_read_ms: chat.map_or(0, |c| c.last_read_ms),
-            })?;
-        }
-        Ok(())
+        self.transaction(|st| {
+            st.guard_receipt_message(m)?;
+            let mut m = m.clone();
+            if m.burn.is_some() {
+                m.text.zeroize();
+                m.text.clear();
+            }
+            st.put(Table::Messages, &m.id, Some(&m.peer), &m)?;
+            let chat = st.chat(&m.peer)?;
+            if chat.as_ref().is_none_or(|c| m.time_ms > c.last_ms) {
+                st.put_chat(&ChatRec {
+                    peer: m.peer,
+                    last_ms: m.time_ms,
+                    last_read_ms: chat.map_or(0, |c| c.last_read_ms),
+                })?;
+            }
+            Ok(())
+        })
     }
     pub fn message(&self, id: &[u8; 16]) -> Result<Option<MessageRec>> {
         self.get(Table::Messages, id)
     }
     pub fn delete_message(&self, id: &[u8; 16]) -> Result<()> {
-        self.del_raw(Table::Messages, id)
+        self.transaction(|s| {
+            s.delete_receipt(id)?;
+            s.del_raw(Table::Messages, id)
+        })
     }
     /// Messages of one chat, oldest first.
     pub fn messages(&self, peer: &[u8; 32]) -> Result<Vec<MessageRec>> {
@@ -690,18 +717,23 @@ impl Store {
     /// key) the payload is sealed under a sub-key of it, so burning the message
     /// also shreds its unsent copy.
     pub fn put_outbox(&self, q: &OutboxRec, burn_key: Option<&[u8; 32]>) -> Result<()> {
-        let stored = match burn_key {
-            None => q.clone(),
-            Some(k) => {
-                let sub = Zeroizing::new(blake3::derive_key(CTX_BURN_OUTBOX, k));
-                let mut s = q.clone();
-                s.inner.zeroize();
-                s.inner = xseal(&sub, &q.id, &q.inner)?;
-                s.burn = true;
-                s
+        self.transaction(|st| {
+            if st.has_receipt(&q.id)? {
+                return Err(OmcpError::Store("receipt owns outgoing ID"));
             }
-        };
-        self.put(Table::Outbox, &q.id, Some(&q.peer), &stored)
+            let stored = match burn_key {
+                None => q.clone(),
+                Some(k) => {
+                    let sub = Zeroizing::new(blake3::derive_key(CTX_BURN_OUTBOX, k));
+                    let mut s = q.clone();
+                    s.inner.zeroize();
+                    s.inner = xseal(&sub, &q.id, &q.inner)?;
+                    s.burn = true;
+                    s
+                }
+            };
+            st.put(Table::Outbox, &q.id, Some(&q.peer), &stored)
+        })
     }
     pub fn delete_outbox(&self, id: &[u8; 16]) -> Result<()> {
         self.del_raw(Table::Outbox, id)
@@ -730,6 +762,9 @@ impl Store {
 
     pub fn put_out_file<C: AsRef<[u8]>>(&self, f: &OutFileRec, chunks: &[C]) -> Result<()> {
         self.transaction(|s| {
+            if s.has_receipt(&f.id)? {
+                return Err(OmcpError::Store("receipt owns outgoing ID"));
+            }
             s.put(Table::OutFiles, &f.id, Some(&f.peer), f)?;
             for (i, c) in chunks.iter().enumerate() {
                 s.put_raw(
@@ -809,7 +844,10 @@ impl Store {
                         // must not be rewritten as our sent message.
                         if m.mine
                             && !m.file.as_ref().is_some_and(|f| {
-                                matches!(f.state, FILE_RECEIVED | FILE_INTEGRITY_FAILED)
+                                matches!(
+                                    f.state,
+                                    FILE_RECEIVED | FILE_INTEGRITY_FAILED | FILE_FINALIZING
+                                )
                             })
                         {
                             let metadata = m.file.as_mut().expect("checked file metadata");
@@ -1023,16 +1061,30 @@ impl Store {
                 if m.burn.is_some() {
                     continue;
                 }
+                if let Some(local) = s.message(&m.id)? {
+                    if local.peer != m.peer || local.mine != m.mine {
+                        return Err(OmcpError::Store("history message ownership mismatch"));
+                    }
+                    if s.has_receipt(&m.id)? {
+                        continue;
+                    }
+                }
                 let mut m = m.clone();
                 if let Some(f) = m.file.as_mut() {
                     f.local_path = None;
-                    if !matches!(f.state, FILE_SENT | FILE_RECEIVED) {
+                    if matches!(f.state, FILE_RECEIVED | FILE_FINALIZING) {
+                        f.state = FILE_MISSING;
+                        f.done_bytes = 0;
+                    } else if f.state != FILE_SENT {
                         f.state = FILE_FAILED;
                     }
                 }
                 s.put_message(&m)?;
             }
             for q in &h.outbox {
+                if s.has_receipt(&q.id)? {
+                    continue;
+                }
                 if !q.burn && !q.control {
                     s.put_outbox(q, None)?;
                 }

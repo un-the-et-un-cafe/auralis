@@ -647,7 +647,7 @@ fn wrong_storage_key_and_other_identity_are_refused() {
         OmcpNode::open(other, "B".into(), path, SKEY.to_vec()),
         Err(FfiError::Storage { .. })
     ));
-    assert_eq!(storage_schema_version(), 3);
+    assert_eq!(storage_schema_version(), omcp_core::store::SCHEMA_VERSION);
     assert_eq!(generate_storage_key().unwrap().len(), 32);
 }
 
