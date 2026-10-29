@@ -4,11 +4,18 @@ set -euo pipefail
 STAGE=preflight
 trap 'result=$?; echo "Android emulator failed during $STAGE at line $LINENO (exit $result)." >&2' ERR
 
-API=${1:?usage: run-android-emulator-tests.sh 31|35}
+API=${1:?usage: run-android-emulator-tests.sh 31|35|36-16k}
+IMAGE_TAG=default
+IMAGE_REPOSITORY=android
+EXPECTED_PAGE_SIZE=4096
+EMULATOR_MEMORY_MB=2048
 case "$API" in
   31) IMAGE_REVISION=5; IMAGE_SHA256=f77492768c6449a20d101a2fc0f32865a0aca6067dae6de4e94073fbceda9bca ;;
   35) IMAGE_REVISION=2; IMAGE_SHA256=6dd7de33e63ef105cf2fabea6badda1dbe7665c96d8908e5f6e1407e63ff4556 ;;
-  *) echo 'Only reviewed API 31 and 35 images are supported.' >&2; exit 2 ;;
+  36-16k) API=36; IMAGE_TAG=google_apis_ps16k; IMAGE_REPOSITORY=google_apis
+    IMAGE_REVISION=7; IMAGE_SHA256=56005e428f0d30105789bde96f60bbd32c5c62e710321abd7c10f9e591889ff7
+    EXPECTED_PAGE_SIZE=16384; EMULATOR_MEMORY_MB=4096 ;;
+  *) echo 'Only reviewed API 31, 35 and 36-16k images are supported.'  >&2; exit 2 ;;
 esac
 : "${ANDROID_HOME:?}" "${ANDROID_AVDMANAGER:?}" "${RUNNER_TEMP:?}"
 REPORTS="$PWD/app/build/reports/emulator"
@@ -54,21 +61,31 @@ EMULATOR="$ANDROID_HOME/emulator/emulator"
 
 # Exact official archives, not sdkmanager's changing latest image revision.
 IMAGE_FILE="x86_64-${API}_r$(printf '%02d' "$IMAGE_REVISION").zip"
+if [[ "$IMAGE_TAG" == google_apis_ps16k ]]; then
+  IMAGE_FILE="x86_64-ps16k-${API}_r$(printf '%02d' "$IMAGE_REVISION").zip"
+fi
 curl --fail --location --retry 3 --max-time 300 \
-  "https://dl.google.com/android/repository/sys-img/android/$IMAGE_FILE" -o "$TOOLS/image.zip"
+  "https://dl.google.com/android/repository/sys-img/$IMAGE_REPOSITORY/$IMAGE_FILE" -o "$TOOLS/image.zip"
 echo "$IMAGE_SHA256  $TOOLS/image.zip" | sha256sum --check --strict
-IMAGE_DIR="$ANDROID_HOME/system-images/android-$API/default"
+IMAGE_DIR="$ANDROID_HOME/system-images/android-$API/$IMAGE_TAG"
 mkdir -p "$IMAGE_DIR"
 if [[ -e "$IMAGE_DIR/x86_64" || -L "$IMAGE_DIR/x86_64" ]]; then
   mv "$IMAGE_DIR/x86_64" "$TOOLS/runner-system-image"
 fi
 unzip -q "$TOOLS/image.zip" -d "$IMAGE_DIR"
+if [[ "$IMAGE_TAG" == google_apis_ps16k ]]; then
+  # Reviewed official archive uses multi-tag source.properties. Register its
+  # official SDK package ID explicitly for pinned CLI19 avdmanager discovery.
+  cp "$(dirname "$0")/android-api36-16k-package.xml" "$IMAGE_DIR/x86_64/package.xml"
+  grep -Fx 'Pkg.Revision=7' "$IMAGE_DIR/x86_64/source.properties"
+  grep -Fx 'AndroidVersion.ApiLevel=36' "$IMAGE_DIR/x86_64/source.properties"
+fi
 cp "$IMAGE_DIR/x86_64/source.properties" "$REPORTS/system-image.txt"
 export ANDROID_AVD_HOME="$RUNNER_TEMP/auralis-avd-$API"
 export ANDROID_USER_HOME="$RUNNER_TEMP/auralis-android-user-$API"
 mkdir -p "$ANDROID_AVD_HOME" "$ANDROID_USER_HOME"
 printf 'no\n' | "$ANDROID_AVDMANAGER" create avd --force --name auralis-ci \
-  --package "system-images;android-$API;default;x86_64" --device pixel_2
+  --package "system-images;android-$API;$IMAGE_TAG;x86_64" --device pixel_2
 test -s "$ANDROID_AVD_HOME/auralis-ci.avd/config.ini"
 test -s "$ANDROID_AVD_HOME/auralis-ci.ini"
 ADB="$ANDROID_HOME/platform-tools/adb"
@@ -88,10 +105,21 @@ trap cleanup EXIT
 STAGE=adb-server
 # Start the transport before QEMU attempts its own post-boot ADB configuration.
 "$ADB" start-server
+STAGE=emulator-memory-preflight
+# Google APIs + 16-KB pages have a larger working set than the AOSP images.
+# Keep an explicit 2-GiB host reserve; never change runner tier or VM permissions.
+cat /proc/meminfo > "$REPORTS/host-memory.txt"
+AVAILABLE_KB=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+[[ "$AVAILABLE_KB" =~ ^[0-9]+$ ]]
+if (( AVAILABLE_KB < (EMULATOR_MEMORY_MB + 2048) * 1024 )); then
+  echo "Insufficient available host memory for ${EMULATOR_MEMORY_MB}MiB AVD + 2GiB reserve." >&2
+  exit 1
+fi
+printf 'AVD memory MiB: %s\n' "$EMULATOR_MEMORY_MB" >> "$REPORTS/host-memory.txt"
 STAGE=emulator-launch
 "$EMULATOR" -avd auralis-ci -port 5554 -accel on -gpu swiftshader \
   -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
-  -cores 2 -memory 2048 > "$REPORTS/emulator.log" 2>&1 &
+  -cores 2 -memory "$EMULATOR_MEMORY_MB" > "$REPORTS/emulator.log" 2>&1 &
 EMULATOR_PID=$!
 STAGE=android-readiness
 # A boot property can precede a transient ADB restart. Require stable transport
@@ -100,6 +128,10 @@ python3 "$(dirname "$0")/wait_for_android.py" "$ADB" "$ANDROID_SERIAL" "$EMULATO
   2>&1 | tee "$REPORTS/readiness.txt"
 "$ADB" -s "$ANDROID_SERIAL" logcat -v threadtime > "$REPORTS/logcat.txt" 2>&1 &
 LOGCAT_PID=$!
+STAGE=page-size-validation
+PAGE_SIZE=$("$ADB" -s "$ANDROID_SERIAL" shell getconf PAGE_SIZE | tr -d '\r')
+printf 'Expected: %s\nObserved: %s\n' "$EXPECTED_PAGE_SIZE" "$PAGE_SIZE" | tee "$REPORTS/page-size.txt"
+test "$PAGE_SIZE" = "$EXPECTED_PAGE_SIZE"
 STAGE=wake-screen
 "$ADB" -s "$ANDROID_SERIAL" shell input keyevent KEYCODE_WAKEUP
 "$ADB" -s "$ANDROID_SERIAL" shell input keyevent KEYCODE_MENU
@@ -111,4 +143,5 @@ if [[ "$API" == 35 ]]; then
 fi
 # No permission pre-grants, demo data, simulated cloud backups or secure-window bypass.
 STAGE=instrumentation
-./gradlew connectedDebugAndroidTest --no-daemon --console=plain
+./gradlew connectedDebugAndroidTest --no-daemon --console=plain \
+  "-Pandroid.testInstrumentationRunnerArguments.expectedPageSize=$EXPECTED_PAGE_SIZE"

@@ -24,12 +24,13 @@ plugins {
 
 android {
     namespace = "chat.omcp.app"
-    compileSdk = 35
+    compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "chat.auralis.app"
         minSdk = 31 // Android 12+
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "0.1.0-beta"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -107,13 +108,13 @@ dependencies {
     // Drive backup: Google Identity Services AuthorizationClient (scope drive.appdata only).
     implementation("com.google.android.gms:play-services-auth:21.3.0")
     // UniFFI Kotlin bindings load libomcp_ffi.so through JNA.
-    implementation("net.java.dev.jna:jna:5.15.0@aar")
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
     // QR: generate with ZXing core; scan with zxing-android-embedded (no Play services).
     implementation("com.google.zxing:core:3.5.3")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("net.java.dev.jna:jna:5.15.0")
+    testImplementation("net.java.dev.jna:jna:5.18.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 
     androidTestImplementation("androidx.test:runner:1.6.2")

@@ -9,7 +9,7 @@ artifacts**, not a production-readiness claim or a deployment service.
 
 | Entry point | Gates and outputs |
 | --- | --- |
-| Pull request, push to `main`, or manual `CI` | Workflow lint; Rust formatting, Clippy and workspace tests; Android native bridge build, debug assembly, lint and JVM tests; real-app instrumentation on API 31 and 35 emulators; SwiftPM tests, EN/FR string parity, native bridge build and iOS bridge/UI simulator tests. Debug APK and Apple silicon simulator app are testing outputs. |
+| Pull request, push to `main`, or manual `CI` | Workflow lint; Rust formatting, Clippy and workspace tests; Android native bridge build, debug assembly, lint and JVM tests; real-app instrumentation on API 31/35 and API 36 16-KB emulators; SwiftPM tests, EN/FR string parity, native bridge build and iOS bridge/UI simulator tests. Debug APK and Apple silicon simulator app are testing outputs. |
 | Manual **Package unsigned release candidates** | Explicit unsigned-artifact confirmation and exact reviewed SHA check, then the **same full CI workflow** for the dispatched revision. Only after all gates pass: Android release tests/lint and unsigned APK/AAB; unsigned iOS device archive and OMCP FFI SDK. |
 
 `required checks` fails if any constituent CI gate failed, was cancelled or was
@@ -77,19 +77,19 @@ and [Android's acceleration reference](https://developer.android.com/studio/run/
 - Dependabot proposes weekly Actions, Cargo and Gradle updates. Review these
   changes; no auto-merge or automatic dependency upgrade is configured.
 - Workflow lint installs a versioned `actionlint` using Go's module tooling.
-  Android uses JDK 17, SDK 35, NDK `27.2.12479018`, and `cargo-ndk 4.1.2`.
+  Android uses JDK 17, SDK 36, NDK `27.2.12479018`, and `cargo-ndk 4.1.2`.
   SDK command-line tools 19 (`13114758`) are downloaded from Google with a
   pinned SHA-256 checksum, rather than using the runner's mutable `latest`
-  SDK manager. This setup accepts the Android SDK licenses during the build.
+  SDK manager. This setup uses previously accepted Android SDK licenses; new terms require approval.
   Rust uses the repository's `rust-toolchain.toml`; Cargo CI uses `--locked`.
 - Android runtime tooling is pinned to official emulator **37.2.12**, build
   `16428233`, AOSP API 31 revision **5** and API 35 revision **2** archives, each
   with SHA-256 verification. The downloaded bytes were checked against Google's
   repository metadata on 2026-10-28 before recording these SHA-256 pins. Updating
-  any pin requires reviewing the official release and rerunning both runtime
+  any pin requires reviewing the official release and rerunning all runtime
   jobs; do not replace them with `latest` to make a failing gate pass.
 - iOS uses the `macos-15` Apple silicon runner because the upstream Rust script
-  builds an arm64 simulator slice. It selects installed **Xcode 16.4** explicitly
+  builds an arm64 simulator slice. It selects installed **Xcode 26.3 (17C529)** explicitly
   using job-local `DEVELOPER_DIR` and fails if it is absent. **XcodeGen 2.46.0**
   is downloaded from its [official release](https://github.com/yonaskolb/XcodeGen/releases/tag/2.46.0)
   and verified against its published SHA-256, not installed from mutable Homebrew.
@@ -269,30 +269,35 @@ remain separate gates even after all build jobs pass. Adding these files alone
 does not publish a repository, sign or deploy an app, submit it to a store, or
 change external repository settings.
 
-## Known v1 reliability work still open
+## Reliability checkpoint and remaining v1 gates
 
-The [durable transport-acceptance stage](TRANSPORT_ACCEPTANCE.md) addresses the
-sender queue/OS-acceptance boundary, not a peer-delivery acknowledgement. Its
-local tests do not replace exact-commit hosted/native/device release gates.
+Main `5e993c0f2e5f2f5e3404955e976f5713f0171402` includes the
+[durable transport-acceptance stage](TRANSPORT_ACCEPTANCE.md),
+[durable receive finalization](DURABLE_RECEIVE_STORE.md), explicit local-file
+repair and cancelled-generation request-again. Post-merge
+[CI run 40844258022](https://github.com/un-the-et-un-cafe/auralis/actions/runs/40844258022)
+passed all seven gates: API 31/35 each ran 28 instrumentation tests; Apple ran
+99 SwiftPM and 23 native tests, including 16 RustBridge tests and UI smoke.
+This is historical evidence for that exact main commit, not validation of the
+platform migration or all real-device failure modes.
 
-**Receive-file finalization is the next bounded stage and blocks a v1 durable
-file-delivery claim.** `NodeState::persist_file_events` currently persists
-`FILE_RECEIVED` before Android/iOS `MeshRepository.onFileReceived` saves the
-returned bytes and calls `setReceivedFilePath`. A crash between those steps can
-leave no saved bytes/path while the completed-transfer guard suppresses replay.
-Add recoverable staging/finalization and crash/reopen tests both before native
-writing and after writing but before path acknowledgement, retaining peer/ID
-ownership and immutable fully finalized transfers. The sender-ACK patch does
-not fix or claim receive-side crash safety.
+Receive finalization is no longer an unimplemented next step. The source now
+retains recoverable staged data, verifies final bytes and persists completion
+before pruning staging. It includes crash/reopen, local-repair and cancelled
+receipt regression coverage. Real power-loss, storage-full, radio/background,
+Android↔iOS and independently pinned Hopla acceptance remain open. Actual
+SwiftUI gesture flows are not established merely by repository-level tests.
 
-**Safe downgrade/store-error recovery is also a v1 release gate.** The Rust
-schema-v3 refusal in older schema-v2 code is not sufficient: Android and iOS
-older `MeshRepository.loadCore` implementations caught generic store-unavailable
-errors, attempted to rename the database, deleted its rollback journal, and
-opened a fresh store.
-Downgrading may silently take that path; original database/journal preservation
-is not guaranteed for those older binaries. The current store-opening safety
-checkpoint authenticates key/owner before migrations and removes the automatic
-native reset, offering blocked startup and retry. Native SDK/runtime validation
-is still required, and the receive-file durable-finalization gate remains open.
-No safe downgrade or v1 release is claimed.
+**Safe downgrade is still not promised.** Current store-opening safety checks
+key/owner before migrations and preserves the original database/journal on
+blocked startup. Older binaries may rename/reset stores they cannot open;
+do not treat refusal by the Rust schema layer as a safe downgrade procedure.
+
+The [platform migration](PLATFORM_COMPATIBILITY.md) adds API 36, 16-KB artifact
+checks and Xcode 26 SDK builds. Its exact-SHA hosted runs, unsigned archives,
+16-KB FFI execution and iOS 17 physical/runtime coverage must be established
+separately. Privacy-reason inventory (including bundled SQLite), unsupported
+iOS screenshot-protection policy, real provider backup/restore, remaining
+product scope, independent security review and owner-authorized signing/store
+work remain release gates. No v1 label, store readiness, account setup or
+publication is implied by green tests.

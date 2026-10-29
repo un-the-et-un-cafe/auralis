@@ -80,7 +80,12 @@ jobs:
         run: ./scripts/build-rust.sh
       - name: Assemble, lint and test Android
         working-directory: apps/android
-        run: ./gradlew assembleDebug lintDebug testDebugUnitTest --no-daemon --console=plain
+        run: ./gradlew assembleDebug bundleDebug lintDebug testDebugUnitTest --no-daemon --console=plain
+      - name: Validate packaged native libraries and bundle-derived APK
+        run: |
+          scripts/ci/validate-android-packages.sh \
+            apps/android/app/build/outputs/apk/debug/app-debug.apk \
+            apps/android/app/build/outputs/bundle/debug/app-debug.aab
       - name: Upload Android reports
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -118,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api: [31, 35]
+        api: [31, 35, 36-16k]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -156,7 +161,12 @@ jobs:
         run: python3 scripts/ci/kvm_access.py cleanup
 
   ios:
-    name: ios
+    name: ios (iOS ${{ matrix.runtime }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep existing older-runtime coverage; iOS 17 remains an explicit gap.
+        runtime: ["18.5", "26.2"]
     # The Rust build script produces an arm64, not an Intel, simulator slice.
     runs-on: macos-15
     timeout-minutes: 60
@@ -181,8 +191,12 @@ jobs:
         run: xcodegen generate
       - name: Create a clean pinned iPhone simulator
         id: sim
+        env:
+          IOS_RUNTIME: ${{ matrix.runtime }}
         run: |
-          UDID=$(xcrun simctl create AuralisCI com.apple.CoreSimulator.SimDeviceType.iPhone-16 com.apple.CoreSimulator.SimRuntime.iOS-18-5)
+          xcrun simctl list runtimes -j > build/simulator-runtimes.json
+          RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-${IOS_RUNTIME//./-}"
+          UDID=$(xcrun simctl create AuralisCI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$RUNTIME_ID")
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
@@ -241,14 +255,18 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: auralis-ios-test-results-${{ github.sha }}
+          name: auralis-ios-test-results-${{ matrix.runtime }}-${{ github.sha }}
           path: |
             apps/ios/build/Auralis-*.xcresult
             apps/ios/build/Signing/
+            apps/ios/build/simulator-runtimes.json
+            apps/ios/build/Toolchain/
           if-no-files-found: warn
           retention-days: 14
 
       - name: Stage installable Apple silicon simulator app
+        env:
+          IOS_RUNTIME: ${{ matrix.runtime }}
         run: |
           mkdir -p "$RUNNER_TEMP/auralis-ios-simulator"
           tar -czf "$RUNNER_TEMP/auralis-ios-simulator/Auralis-simulator.app.tar.gz" \
@@ -256,7 +274,7 @@ jobs:
           {
             printf 'Auralis simulator test build; NOT an iPhone IPA or release. Use synthetic test data only.\nCommit: %s\nRun: %s/%s/actions/runs/%s\n' \
               "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
-            printf 'Application ID: chat.auralis.app\nValidated runtime: iOS 18.5, iPhone 16, Apple silicon\n'
+            printf 'Application ID: chat.auralis.app\nValidated runtime: iOS %s, iPhone 16, Apple silicon\n' "$IOS_RUNTIME"
             xcodebuild -version
             lipo -archs build/DerivedData/Build/Products/Debug-iphonesimulator/OpenMeshChat.app/OpenMeshChat
           } > "$RUNNER_TEMP/auralis-ios-simulator/BUILD_INFO.txt"
@@ -265,7 +283,7 @@ jobs:
       - name: Upload simulator app (not an iPhone package)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: auralis-ios-simulator-app-${{ github.sha }}
+          name: auralis-ios-simulator-app-${{ matrix.runtime }}-${{ github.sha }}
           path: ${{ runner.temp }}/auralis-ios-simulator/
           if-no-files-found: error
           retention-days: 7

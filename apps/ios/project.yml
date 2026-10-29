@@ -22,6 +22,8 @@ targets:
     platform: iOS
     sources:
       - path: Generated/OmcpFFI
+      - path: Privacy/OmcpFFI/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - framework: build/OmcpFFI.xcframework
         embed: false

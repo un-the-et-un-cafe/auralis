@@ -14,6 +14,17 @@ cd "$ROOT"
 targets=()
 for a in $ABIS; do targets+=(-t "$a"); done
 flag=""; [ "$PROFILE" = "release" ] && flag="--release"
+# NDK r27 does not default to 16-KB ELF/RELRO alignment. Scope flags to
+# Android targets only; do not change the host bindgen build or iOS/crypto code.
+# https://developer.android.com/guide/practices/page-sizes
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+# Global RUSTFLAGS take precedence over target flags; fail rather than silently
+# build unaligned native objects when an external environment overrides them.
+if [[ ${RUSTFLAGS+x} || ${CARGO_ENCODED_RUSTFLAGS+x} ]]; then
+  echo 'Unset global RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS; use target-specific flags.' >&2
+  exit 1
+fi
 cargo ndk "${targets[@]}" --platform 31 -o "$OUT/jniLibs" build --locked -p omcp-ffi $flag
 # Bindings are generated from a host build of the same crate (library mode).
 cargo build --locked -p omcp-ffi

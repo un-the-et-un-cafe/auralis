@@ -21,6 +21,8 @@ import chat.omcp.app.core.RustOmcpCore
 import chat.omcp.app.data.BackupGate
 import chat.omcp.app.mesh.MeshPermissions
 import org.junit.Assert.*
+import org.junit.Before
+import org.junit.After
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,6 +38,16 @@ class AppSmokeTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
     private val device get() = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
     private val app get() = compose.activity.application as OmcpApplication
+    private lateinit var imeAnimations: ImeAnimationObserver
+    @Before fun observeImeAnimations() = compose.runOnIdle {
+        imeAnimations = ImeAnimationObserver(compose.activity.application)
+        imeAnimations.start(compose.activity)
+    }
+    @After fun removeImeObserver() {
+        if (::imeAnimations.isInitialized) {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync { imeAnimations.stop() }
+        }
+    }
     private fun text(id: Int) = compose.activity.getString(id)
     private fun clickText(id: Int) = compose.onNodeWithText(text(id)).performScrollTo().performClick()
     private fun tab(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
@@ -69,16 +81,27 @@ class AppSmokeTest {
                 .hide(WindowInsetsCompat.Type.ime())
         }
         val gate = StableImeDismissal(stableForMs = 500)
-        compose.waitUntil(10_000) {
-            val (attached, visible) = compose.runOnIdle {
-                val decor = compose.activity.window.decorView
-                decor.isAttachedToWindow to ViewCompat.getRootWindowInsets(decor)
-                    ?.isVisible(WindowInsetsCompat.Type.ime())
+        var lastAnimation: ImeAnimationObserver.Snapshot? = null
+        var lastReadiness = "not sampled"
+        try {
+            compose.waitUntil(10_000) {
+                val (attached, visible) = compose.runOnIdle {
+                    val decor = compose.activity.window.decorView
+                    lastAnimation = imeAnimations.snapshot(compose.activity)
+                    decor.isAttachedToWindow to ViewCompat.getRootWindowInsets(decor)
+                        ?.isVisible(WindowInsetsCompat.Type.ime())
+                }
+                val focused = compose.onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty()
+                val animation = checkNotNull(lastAnimation)
+                lastReadiness = "attached=$attached visible=$visible focused=$focused animation=$animation"
+                gate.observe(SystemClock.elapsedRealtime(), attached, visible, focused,
+                    animation.ready, animation.active, animation.generation, animation.window)
             }
-            val focused = compose.onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty()
-            gate.observe(SystemClock.elapsedRealtime(), attached, visible, focused)
+        } catch (failure: Throwable) {
+            Log.e("AppSmokeTest", "IME readiness timed out/failed: $lastReadiness", failure)
+            throw failure
         }
-        Log.i("AppSmokeTest", "IME hidden and input focus released before navigation")
+        Log.i("AppSmokeTest", "IME hidden, input focus released and observed animations settled before navigation: $lastAnimation")
     }
 
     private fun assertSecure() = compose.runOnIdle {
