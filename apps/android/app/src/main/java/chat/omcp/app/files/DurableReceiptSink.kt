@@ -7,9 +7,11 @@ import chat.omcp.app.core.ReceiptVerifier
 interface ReceiptSource {
     fun readBlock(index: Int): ByteArray
     fun verifier(): ReceiptVerifier
+    /** Exact current capability authorization; false/throw never authorizes mutation. */
+    fun authorizeWrite(replacingIncomplete: Boolean): Boolean = false
 }
 
-/** Returns only after readback verification, file sync, atomic no-overwrite publication and directory sync. */
+/** Returns only after readback verification, file and directory sync. The database commit publishes the path. */
 fun interface DurableReceiptSink {
     fun finalize(receipt: ReceiveReceiptInfo, source: ReceiptSource): String
     fun discard(receipt: ReceiveReceiptInfo) { error("durable receipt cleanup unavailable") }

@@ -7,6 +7,7 @@ import chat.omcp.app.core.ReceiveReceiptInfo
 import chat.omcp.app.core.ReceiptVerifier
 import chat.omcp.app.files.AndroidReceiptFiles
 import chat.omcp.app.files.ReceiptSource
+import chat.omcp.app.files.TrustedReceivedPaths
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,9 +18,11 @@ import java.security.MessageDigest
 @RunWith(AndroidJUnit4::class)
 class ReceiptFilesystemTest {
     private val context get() = ApplicationProvider.getApplicationContext<android.content.Context>()
-    private fun root() = File(context.cacheDir, "receipt-test-${System.nanoTime()}").apply { check(mkdir()) }
+    private fun root() = File(context.cacheDir.canonicalFile, "receipt-test-${System.nanoTime()}").apply { check(mkdir()) }
     private fun receipt(size: Int) = ReceiveReceiptInfo("11".repeat(16), "22".repeat(32), "../../peer-name", "application/octet-stream", size.toLong(), "11".repeat(16) + "33".repeat(32), "44".repeat(32), (size + 65535) / 65536)
-    private fun source(bytes: ByteArray, reads: (() -> Unit)? = null) = object : ReceiptSource {
+    private fun source(bytes: ByteArray, reads: (() -> Unit)? = null,
+        authorization: (Boolean) -> Boolean = { true }, verifierFailure: Boolean = false) = object : ReceiptSource {
+        override fun authorizeWrite(replacingIncomplete: Boolean) = authorization(replacingIncomplete)
         override fun readBlock(index: Int): ByteArray {
             reads?.invoke()
             return bytes.copyOfRange(index * 65536, minOf(bytes.size, (index + 1) * 65536))
@@ -30,6 +33,7 @@ class ReceiptFilesystemTest {
             var count = 0
             override fun update(bytes: ByteArray) { count += bytes.size; hash.update(bytes) }
             override fun finish() {
+                if (verifierFailure) throw java.io.IOException("verifier unavailable")
                 check(count == bytes.size)
                 check(hash.digest().contentEquals(MessageDigest.getInstance("SHA-256").digest(bytes)))
             }
@@ -46,13 +50,13 @@ class ReceiptFilesystemTest {
                 assertArrayEquals(bytes, File(path).readBytes())
                 assertTrue(path.startsWith(File(nested, "received").canonicalPath + "/"))
                 assertFalse(path.contains("peer-name"))
-                val recovered = sink.finalize(r, source(bytes) { error("must verify existing final, not rewrite") })
+                val recovered = sink.finalize(r, source(bytes, reads = { error("must verify existing final, not rewrite") }))
                 assertEquals(path, recovered)
             }
         } finally { dir.deleteRecursively() }
     }
-    @Test fun writeSyncRenameAndDirectorySyncFaultsRetainRetryableGeneration() {
-        for (fault in listOf("create", "write", "file-sync", "publish", "after-link", "unlink", "directory-sync")) {
+    @Test fun createWriteSyncAndDirectorySyncFaultsRetainRetryableGeneration() {
+        for (fault in listOf("create", "write", "file-sync", "read", "directory-sync")) {
             val dir = root()
             try {
                 val bytes = ByteArray(65537) { 7 }; val r = receipt(bytes.size)
@@ -94,48 +98,92 @@ class ReceiptFilesystemTest {
             sink.discard(r); assertFalse(File(path).exists())
         } finally { dir.deleteRecursively() }
     }
-    @Test fun destinationAppearingAtPublicationIsNeverOverwritten() {
+    @Test fun destinationAppearingAtExclusiveCreateIsNeverOverwritten() {
         val dir = root()
         try {
             val bytes = byteArrayOf(1, 2, 3); val r = receipt(3)
             val final = File(dir, "received/receipt-${r.receiptToken}.bin")
-            val sink = AndroidReceiptFiles(dir) { if (it == "publish") final.writeBytes(byteArrayOf(9, 9, 9)) }
-            assertThrows(IllegalStateException::class.java) { sink.finalize(r, source(bytes)) }
+            val sink = AndroidReceiptFiles(dir) { if (it == "create") final.writeBytes(byteArrayOf(9, 9, 9)) }
+            val failure = assertThrows(android.system.ErrnoException::class.java) { sink.finalize(r, source(bytes)) }
+            assertEquals(android.system.OsConstants.EEXIST, failure.errno)
             assertArrayEquals(byteArrayOf(9, 9, 9), final.readBytes())
         } finally { dir.deleteRecursively() }
     }
 
-    @Test fun matchingExistingPublicationCanBeVerifiedWithoutOverwritingIt() {
+    @Test fun matchingExistingCandidateIsVerifiedWithoutOverwritingIt() {
         val dir = root()
         try {
             val bytes = byteArrayOf(1, 2, 3); val r = receipt(3)
-            val final = File(dir, "received/receipt-${r.receiptToken}.bin")
-            var inode = 0L
-            val sink = AndroidReceiptFiles(dir) { if (it == "publish") { final.writeBytes(bytes); inode = Os.lstat(final.path).st_ino } }
-            assertEquals(final.path, sink.finalize(r, source(bytes)))
+            File(dir, "received").mkdir()
+            val final = File(dir, "received/receipt-${r.receiptToken}.bin").apply { writeBytes(bytes) }
+            val inode = Os.lstat(final.path).st_ino
+            assertEquals(final.path, AndroidReceiptFiles(dir).finalize(r, source(bytes)))
             assertEquals(inode, Os.lstat(final.path).st_ino)
-            assertFalse(File(final.path + ".part").exists())
         } finally { dir.deleteRecursively() }
     }
 
-    @Test fun foreignHardLinksAndCorruptCrashPairsAreRefusedWithoutUnlinking() {
-        for (foreign in listOf(false, true)) {
-            val dir = root()
-            try {
-                val bytes = byteArrayOf(1, 2, 3); val r = receipt(3)
-                val final = File(dir, "received/receipt-${r.receiptToken}.bin")
-                val part = File(final.path + ".part")
-                val interrupted = AndroidReceiptFiles(dir) { if (it == "after-link") error("crash") }
-                assertThrows(IllegalStateException::class.java) { interrupted.finalize(r, source(bytes)) }
-                assertEquals(2L, Os.lstat(final.path).st_nlink)
-                if (foreign) Os.link(final.path, File(dir, "foreign-link").path)
-                else final.writeBytes(byteArrayOf(9, 9, 9))
-                assertThrows(IllegalStateException::class.java) { AndroidReceiptFiles(dir).finalize(r, source(bytes)) }
-                assertTrue(part.exists())
-                assertTrue(final.exists())
-                assertEquals(if (foreign) 3L else 2L, Os.lstat(final.path).st_nlink)
-            } finally { dir.deleteRecursively() }
-        }
+    @Test fun interruptedShortWriteRepairsOnlyWithCurrentPendingAuthorization() {
+        val dir = root()
+        try {
+            val bytes = ByteArray(65537) { 7 }; val r = receipt(bytes.size)
+            var writes = 0
+            val interrupted = AndroidReceiptFiles(dir) { if (it == "write" && ++writes == 2) error("crash") }
+            assertThrows(IllegalStateException::class.java) { interrupted.finalize(r, source(bytes)) }
+            val final = File(dir, "received/receipt-${r.receiptToken}.bin")
+            assertEquals(65536L, final.length())
+            val saved = final.readBytes(); val inode = Os.lstat(final.path).st_ino
+            for (authorization in listOf<(Boolean) -> Boolean>({ false }, { replacing -> !replacing })) {
+                assertThrows(IllegalStateException::class.java) {
+                    AndroidReceiptFiles(dir).finalize(r, source(bytes, authorization = authorization))
+                }
+                assertEquals(inode, Os.lstat(final.path).st_ino)
+                assertArrayEquals(saved, final.readBytes())
+            }
+            var pending = true
+            val revoked = AndroidReceiptFiles(dir) { if (it == "remove-incomplete") pending = false }
+            assertThrows(IllegalStateException::class.java) {
+                revoked.finalize(r, source(bytes, authorization = { pending }))
+            }
+            assertEquals(inode, Os.lstat(final.path).st_ino)
+            assertArrayEquals(saved, final.readBytes())
+            assertArrayEquals(bytes, File(AndroidReceiptFiles(dir).finalize(r, source(bytes))).readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun existingReadVerifierAndAuthorizationFailuresNeverDeleteOrRewriteBytes() {
+        val dir = root()
+        try {
+            val bytes = byteArrayOf(1, 2, 3); val r = receipt(3)
+            val final = File(AndroidReceiptFiles(dir).finalize(r, source(bytes)))
+            val inode = Os.lstat(final.path).st_ino
+            assertThrows(java.io.IOException::class.java) {
+                AndroidReceiptFiles(dir) { if (it == "read") throw java.io.IOException("protected read") }.finalize(r, source(bytes))
+            }
+            assertThrows(java.io.IOException::class.java) {
+                AndroidReceiptFiles(dir).finalize(r, source(bytes, verifierFailure = true))
+            }
+            assertThrows(IllegalStateException::class.java) {
+                AndroidReceiptFiles(dir).finalize(r, source(bytes, authorization = { false }))
+            }
+            assertThrows(java.io.IOException::class.java) {
+                AndroidReceiptFiles(dir).finalize(r, source(bytes, authorization = { throw java.io.IOException("database unavailable") }))
+            }
+            assertEquals(inode, Os.lstat(final.path).st_ino)
+            assertArrayEquals(bytes, final.readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun revokedCapabilityBeforeExclusiveCreateLeavesNoCandidate() {
+        val dir = root()
+        try {
+            val bytes = byteArrayOf(1, 2, 3); val r = receipt(3)
+            var pending = true
+            val sink = AndroidReceiptFiles(dir) { if (it == "create") pending = false }
+            assertThrows(IllegalStateException::class.java) {
+                sink.finalize(r, source(bytes, authorization = { pending }))
+            }
+            assertFalse(File(dir, "received/receipt-${r.receiptToken}.bin").exists())
+        } finally { dir.deleteRecursively() }
     }
 
     @Test fun regularFileInDirectorySlotIsRejectedWithoutModifyingIt() {
@@ -148,6 +196,49 @@ class ReceiptFilesystemTest {
             assertEquals("not a directory", impostor.readText())
             assertFalse(AndroidReceiptFiles(dir).isDefinitelyMissing(File(impostor, "absent").path))
         } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun backupNamespaceCannotOverwriteTransportAndCannotRepairShortBackup() {
+        val dir = root()
+        try {
+            val r = receipt(3); val liveBytes = byteArrayOf(1, 2, 3); val backupBytes = byteArrayOf(9, 9, 9)
+            val live = File(AndroidReceiptFiles(dir).finalize(r, source(liveBytes)))
+            val backupSink = AndroidReceiptFiles(dir, AndroidReceiptFiles.Namespace.Backup)
+            val backup = File(backupSink.finalize(r, source(backupBytes, authorization = { replacing -> !replacing })))
+            assertNotEquals(live.path, backup.path)
+            assertArrayEquals(liveBytes, live.readBytes())
+            assertArrayEquals(backupBytes, backup.readBytes())
+            backup.writeBytes(byteArrayOf(9))
+            val inode = Os.lstat(backup.path).st_ino
+            assertThrows(IllegalStateException::class.java) {
+                backupSink.finalize(r, source(backupBytes, authorization = { replacing -> !replacing }))
+            }
+            assertEquals(inode, Os.lstat(backup.path).st_ino)
+            assertArrayEquals(byteArrayOf(9), backup.readBytes())
+            assertArrayEquals(liveBytes, live.readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun legacyTrustedRootAliasMapsWithoutResolvingDescendantSymlinks() {
+        val dir = root(); val outside = root()
+        try {
+            val lexical = File(context.cacheDir, dir.name)
+            val paths = TrustedReceivedPaths(lexical, dir)
+            val sink = AndroidReceiptFiles(dir)
+            File(dir, "received").mkdir()
+            val actual = File(dir, "received/legacy.bin").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+            val oldPath = File(lexical, "received/legacy.bin").absolutePath
+            // Existing legacy paths still open/read for media replay; no path rewrite in DB.
+            assertArrayEquals(byteArrayOf(1, 2, 3), File(oldPath).readBytes())
+            val mapped = requireNotNull(paths.map(oldPath))
+            assertFalse(sink.isDefinitelyMissing(mapped))
+            Os.remove(actual.path)
+            assertTrue(sink.isDefinitelyMissing(mapped))
+            Os.symlink(outside.path, File(dir, "received/sub").path)
+            assertFalse(sink.isDefinitelyMissing(requireNotNull(paths.map(File(lexical, "received/sub/absent").path))))
+            assertFalse(sink.isDefinitelyMissing(requireNotNull(paths.map(File(lexical, "received/missing-parent/absent").path))))
+            assertNull(paths.map(File(lexical.parentFile, lexical.name + "-foreign/received/absent").path))
+        } finally { dir.deleteRecursively(); outside.deleteRecursively() }
     }
 
 }

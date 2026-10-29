@@ -11,12 +11,14 @@ import Glibc
 public final class DurableReceivedFiles: FileSink {
     public enum Checkpoint: Equatable { case beforeWrite, beforeReadback, beforeFileSync, beforeRename, afterRename, beforeUnlink, beforeDirectorySync }
     private let root: URL
+    private let trustedLexicalRoot: String?
     private let checkpoint: (Checkpoint) throws -> Void
     private let prepareRoot: (URL) throws -> Void
 
-    public init(root: URL, checkpoint: @escaping (Checkpoint) throws -> Void = { _ in },
+    public init(root: URL, trustedLexicalRoot: String? = nil, checkpoint: @escaping (Checkpoint) throws -> Void = { _ in },
                 prepareRoot: @escaping (URL) throws -> Void = { _ in }) {
         self.root = root
+        self.trustedLexicalRoot = trustedLexicalRoot
         self.checkpoint = checkpoint
         self.prepareRoot = prepareRoot
     }
@@ -204,9 +206,29 @@ public final class DurableReceivedFiles: FileSink {
         return finalPath
     }
 
-    public func isDefinitelyMissing(_ path: String) throws -> Bool {
-        guard path.hasPrefix(root.path + "/") else { throw invalid() }
+    /// Compatibility for paths emitted by the previous client. The optional alias
+    /// must come from the current OS container, never persisted/peer input.
+    private func physicalReadPath(_ path: String) throws -> String {
         _ = try components(path)
+        if path.hasPrefix(root.path + "/") { return path }
+        guard let alias = trustedLexicalRoot else { throw invalid() }
+        _ = try components(alias)
+        guard path.hasPrefix(alias + "/") else { throw invalid() }
+        let relative = String(path.dropFirst(alias.count + 1))
+        guard !relative.isEmpty else { throw invalid() }
+        // components(path) already rejected empty, dot, parent and NUL segments.
+        let physical = root.path + "/" + relative
+        _ = try components(physical)
+        return physical
+    }
+
+    public func validatedPathForOpening(_ path: String) throws -> String? {
+        let physical = try physicalReadPath(path)
+        return try isDefinitelyMissing(physical) ? nil : physical
+    }
+
+    public func isDefinitelyMissing(_ path: String) throws -> Bool {
+        let path = try physicalReadPath(path)
         let url = URL(fileURLWithPath: path)
         let parentPath = url.deletingLastPathComponent().path
         let parent = try directory(parentPath, create: false)
@@ -257,6 +279,7 @@ public final class DurableReceivedFiles: FileSink {
     }
 
     public func readForResend(_ path: String) throws -> Data? {
+        let path = try physicalReadPath(path)
         if try isDefinitelyMissing(path) { return nil }
         let url = URL(fileURLWithPath: path)
         let dir = try directory(url.deletingLastPathComponent().path, create: false)

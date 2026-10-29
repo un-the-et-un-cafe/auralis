@@ -20,6 +20,7 @@ class ReceiptFinalizationTest {
         var pending = true
         var state = "Finalizing"
         var path: String? = null
+        var beforeCommit: (() -> Unit)? = null
         var commits = 0
         var retryFails = false
         var commitFails = false
@@ -48,6 +49,7 @@ class ReceiptFinalizationTest {
         }
         override fun commitReceivedFile(receiptToken: String, localPath: String) {
             check(pending && receiptToken == receipt.receiptToken)
+            beforeCommit?.invoke()
             if (commitFails) error("commit unavailable")
             commits++; pending = false; state = "Received"; path = localPath
         }
@@ -199,6 +201,30 @@ class ReceiptFinalizationTest {
         assertEquals(1, c.commits); assertFalse(c.pending)
         assertTrue(r.receiveFailure.value)
         assertEquals("Received", c.state)
+    }
+
+    @Test fun candidatePathIsNeverExposedBeforeSuccessfulDatabaseCommit() {
+        val c = Core(); val r = repo(c)
+        var candidateCreated = false
+        fun assertUnpublished() {
+            assertEquals(FileAttachment.State.Finalizing, message(r).file!!.state)
+            assertNull(message(r).file!!.localPath)
+        }
+        r.receiptSink = DurableReceiptSink { _, source ->
+            assertTrue(source.authorizeWrite(replacingIncomplete = false))
+            assertTrue(source.authorizeWrite(replacingIncomplete = true))
+            candidateCreated = true
+            assertUnpublished()
+            "/private/candidate"
+        }
+        c.beforeCommit = { assertTrue(candidateCreated); assertUnpublished() }
+        c.commitFails = true
+        r.onFileReceived(c.receipt)
+        assertTrue(candidateCreated); assertTrue(c.pending); assertUnpublished()
+        c.commitFails = false
+        assertTrue(r.retryFileFinalization().get())
+        assertEquals(FileAttachment.State.Received, message(r).file!!.state)
+        assertEquals("/private/candidate", message(r).file!!.localPath)
     }
 
 }

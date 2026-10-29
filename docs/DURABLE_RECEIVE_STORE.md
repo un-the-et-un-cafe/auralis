@@ -70,13 +70,42 @@ remains volatile. Metadata receipts expose only token-bound 64 KiB block reads.
 
 Native repositories serialize finalization, cancellation and identity changes
 away from the UI thread. Generation-specific private paths use no-follow
-checks/descriptor ownership. They write and verify the exact length/BLAKE3 hash,
-fsync the temporary file, then publish by **atomic no-overwrite hard link** on
-the same filesystem, unlink only the owned temporary inode, and fsync the
-private directory before committing the receipt path. EEXIST never overwrites:
-the existing generation must verify. A crash between link and unlink is recovered
-only when the pair has the expected inode relationship; ambiguous paths fail
-closed. Unsupported link/fsync operations retain the encrypted spool.
+checks/descriptor ownership. Both platforms require exact length/BLAKE3 readback,
+file fsync and directory fsync before the token-bound database commit. The
+**database commit is the atomic visibility boundary**: Pending/Finalizing files
+have no published history path and must not be opened/shared by the UI.
+
+Android app SELinux policy denies hard links. Android therefore creates its
+private generation file with O_EXCL and writes it before database publication;
+that private file can exist partially while the receipt remains Pending. Restart
+verifies/reuses a full-size file without overwriting it. Only a positively short,
+regular, single-link same-generation file may be repaired after a fresh exact
+Pending capability check and pinned-directory/dev+inode validation under the
+repository's serialized mutation lock. Full-size hash mismatch, oversize,
+unknown read/verification/core-state errors and uncertain ownership preserve
+both existing file and encrypted spool. A full-size corrupt candidate is an
+explicit recovery limitation: Retry does not overwrite it, and cancellation
+retains the Failed tombstone rather than authorizing same-ID refetch. The sender
+can send a new attachment/new message ID; a dedicated user-authorized generation
+retirement/recovery action remains separate work. New creation never replaces
+an existing file. This is not a filesystem atomic-rename claim or protection against a
+hostile process sharing the app UID.
+
+iOS retains its same-filesystem no-overwrite hard-link publication, owned-temp
+unlink and directory sync before database commit. EEXIST verifies rather than
+overwrites; crash-pair recovery requires the expected inode relationship.
+Trusted OS container anchors alone use POSIX realpath; injected roots and all
+appended descendants retain no-follow checks. Unsupported filesystem operations
+on either platform preserve the durable receipt rather than bypassing policy.
+
+For existing media from older app versions, the platform wrapper may map only
+its current trusted OS lexical app-storage prefix to the pinned physical root.
+The relative suffix must be nonempty and component-valid; traversal, foreign
+containers, prefix lookalikes and descendant symlinks remain refused. Persisted
+paths are never passed wholesale to realpath, injected roots are not normalized,
+and the original database path remains unchanged for missing-path CAS. Unknown
+storage/access failures are never interpreted as absence. Backup-file writes
+use a structurally separate namespace and cannot repair/overwrite receipt files.
 
 Cancellation first commits durable Failed state, then removes only that token's
 private files and syncs the directory. Schema v5 adds a cleanup pagination index

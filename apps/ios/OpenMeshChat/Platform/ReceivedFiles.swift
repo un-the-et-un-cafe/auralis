@@ -16,13 +16,28 @@ final class ReceivedFiles: FileSink {
         // Only the OS home anchor is resolved. A supplied root is deliberately
         // passed unchanged, and all appended descendants remain no-follow.
         let root: URL
-        if let suppliedRoot { root = suppliedRoot }
+        let legacyRoot: String?
+        if let suppliedRoot { root = suppliedRoot; legacyRoot = nil }
         else {
             let anchor = try DurableReceivedFiles.physicalTrustedDirectory(
                 URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
             root = anchor.appendingPathComponent("Library/Application Support/received", isDirectory: true)
+            // Match only the current OS-provided lexical root used by the old
+            // client. Verify its trusted home anchor belongs to this container;
+            // never resolve any persisted path or app-controlled descendant.
+            let suffix = "/Library/Application Support/received"
+            guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                throw CoreError.storageUnavailable("application support directory unavailable")
+            }
+            let lexical = support.appendingPathComponent("received", isDirectory: true).path
+            guard lexical.hasSuffix(suffix) else { throw CoreError.storageUnavailable("unexpected application support root") }
+            let lexicalHome = String(lexical.dropLast(suffix.count))
+            guard try DurableReceivedFiles.physicalTrustedDirectory(URL(fileURLWithPath: lexicalHome)).path == anchor.path else {
+                throw CoreError.storageUnavailable("application support container changed")
+            }
+            legacyRoot = lexical
         }
-        let resolved = DurableReceivedFiles(root: root, prepareRoot: { directory in
+        let resolved = DurableReceivedFiles(root: root, trustedLexicalRoot: legacyRoot, prepareRoot: { directory in
             var directory = directory
             var values = URLResourceValues(); values.isExcludedFromBackup = true
             try directory.setResourceValues(values)
@@ -35,6 +50,7 @@ final class ReceivedFiles: FileSink {
     }
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { try resolvedSink().discardCancelled(receipt) }
     func readForResend(_ path: String) throws -> Data? { try resolvedSink().readForResend(path) }
+    func validatedPathForOpening(_ path: String) throws -> String? { try resolvedSink().validatedPathForOpening(path) }
     func isDefinitelyMissing(_ path: String) throws -> Bool { try resolvedSink().isDefinitelyMissing(path) }
     // Backup restoration is separately verified by Rust. It must not reuse a
     // pending receipt ID; the legacy core setter enforces that boundary.

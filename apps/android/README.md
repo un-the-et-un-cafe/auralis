@@ -216,19 +216,38 @@ UI cancel/retry dispatch runs off main. Store/identity startup returns before re
 The repository monitor also orders cancellation and identity changes with writers. BLE
 callbacks may wait for that monitor; progress is not queued into an unbounded work list.
 
-The private sink streams 64 KiB blocks, verifies length and Rust BLAKE3 on readback, syncs
-the file, atomically publishes a generation-specific final name, syncs the directory,
-and only then commits the receipt in Rust. Android's public `Os` API lacks no-replace
-rename, so same-filesystem `link(temp, final)` plus unlink of the owned temp implements
-no-overwrite publication. EEXIST requires full verification, never replacement. A crash
-between link and unlink is recoverable only when the exact generation's two regular
-names have matching device/inode and exactly two links; foreign links fail closed.
-Unsupported filesystem operations leave the sealed receipt available for retry.
+The private sink exclusively creates a generation-specific private candidate with
+`O_EXCL|O_NOFOLLOW`, streams 64 KiB blocks, verifies length and Rust BLAKE3 on readback,
+syncs the file and directory, and only then commits the receipt in Rust. **The database
+commit is Android's publication boundary**, not a filesystem rename. Before commit the
+candidate has no Received/localPath/UI/FileProvider exposure. Android SELinux denies
+hardlink creation for ordinary app data; this implementation does not retry that denied
+operation through alternate paths or weaken permissions.
+
+A complete existing candidate must verify and sync without rewriting. Only a positively
+short single-link regular candidate may be repaired, after repeated exact pending-token
+and metadata authorization plus device/inode checks under the serialized repository
+lifecycle boundary. Legacy backup imports cannot authorize this repair and use a fixed, disjoint `backup-`
+filename namespace rather than transport `receipt-` paths. Unknown read,
+verification, storage or capability errors preserve the candidate and sealed spool.
+Full-sized corrupt or oversized candidates refuse automatic repair. **This remains a
+v1 recovery/UI blocker:** retry cannot repair a torn full-size candidate, and cancellation
+does not reopen the same transfer ID because its tombstone remains protective. The
+available remedy is explicit cancellation and a partner sending a new transfer ID; a
+dedicated user-authorized repair API must be designed separately after this checkpoint. Random generation names
+and exclusive private app mutation are the ownership boundary, not a guarantee against
+malicious code running with the same application UID. Any failed commit retains the
+sealed receipt, allowing a complete valid candidate to be verified and committed later.
 
 All file operations use pinned private directory descriptors and no-follow regular-file
 opens. Missing-file transitions require a positively observed ENOENT with checked,
 unchanged non-symlink ancestors; permissions/protected storage and uncertain paths do
-not imply missing. Cancellation discards only the matching receipt generation, after
+not imply missing. The production wrapper recognizes only the exact current
+OS-provided lexical app-files root (for legacy `/data/user/0` paths), mapping that prefix
+to the current trusted physical root while leaving the suffix for strict no-follow
+checks. Persisted full paths are never canonicalized; foreign containers, lookalike
+prefixes and traversal are refused. The original stored path is retained for the core's
+compare-and-set missing transition. Cancellation discards only the matching receipt generation, after
 core cancellation succeeds. Each recovery pass also processes one bounded fair page of
 up to 32 durable cancelled-generation cleanup obligations. Only successful exact-path
 discard plus directory sync permits cleanup acknowledgement; disk/ACK failures leave
@@ -244,7 +263,7 @@ this is not a physical SQLite-size or power-loss guarantee, nor a peer delivery 
 
 Local focused JVM checks cover repository ordering/retry/cancellation and recovery-gate
 coalescing. `ReceiptFilesystemTest` exercises real Android syscalls and injected
-write/sync/publication errors; `RustBridgeTest` exercises generated bindings and the real
+write/sync/exclusive-create errors; `RustBridgeTest` exercises generated bindings and the real
 Rust verifier. These new Android SDK/emulator tests are **not yet run** at this private
 WIP checkpoint. Real-device crash/protected-storage and Hopla interoperability checks
 remain separate release gates; source review or JVM fakes do not establish them.

@@ -10,25 +10,45 @@ import java.io.FileDescriptor
 import java.io.IOException
 
 /** All child operations use a pinned private directory descriptor, never a peer filename. */
-internal class AndroidReceiptFiles(private val privateRoot: File, private val beforeOperation: (String) -> Unit = {}) : DurableReceiptSink {
+internal class AndroidReceiptFiles(
+    private val privateRoot: File,
+    private val namespace: Namespace = Namespace.Transport,
+    private val beforeOperation: (String) -> Unit = {},
+) : DurableReceiptSink {
+    internal enum class Namespace { Transport, Backup }
+    private fun fileName(receipt: ReceiveReceiptInfo) = when (namespace) {
+        Namespace.Transport -> "receipt-${receipt.receiptToken}.bin"
+        Namespace.Backup -> "backup-${receipt.receiptToken}.bin"
+    }
     override fun finalize(receipt: ReceiveReceiptInfo, source: ReceiptSource): String = withDirectory { dir ->
         validate(receipt)
-        val name = "receipt-${receipt.receiptToken}.bin"
-        val temporary = "$name.part"
-        if (dir.stat(name) != null) {
-            recoverPublishedPair(dir, temporary, name, receipt, source)
-            verify(dir, name, receipt, source)
+        val name = fileName(receipt)
+        check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+        val existing = dir.stat(name)
+        if (existing != null) {
+            check(existing.st_nlink == 1L) { "receipt has foreign hard links" }
+            if (existing.st_size == receipt.size) {
+                // A complete candidate is never rewritten, even when verification fails.
+                verify(dir, name, receipt, source)
+                beforeOperation("directory-sync")
+                dir.sync()
+                check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+                return@withDirectory dir.checkedPath(name)
+            }
+            check(existing.st_size < receipt.size) { "receipt exceeds expected size" }
+            // Only a positively short, owned generation can be repaired. Read/verifier/
+            // permission failures never enter this path. Legacy backup sources refuse it.
+            check(source.authorizeWrite(replacingIncomplete = true)) { "incomplete receipt repair not authorized" }
+            beforeOperation("remove-incomplete")
+            check(source.authorizeWrite(replacingIncomplete = true)) { "receipt no longer pending" }
+            dir.removeMatching(name, existing)
             dir.sync()
-            return@withDirectory dir.checkedPath(name)
         }
-        // Only this exact generation's single-link regular temp may be discarded.
-        dir.stat(temporary)?.let { previous ->
-            check(previous.st_nlink == 1L)
-            dir.removeMatching(temporary, previous)
-        }
+        check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
         beforeOperation("create")
-        val descriptor = dir.open(temporary, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL)
-        val writtenIdentity = Os.fstat(descriptor)
+        check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+        val descriptor = dir.open(name, OsConstants.O_WRONLY or OsConstants.O_CREAT or OsConstants.O_EXCL)
+        val writtenIdentity = try { Os.fstat(descriptor) } catch (e: Exception) { Os.close(descriptor); throw e }
         try {
             var written = 0L
             for (index in 0 until receipt.blockCount) {
@@ -50,64 +70,28 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
             beforeOperation("file-sync")
             Os.fsync(descriptor)
         } finally { Os.close(descriptor) }
-        verify(dir, temporary, receipt, source)
-        dir.assertPinned()
-        // Atomic no-replace publication on the same filesystem. Android Os has no
-        // renameat2(RENAME_NOREPLACE); link fails EEXIST instead of overwriting.
-        beforeOperation("publish")
-        try { Os.link(dir.child(temporary), dir.child(name)) }
-        catch (e: ErrnoException) {
-            if (e.errno != OsConstants.EEXIST) throw e
-            recoverPublishedPair(dir, temporary, name, receipt, source)
-            verify(dir, name, receipt, source)
-            dir.stat(temporary)?.let { dir.removeMatching(temporary, writtenIdentity) }
-            beforeOperation("directory-sync")
-            dir.sync()
-            return@withDirectory dir.checkedPath(name)
-        }
-        beforeOperation("after-link")
-        val published = requireNotNull(dir.stat(name))
-        check(published.st_dev == writtenIdentity.st_dev && published.st_ino == writtenIdentity.st_ino)
-        beforeOperation("unlink")
-        dir.removeMatching(temporary, writtenIdentity)
+        val current = requireNotNull(dir.stat(name))
+        check(current.st_dev == writtenIdentity.st_dev && current.st_ino == writtenIdentity.st_ino)
+        verify(dir, name, receipt, source)
         beforeOperation("directory-sync")
         dir.sync()
-        verify(dir, name, receipt, source)
+        check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+        // File creation is private staging, not publication. Only the subsequent
+        // token-bound database commit exposes Received/localPath to UI/FileProvider.
         dir.checkedPath(name)
     }
 
     override fun discard(receipt: ReceiveReceiptInfo) = withDirectory { dir ->
         validate(receipt)
-        val name = "receipt-${receipt.receiptToken}.bin"
-        val temporary = "$name.part"
-        val final = dir.stat(name)
-        if (final != null && final.st_nlink != 1L) {
-            val part = requireNotNull(dir.stat(temporary))
-            check(final.st_nlink == 2L && part.st_nlink == 2L && final.st_dev == part.st_dev && final.st_ino == part.st_ino)
-            dir.removeMatching(temporary, part)
-        }
-        for (owned in listOf(temporary, name)) {
+        val name = fileName(receipt)
+        // Also clean pre-publication files from the earlier unpublished temp scheme.
+        for (owned in listOf("$name.part", name)) {
             dir.stat(owned)?.let { identity ->
                 check(identity.st_nlink == 1L)
                 dir.removeMatching(owned, identity)
             }
         }
         dir.sync()
-    }
-
-    /** A crash after link but before unlink leaves exactly two names for one inode. */
-    private fun recoverPublishedPair(dir: Directory, temporary: String, name: String, receipt: ReceiveReceiptInfo, source: ReceiptSource) {
-        val final = requireNotNull(dir.stat(name))
-        if (final.st_nlink == 1L) return
-        check(final.st_nlink == 2L) { "unexpected final hard links" }
-        val part = requireNotNull(dir.stat(temporary))
-        check(part.st_dev == final.st_dev && part.st_ino == final.st_ino && part.st_nlink == 2L) { "unowned publication pair" }
-        verify(dir, name, receipt, source, allowPublicationPair = true)
-        val checkedFinal = requireNotNull(dir.stat(name))
-        check(checkedFinal.st_dev == part.st_dev && checkedFinal.st_ino == part.st_ino && checkedFinal.st_nlink == 2L)
-        dir.removeMatching(temporary, part)
-        dir.sync()
-        check(requireNotNull(dir.stat(name)).st_nlink == 1L)
     }
 
     override fun isDefinitelyMissing(path: String): Boolean = try {
@@ -137,8 +121,8 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
         require(r.size in 0..50_000_000 && r.blockCount.toLong() == (r.size + 65_535) / 65_536) { "invalid receipt dimensions" }
     }
 
-    private fun verify(dir: Directory, name: String, r: ReceiveReceiptInfo, source: ReceiptSource, allowPublicationPair: Boolean = false) {
-        val fd = dir.open(name, OsConstants.O_RDONLY, allowPublicationPair)
+    private fun verify(dir: Directory, name: String, r: ReceiveReceiptInfo, source: ReceiptSource) {
+        val fd = dir.open(name, OsConstants.O_RDONLY)
         try {
             check(Os.fstat(fd).st_size == r.size) { "received file length mismatch" }
             source.verifier().use { verifier ->
@@ -146,6 +130,7 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
                 try {
                     var total = 0L
                     while (true) {
+                        beforeOperation("read")
                         val count = Os.read(fd, buffer, 0, buffer.size)
                         if (count == 0) break
                         check(count > 0 && total + count <= r.size) { "invalid receipt readback" }
@@ -184,7 +169,7 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
 
     private class Directory(val path: File, descriptor: FileDescriptor = openDirectoryDescriptor(path.absolutePath)) : AutoCloseable {
         private val handle = try { ParcelFileDescriptor.dup(descriptor) } finally { Os.close(descriptor) }
-        private val identity = Os.fstat(handle.fileDescriptor)
+        private val identity = try { Os.fstat(handle.fileDescriptor) } catch (e: Exception) { handle.close(); throw e }
         fun child(name: String): String {
             require(!name.contains('/') && name != "." && name != "..")
             return "/proc/self/fd/${handle.fd}/$name"
@@ -204,10 +189,10 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
             assertPinned()
             null
         }
-        fun open(name: String, flags: Int, allowPublicationPair: Boolean = false): FileDescriptor {
+        fun open(name: String, flags: Int): FileDescriptor {
             assertPinned()
             val fd = Os.open(child(name), flags or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 384)
-            try { val stat = Os.fstat(fd); check(OsConstants.S_ISREG(stat.st_mode) && (stat.st_nlink == 1L || (allowPublicationPair && stat.st_nlink == 2L))) { "receipt is not private regular file" }; return fd }
+            try { val stat = Os.fstat(fd); check(OsConstants.S_ISREG(stat.st_mode) && stat.st_nlink == 1L) { "receipt is not private regular file" }; return fd }
             catch (e: Exception) { Os.close(fd); throw e }
         }
         fun removeMatching(name: String, identity: android.system.StructStat) {

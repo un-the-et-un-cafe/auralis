@@ -527,8 +527,11 @@ class MeshRepository(
             val source = object : chat.omcp.app.files.ReceiptSource {
                 override fun readBlock(index: Int) = core.readReceivedFileBlock(receipt.receiptToken, index)
                 override fun verifier() = core.receivedFileVerifier(receipt.receiptToken)
+                override fun authorizeWrite(replacingIncomplete: Boolean) =
+                    core.pendingReceivedFiles().any { it == receipt }
             }
             val path = sink.finalize(receipt, source)
+            check(core.pendingReceivedFiles().any { it == receipt }) { "receipt no longer pending" }
             core.commitReceivedFile(receipt.receiptToken, path)
             loadMessages()
             _receiveFailure.value = false

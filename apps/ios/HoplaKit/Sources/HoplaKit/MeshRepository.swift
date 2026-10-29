@@ -42,10 +42,12 @@ public protocol FileSink: AnyObject {
                   verifier: ReceiveFileVerifier) throws -> String
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws
     func readForResend(_ path: String) throws -> Data?
+    func validatedPathForOpening(_ path: String) throws -> String?
     /// True only for an absent leaf below verified no-follow ancestors.
     func isDefinitelyMissing(_ path: String) throws -> Bool
 }
 public extension FileSink {
+    func validatedPathForOpening(_ path: String) throws -> String? { throw CoreError.storageUnavailable("safe file opening unavailable") }
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { throw CoreError.storageUnavailable("receipt cleanup unavailable") }
     func readForResend(_ path: String) throws -> Data? { throw CoreError.storageUnavailable("safe file reader unavailable") }
     func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data,
@@ -576,7 +578,7 @@ public final class MeshRepository {
                     if try core.markReceivedFileMissing(transferId, expectedPath: path) { publishReceiveState(transferId, error: nil) }
                     return nil
                 }
-                return path
+                return try sink.validatedPathForOpening(path)
             } catch { return nil } // Protection errors and symlinks are not Missing or safe to open.
         }
     }

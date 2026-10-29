@@ -33,6 +33,29 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
     }
 
+    #if !canImport(HoplaRust)
+    func testLegacyOSApplicationSupportPathStillWorksWithoutRewritingIt() throws {
+        let support = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+        let lexicalRoot = support.appendingPathComponent("received")
+        let directory = lexicalRoot.appendingPathComponent("legacy-test-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let oldPath = directory.appendingPathComponent("old-photo.jpg")
+        try Data([1, 2, 3]).write(to: oldPath)
+        let sink = ReceivedFiles()
+        XCTAssertEqual(try sink.readForResend(oldPath.path), Data([1, 2, 3]))
+        let physical = try XCTUnwrap(sink.validatedPathForOpening(oldPath.path))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: physical)), Data([1, 2, 3]))
+        try FileManager.default.removeItem(at: oldPath)
+        XCTAssertTrue(try sink.isDefinitelyMissing(oldPath.path))
+        XCTAssertNil(try sink.validatedPathForOpening(oldPath.path))
+        // Same lexical base does not grant trust to an attacker-controlled leaf.
+        try FileManager.default.createSymbolicLink(at: oldPath, withDestinationURL: directory.appendingPathComponent("absent"))
+        XCTAssertThrowsError(try sink.isDefinitelyMissing(oldPath.path))
+        XCTAssertThrowsError(try sink.readForResend(oldPath.path))
+    }
+    #endif
+
     func node(_ name: String) throws -> (RustOmcpCore, MeshRepository) {
         let core = RustOmcpCore()
         let repo = MeshRepository(core: core, store: InMemoryAppStore())

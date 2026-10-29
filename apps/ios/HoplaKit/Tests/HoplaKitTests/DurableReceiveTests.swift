@@ -1,4 +1,9 @@
 import XCTest
+#if canImport(Darwin)
+import Darwin
+#else
+import Glibc
+#endif
 @testable import HoplaKit
 
 final class DurableReceiveTests: XCTestCase {
@@ -285,6 +290,97 @@ final class DurableReceiveTests: XCTestCase {
         XCTAssertEqual(restarted.messages[r.contactId]?.first?.file?.state, .failed)
         restarted.onFileReceived(r)
         XCTAssertEqual(restarted.messages[r.contactId]?.first?.file?.state, .failed)
+    }
+
+    func testLegacyLexicalRootReadsOpensAndUsesOriginalMissingCAS() throws {
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let alias = "/var/mobile/Containers/Data/Application/current/Library/Application Support/received"
+        let parent = root.appendingPathComponent("old-transfer")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+        let physical = parent.appendingPathComponent("photo.jpg")
+        let original = alias + "/old-transfer/photo.jpg"
+        let (repo, core, r, bytes) = try fixture(size: 3)
+        try bytes.write(to: physical)
+        try core.commitReceivedFile(r.receiptToken, path: original)
+        let sink = DurableReceivedFiles(root: root, trustedLexicalRoot: alias)
+        repo.fileSink = sink
+        XCTAssertEqual(try sink.readForResend(original), bytes)
+        XCTAssertEqual(repo.receivedFileForOpening(r.transferId, path: original), physical.path)
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.localPath, original)
+        // An unavailable/non-directory ancestor must not retire the old path.
+        let moved = root.appendingPathComponent("moved")
+        try FileManager.default.moveItem(at: parent, to: moved)
+        try Data([9]).write(to: parent)
+        XCTAssertThrowsError(try sink.isDefinitelyMissing(original))
+        XCTAssertNil(repo.receivedFileForOpening(r.transferId, path: original))
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.state, .received)
+        try FileManager.default.removeItem(at: parent)
+        try FileManager.default.moveItem(at: moved, to: parent)
+        try FileManager.default.removeItem(at: physical)
+        XCTAssertTrue(try sink.isDefinitelyMissing(original))
+        XCTAssertNil(try sink.readForResend(original))
+        XCTAssertNil(repo.receivedFileForOpening(r.transferId, path: original))
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.state, .missing,
+                       "CAS must use original DB spelling, not mapped physical path")
+    }
+
+    func testLegacyMappingRejectsForeignTraversalLookalikesAndSymlinkDescendants() throws {
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let alias = "/var/mobile/Containers/Data/Application/current/Library/Application Support/received"
+        let sink = DurableReceivedFiles(root: root, trustedLexicalRoot: alias)
+        for path in [alias, alias + "/", alias + "-other/file", alias + "/../file", alias + "/./file",
+                     alias + "//file", alias + "/file\0suffix", alias.replacingOccurrences(of: "/current/", with: "/foreign/") + "/file"] {
+            XCTAssertThrowsError(try sink.isDefinitelyMissing(path), path)
+            XCTAssertThrowsError(try sink.readForResend(path), path)
+            XCTAssertThrowsError(try sink.validatedPathForOpening(path), path)
+        }
+        let outside = root.appendingPathComponent("outside")
+        try Data([1]).write(to: outside)
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        XCTAssertThrowsError(try sink.readForResend(alias + "/link"))
+        XCTAssertThrowsError(try sink.validatedPathForOpening(alias + "/link"))
+        XCTAssertThrowsError(try sink.isDefinitelyMissing(alias + "/link/child"))
+        XCTAssertThrowsError(try DurableReceivedFiles(root: root).readForResend(alias + "/outside"),
+                             "arbitrary injected roots must not acquire alias compatibility")
+        XCTAssertEqual(try Data(contentsOf: outside), Data([1]))
+    }
+
+    func testLegacyPermissionErrorDoesNotBecomeMissing() throws {
+        guard getuid() != 0 else { throw XCTSkip("root bypasses directory permission denial") }
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let parent = root.appendingPathComponent("old-transfer")
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+        let alias = "/var/mobile/Containers/Data/Application/current/Library/Application Support/received"
+        let original = alias + "/old-transfer/photo.jpg"
+        let (repo, core, r, bytes) = try fixture(size: 3)
+        try bytes.write(to: parent.appendingPathComponent("photo.jpg"))
+        try core.commitReceivedFile(r.receiptToken, path: original)
+        let sink = DurableReceivedFiles(root: root, trustedLexicalRoot: alias)
+        repo.fileSink = sink
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: parent.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path) }
+        XCTAssertThrowsError(try sink.isDefinitelyMissing(original))
+        XCTAssertThrowsError(try sink.readForResend(original))
+        XCTAssertNil(repo.receivedFileForOpening(r.transferId, path: original))
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.state, .received)
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.localPath, original)
+    }
+
+    func testUnsupportedSinkCannotAuthorizeOpeningOrDowngradeStoredPath() throws {
+        final class UnsupportedSink: FileSink {
+            func save(_ file: ReceivedFileInfo) -> String? { nil }
+        }
+        let (repo, core, r, _) = try fixture(size: 1)
+        let original = "/unverified/path"
+        try core.commitReceivedFile(r.receiptToken, path: original)
+        let sink = UnsupportedSink()
+        repo.fileSink = sink
+        XCTAssertFalse(try sink.isDefinitelyMissing(original)) // Unsupported is not proof of presence.
+        XCTAssertThrowsError(try sink.validatedPathForOpening(original))
+        XCTAssertNil(repo.receivedFileForOpening(r.transferId, path: original))
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.state, .received)
+        XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.localPath, original)
     }
 
 }
