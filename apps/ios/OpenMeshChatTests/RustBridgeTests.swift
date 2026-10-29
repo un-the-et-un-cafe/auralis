@@ -18,6 +18,21 @@ final class RustBridgeTests: XCTestCase {
         #endif
     }
 
+    func testInjectedNativeSinkRootDoesNotResolveChildSymlink() throws {
+        let anchor = try DurableReceivedFiles.physicalTrustedDirectory(FileManager.default.temporaryDirectory)
+        let root = anchor.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        let alias = root.appendingPathComponent("untrusted")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let sink = durableSink(root: alias)
+        XCTAssertNil(sink.save(ReceivedFileInfo(transferId: String(repeating: "a", count: 32),
+            contactId: "", name: "file", mime: "application/octet-stream", bytes: Data([1]))))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
+    }
+
     func node(_ name: String) throws -> (RustOmcpCore, MeshRepository) {
         let core = RustOmcpCore()
         let repo = MeshRepository(core: core, store: InMemoryAppStore())
@@ -158,10 +173,11 @@ final class RustBridgeTests: XCTestCase {
     }
 
     func testDurableReceiptRestoresFromStoreAndFinalizesWithRealVerifier() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = try DurableReceivedFiles.physicalTrustedDirectory(FileManager.default.temporaryDirectory)
+            .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let canonical = root.resolvingSymlinksInPath()
+        let canonical = root
         let db = canonical.appendingPathComponent("store.sqlite").path
         let store = InMemoryAppStore()
         let receiver = RustOmcpCore()
@@ -202,10 +218,11 @@ final class RustBridgeTests: XCTestCase {
         let lb = try cb.openResponderLink()
         try pump(la, lb, try la.start(), into: ra, rb)
         let data = Data((0..<200_000).map { UInt8($0 % 251) })
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = try DurableReceivedFiles.physicalTrustedDirectory(FileManager.default.temporaryDirectory)
+            .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        rb.fileSink = durableSink(root: root.resolvingSymlinksInPath())
+        rb.fileSink = durableSink(root: root)
         let id = try ra.sendFile(bOnA.id, name: "flyer.jpg", mime: "image/jpeg", bytes: data)
         var flushes = 0
         var more = true

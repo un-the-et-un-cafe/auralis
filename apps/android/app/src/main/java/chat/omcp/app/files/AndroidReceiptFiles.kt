@@ -173,7 +173,7 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
             }
             parent.sync()
             parent.assertPinned()
-            val childFd = Os.open(parent.child("received"), OsConstants.O_RDONLY or OsConstants.O_DIRECTORY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+            val childFd = openDirectoryDescriptor(parent.child("received"))
             Directory(File(root, "received"), childFd).use { dir ->
                 parent.assertPinned()
                 dir.assertPinned()
@@ -182,7 +182,7 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
         }
     }
 
-    private class Directory(val path: File, descriptor: FileDescriptor = Os.open(path.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)) : AutoCloseable {
+    private class Directory(val path: File, descriptor: FileDescriptor = openDirectoryDescriptor(path.absolutePath)) : AutoCloseable {
         private val handle = try { ParcelFileDescriptor.dup(descriptor) } finally { Os.close(descriptor) }
         private val identity = Os.fstat(handle.fileDescriptor)
         fun child(name: String): String {
@@ -213,7 +213,9 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
         fun removeMatching(name: String, identity: android.system.StructStat) {
             val current = requireNotNull(stat(name))
             check(current.st_dev == identity.st_dev && current.st_ino == identity.st_ino) { "owned temporary inode changed" }
-            Os.unlink(child(name))
+            // Public API remove(3) unlinks this checked regular file. Paths are private,
+            // generation-specific and all receipt mutations share the repository monitor.
+            Os.remove(child(name))
             assertPinned()
         }
         fun sync() { Os.fsync(handle.fileDescriptor); assertPinned() }
@@ -221,6 +223,17 @@ internal class AndroidReceiptFiles(private val privateRoot: File, private val be
     }
 
     companion object {
+        private fun openDirectoryDescriptor(path: String): FileDescriptor {
+            // O_DIRECTORY is hidden from the public Android SDK. Validate the opened
+            // no-follow descriptor instead; NONBLOCK prevents a raced FIFO from hanging.
+            val fd = Os.open(path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or
+                OsConstants.O_CLOEXEC or OsConstants.O_NONBLOCK, 0)
+            try {
+                check(OsConstants.S_ISDIR(Os.fstat(fd).st_mode)) { "receipt parent is not a directory" }
+                return fd
+            } catch (e: Exception) { Os.close(fd); throw e }
+        }
+
         private fun checkDirectoryChain(path: File) {
             val parts = generateSequence(path.absoluteFile) { it.parentFile }.toList().asReversed()
             for (part in parts) {

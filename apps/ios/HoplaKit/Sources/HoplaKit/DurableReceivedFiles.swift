@@ -21,6 +21,28 @@ public final class DurableReceivedFiles: FileSink {
         self.prepareRoot = prepareRoot
     }
 
+    /// Resolve only a trusted, OS-provided container/temporary-directory anchor.
+    /// Never pass a peer path, an injected sink root, or an app-controlled descendant.
+    /// Foundation's resolvingSymlinksInPath intentionally removes /private on Darwin,
+    /// so it cannot supply a physical path for our subsequent no-follow walk.
+    public static func physicalTrustedDirectory(_ anchor: URL) throws -> URL {
+        guard anchor.isFileURL, anchor.path.hasPrefix("/"), !anchor.path.contains("\0") else {
+            throw CoreError.storageUnavailable("invalid trusted directory anchor")
+        }
+        guard let physical = anchor.path.withCString({ realpath($0, nil) }) else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
+        }
+        defer { free(physical) }
+        let path = String(cString: physical)
+        var info = stat()
+        guard lstat(physical, &info) == 0, info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else {
+            throw CoreError.storageUnavailable("trusted anchor is not a physical directory")
+        }
+        let result = URL(fileURLWithPath: path, isDirectory: true)
+        guard result.path == path else { throw CoreError.storageUnavailable("trusted directory path changed") }
+        return result
+    }
+
     private func failure(_ operation: String) -> Error {
         NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSLocalizedDescriptionKey: operation])
     }

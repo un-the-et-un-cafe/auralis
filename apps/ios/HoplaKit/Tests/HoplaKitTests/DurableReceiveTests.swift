@@ -3,10 +3,33 @@ import XCTest
 
 final class DurableReceiveTests: XCTestCase {
     private func temporaryRoot() throws -> URL {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        return root.resolvingSymlinksInPath()
+        let anchor = try DurableReceivedFiles.physicalTrustedDirectory(FileManager.default.temporaryDirectory)
+        let root = anchor.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        return root
     }
+    func testTrustedAnchorPhysicalPathAndUntrustedChildAliasStayDistinct() throws {
+        #if canImport(Darwin)
+        // Foundation may return /var even after resolving symlinks. Preserve the
+        // physical system anchor instead; the sink itself must still reject /var.
+        let physicalVar = try DurableReceivedFiles.physicalTrustedDirectory(URL(fileURLWithPath: "/var"))
+        XCTAssertEqual(physicalVar.path, "/private/var")
+        #endif
+        let base = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: base) }
+        let target = base.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+        let alias = base.appendingPathComponent("untrusted-child", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        let (repo, core, r, _) = try fixture(size: 1)
+        repo.fileSink = DurableReceivedFiles(root: alias)
+        repo.onFileReceived(r)
+        XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: target.path).isEmpty)
+        repo.fileSink = DurableReceivedFiles(root: target)
+        repo.retryReceivedFiles()
+        XCTAssertTrue(try core.pendingReceivedFiles().isEmpty)
+    }
+
     private func receipt(_ size: Int, peer: String, id: String = String(repeating: "a", count: 32)) -> ReceiveReceiptInfo {
         ReceiveReceiptInfo(transferId: id, contactId: peer, name: "../../private.bin", mime: "application/octet-stream",
             size: UInt64(size), receiptToken: id + String(repeating: "b", count: 64),

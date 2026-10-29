@@ -71,14 +71,14 @@ class ReceiptFilesystemTest {
             assertThrows(Exception::class.java) { sink.finalize(r, source(byteArrayOf(1, 2, 3))) }
             assertFalse(sink.isDefinitelyMissing(File(dir, "received/absent").absolutePath))
             assertTrue(outside.listFiles()!!.isEmpty())
-            Os.unlink(File(dir, "received").absolutePath); File(dir, "received").mkdir()
+            Os.remove(File(dir, "received").absolutePath); File(dir, "received").mkdir()
             val final = File(dir, "received/receipt-${r.receiptToken}.bin")
             val victim = File(outside, "victim").apply { writeText("do not replace") }
             Os.symlink(victim.absolutePath, final.absolutePath)
             assertThrows(Exception::class.java) { sink.finalize(r, source(byteArrayOf(1, 2, 3))) }
             assertEquals("do not replace", victim.readText())
             assertFalse(sink.isDefinitelyMissing(final.absolutePath))
-            Os.unlink(final.absolutePath)
+            Os.remove(final.absolutePath)
             assertTrue(sink.isDefinitelyMissing(final.absolutePath))
             assertFalse(sink.isDefinitelyMissing(File(dir, "received/missing-parent/absent").absolutePath))
         } finally { dir.deleteRecursively(); outside.deleteRecursively() }
@@ -136,6 +136,18 @@ class ReceiptFilesystemTest {
                 assertEquals(if (foreign) 3L else 2L, Os.lstat(final.path).st_nlink)
             } finally { dir.deleteRecursively() }
         }
+    }
+
+    @Test fun regularFileInDirectorySlotIsRejectedWithoutModifyingIt() {
+        val dir = root()
+        try {
+            val impostor = File(dir, "received").apply { writeText("not a directory") }
+            assertThrows(Exception::class.java) {
+                AndroidReceiptFiles(dir).finalize(receipt(3), source(byteArrayOf(1, 2, 3)))
+            }
+            assertEquals("not a directory", impostor.readText())
+            assertFalse(AndroidReceiptFiles(dir).isDefinitelyMissing(File(impostor, "absent").path))
+        } finally { dir.deleteRecursively() }
     }
 
 }
