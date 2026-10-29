@@ -2,14 +2,16 @@ import XCTest
 @testable import HoplaKit
 
 final class PolicyTests: XCTestCase {
-    /// SS1/SS2 policy: secure layer always on, cover in the app switcher and while captured.
-    func testSS_coverPolicy() {
-        XCTAssertTrue(ScreenCapturePolicy.secureLayerAlwaysOn)
+    func testPrivacyCoverMatrixAndHonestScreenshotBoundary() {
+        XCTAssertFalse(ScreenCapturePolicy.preventsOrdinaryScreenshots)
         XCTAssertFalse(ScreenCapturePolicy.sendsScreenshotNotice)
-        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .active, isCaptured: false), .none)
-        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .inactive, isCaptured: false), .appSwitcher)
-        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .background, isCaptured: false), .appSwitcher)
-        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .active, isCaptured: true), .recording)
+        for capture in [CaptureStateKind.unknown, .inactive, .active] {
+            XCTAssertEqual(ScreenCapturePolicy.cover(phase: .inactive, capture: capture), .appSwitcher)
+            XCTAssertEqual(ScreenCapturePolicy.cover(phase: .background, capture: capture), .appSwitcher)
+        }
+        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .active, capture: .unknown), .unavailable)
+        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .active, capture: .inactive), .none)
+        XCTAssertEqual(ScreenCapturePolicy.cover(phase: .active, capture: .active), .recording)
     }
 
     /// GATT values must match Android exactly (reads the Kotlin source when present).

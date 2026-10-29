@@ -29,10 +29,10 @@ intentionally retained.
 | Path | What |
 |------|------|
 | `HoplaKit/` | SwiftPM package, **platform-independent**: models, `OmcpCore` protocol + `FakeOmcpCore`, `MeshRepository`, `OnboardingFlow`, `BackupSettings`, `NotificationPolicy`, `PushPayload`, `ScreenCapturePolicy`, `OmcpGatt`, file/gateway policy, `RetryLimiter`. Builds and tests on Linux. |
-| `OpenMeshChat/` | SwiftUI app target (display name **Auralis**): screens, `RustOmcpCore` (UniFFI adapter), CoreBluetooth transport, CloudKit/Keychain/Drive backup stores, notifications, secure-capture layer. |
+| `OpenMeshChat/` | SwiftUI app target (display name **Auralis**): screens, `RustOmcpCore` (UniFFI adapter), CoreBluetooth transport, CloudKit/Keychain/Drive backup stores, notifications, scene-local privacy covers. |
 | `NotificationService/` | Notification Service Extension for content-free APNs pushes (stub). |
 | `OpenMeshChatTests/` | Real-Rust `RustBridgeTests` plus `AppLifecycleTests` for Keychain update failures, backup deadlines and failed local restore routing. |
-| `OpenMeshChatUITests/` | Real-app onboarding/cancellation/navigation/settings/relaunch smoke on a fresh simulator; secure capture stays enabled. |
+| `OpenMeshChatUITests/` | Real-app onboarding/cancellation/navigation/settings/relaunch smoke on a fresh simulator; privacy covers stay enabled. |
 | `Generated/`, `build/` | git-ignored: `OmcpFFI.swift` bindings and `OmcpFFI.xcframework`. |
 | `scripts/build-rust.sh` | macOS: build `aarch64-apple-ios` + `aarch64-apple-ios-sim` static libs, generate bindings, make the xcframework. |
 | `scripts/verify-linux.sh` | Linux: HoplaKit tests, then HoplaKit + generated bindings + `RustOmcpCore.swift` + `RustBridgeTests` against the host `libomcp_ffi.so`, then `swiftc -parse` of every Swift file. |
@@ -102,10 +102,12 @@ its ordered journey deliberately retains state to check process relaunch. See
 - **Burn after read** entirely through the Rust core (queue with `burn` header, `open_burn` once,
   `close_burn`, `tick_burn` every 250 ms, OPENED receipts). View-once media: "🔥 Photo opened";
   no copy/share/quote; excluded from notifications and search.
-- **No screenshots**: the whole window is re-parented into a secure `UITextField` canvas layer
-  (blank in screenshots, recordings, mirroring), a blurred app-switcher cover when not active, and
-  a cover while `UIScreen.isCaptured`. No screenshot notice. Settings › Privacy has the honest
-  "second camera" copy.
+- **iOS screen privacy — review proposal**: an opaque, scene-local window covers content while
+  inactive/background or when UIKit reports recording/mirroring. It sits above app-owned modal
+  presentations, without private UIKit inspection or layer reparenting. Ordinary screenshots
+  cannot be blocked, and detection/rendering race windows can expose content. No screenshot
+  receipt is sent. See [supported privacy review](../../docs/IOS_SUPPORTED_PRIVACY_REVIEW.md)
+  for the policy change, implementation boundaries and mandatory native/device acceptance gates.
 - **Files**: picker confirm with the 50 MB cap read from `max_file_bytes()` (too-large state before
   the file is read or encrypted). Rust encrypts 64 KiB chunks (`queue_file`); the CoreBluetooth
   transport drains them on write/notify (`more_pending`), pauses on disconnect and resumes on the

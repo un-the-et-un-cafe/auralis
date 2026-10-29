@@ -4,7 +4,7 @@ import UIKit
 import UserNotifications
 
 /// Auralis (protocol: OMCP). Root: onboarding until done, then tabs; the whole window is under
-/// the secure-capture layer with app-switcher and recording covers.
+/// scene-local app-switcher and detected-recording covers, not screenshot prevention.
 @main
 struct OpenMeshChatApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate

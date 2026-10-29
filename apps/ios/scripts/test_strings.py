@@ -61,6 +61,18 @@ class LocalizationTests(unittest.TestCase):
         self.assertIn("Réception non confirmée", french)
         self.assertTrue(all("Bluetooth" in value for value in strings.S["file_state_sent"]))
 
+    def test_ios_privacy_copy_does_not_promise_screenshot_prevention(self):
+        self.assertNotIn("privacy_screens_blocked", strings.S)
+        english, french = strings.S["privacy_screen_limits"]
+        self.assertIn("cannot block ordinary screenshots", english)
+        self.assertIn("before the cover appears", english)
+        self.assertIn("ne peut pas bloquer", french)
+        self.assertIn("avant l’apparition du masque", french)
+        self.assertIn("second camera", strings.S["privacy_second_camera"][0])
+        for values in strings.S.values():
+            self.assertNotIn("always blank", values[0])
+            self.assertNotIn("toujours vides", values[1])
+
     def test_headlines_encode_line_breaks_not_literal_backslash_n(self):
         self.assertIn("\n", strings.S["auralis_welcome_title"][0])
         self.assertEqual(strings.esc('first\n"second"'), 'first\\n\\"second\\"')

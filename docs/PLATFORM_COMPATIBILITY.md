@@ -1,5 +1,9 @@
 # Build-only platform compatibility migration (2026-10-29)
 
+This document records the build-only PR 20 baseline. The separate, unapproved-for-release
+[supported iOS privacy proposal](IOS_SUPPORTED_PRIVACY_REVIEW.md) replaces the capture
+implementation on its isolated review branch; the historical PR 20 results below do not validate it.
+
 Baseline: public main `5e993c0f2e5f2f5e3404955e976f5713f0171402`.
 This is **not a release, signing change, store declaration or v1 readiness claim**.
 Crypto, protocol/wire sources, storage implementation and production iOS

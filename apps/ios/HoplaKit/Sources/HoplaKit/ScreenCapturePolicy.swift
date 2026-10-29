@@ -1,27 +1,28 @@
-/// No screenshots anywhere in Hopla (product decision 5, SS1/SS2). Pure decision logic for the
-/// iOS layers in `SecureCapture.swift`:
-/// - every screen renders inside the secure-capture layer (blank in screenshots/recordings);
-/// - the app switcher snapshot shows a privacy cover (scene not active);
-/// - if `UIScreen.isCaptured` (recording/mirroring) content is hidden behind a cover.
-/// There is no "screenshot taken" notice to the sender.
+/// Supported iOS privacy covers, not screenshot prevention. UIKit reports recording and
+/// mirroring state; an ordinary screenshot notification arrives only after capture.
 public enum ScenePhaseKind { case active, inactive, background }
+public enum CaptureStateKind { case unknown, inactive, active }
 
 public enum CaptureCover: Equatable {
     case none
-    /// Blurred privacy cover for the app switcher.
+    /// Opaque cover while inactive/background, including app-switcher transitions.
     case appSwitcher
-    /// "Screen recording or mirroring is on" cover until capture stops.
     case recording
+    /// Fail closed before the attached scene's capture state has been sampled.
+    case unavailable
 }
 
 public enum ScreenCapturePolicy {
-    /// The secure layer is never turned off.
-    public static let secureLayerAlwaysOn = true
-    /// No screenshot notice is ever sent or shown.
+    public static let preventsOrdinaryScreenshots = false
+    /// No screenshot receipt is sent; no new network or burn semantics.
     public static let sendsScreenshotNotice = false
 
-    public static func cover(phase: ScenePhaseKind, isCaptured: Bool) -> CaptureCover {
-        if isCaptured { return .recording }
-        return phase == .active ? .none : .appSwitcher
+    public static func cover(phase: ScenePhaseKind, capture: CaptureStateKind) -> CaptureCover {
+        guard phase == .active else { return .appSwitcher }
+        switch capture {
+        case .unknown: return .unavailable
+        case .active: return .recording
+        case .inactive: return .none
+        }
     }
 }

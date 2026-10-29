@@ -191,11 +191,12 @@
 "notif_new_message" = "Nouveau message";
 "notif_incoming_call" = "Appel entrant";
 "privacy_title" = "Confidentialité";
-"privacy_row_desc" = "Captures d’écran bloquées";
-"privacy_screens_blocked" = "Les captures et enregistrements d’écran de Auralis sont toujours vides.";
+"privacy_row_desc" = "Confidentialité de l’écran et limites";
+"privacy_screen_limits" = "Sur iOS, Auralis ne peut pas bloquer les captures d’écran ordinaires. Le contenu est masqué lorsque l’app est inactive ou qu’un enregistrement ou une recopie est détecté. Du contenu peut être capturé avant l’apparition du masque.";
 "privacy_second_camera" = "Auralis ne peut pas empêcher quelqu’un de photographier l’écran avec un autre appareil.";
-"capture_cover_title" = "Enregistrement d’écran actif";
-"capture_cover_body" = "Auralis masque vos discussions pendant l’enregistrement ou la recopie de l’écran.";
+"capture_cover_title" = "Enregistrement ou recopie détecté";
+"capture_cover_body" = "Arrêtez l’enregistrement ou la recopie de l’écran pour afficher Auralis. Ce masque ne peut pas effacer le contenu déjà capturé.";
+"privacy_cover_title" = "Auralis · Contenu masqué";
 "about" = "À propos";
 "about_desc" = "Auralis · Basé sur Hopla / OpenMeshChat · OMCP · MIT";
 "backup_title" = "Sauvegarde et restauration";

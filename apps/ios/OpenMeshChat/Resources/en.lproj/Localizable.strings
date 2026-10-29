@@ -191,11 +191,12 @@
 "notif_new_message" = "New message";
 "notif_incoming_call" = "Incoming call";
 "privacy_title" = "Privacy";
-"privacy_row_desc" = "Screenshots are blocked";
-"privacy_screens_blocked" = "Screenshots and screen recordings of Auralis are always blank.";
+"privacy_row_desc" = "Screen privacy and its limits";
+"privacy_screen_limits" = "On iOS, Auralis cannot block ordinary screenshots. It covers content when the app is inactive or when recording or mirroring is detected. Capture may include content before the cover appears.";
 "privacy_second_camera" = "Auralis can’t stop someone photographing the screen with a second camera.";
-"capture_cover_title" = "Screen recording is on";
-"capture_cover_body" = "Auralis hides your chats while the screen is recorded or mirrored.";
+"capture_cover_title" = "Recording or mirroring detected";
+"capture_cover_body" = "Stop screen recording or mirroring to view Auralis. This cover cannot undo content already captured.";
+"privacy_cover_title" = "Auralis · Content hidden";
 "about" = "About";
 "about_desc" = "Auralis · Built on Hopla / OpenMeshChat · OMCP · MIT";
 "backup_title" = "Backup and restore";

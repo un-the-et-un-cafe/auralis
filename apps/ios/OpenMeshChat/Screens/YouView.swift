@@ -88,12 +88,12 @@ struct NotificationSettingsView: View {
     }
 }
 
-/// Settings › Privacy: screenshots are always blocked; honest copy about second cameras.
+/// Settings › Privacy: supported covers and explicit screenshot/camera limitations.
 struct PrivacySettingsView: View {
     var body: some View {
         AuralisSettingsPage {
             AuralisSettingsSection(footer: L("privacy_second_camera")) {
-                Label(L("privacy_screens_blocked"), systemImage: "eye.slash")
+                Label(L("privacy_screen_limits"), systemImage: "eye.slash")
             }
         }
         .navigationTitle(L("privacy_title"))
