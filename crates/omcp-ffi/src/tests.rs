@@ -361,7 +361,14 @@ impl<T: std::fmt::Debug> Single<T> for Vec<T> {
 
 #[test]
 fn icloud_key_backup_roundtrip_and_no_plaintext() {
-    let a = node("Alice");
+    // Synthetic public test fixture, not a user's recovery material. The first
+    // 11 entropy bits encode BIP39 word 485 ("device"). The checksum is generated
+    // by the real encoder rather than constructing an invalid word sequence.
+    let mut entropy = [0xa5; 32];
+    entropy[0] = 0x3c;
+    let phrase = recovery::seed_to_phrase(&entropy).unwrap().to_string();
+    assert_eq!(phrase.split(' ').next(), Some("device"));
+    let a = OmcpNode::from_phrase(phrase.clone(), "Alice".into()).unwrap();
     let b = node("Bob");
     let c = a.add_contact_from_qr(b.qr_payload()).unwrap();
     a.set_verified(c.contact_id.clone(), true).unwrap();
@@ -372,12 +379,19 @@ fn icloud_key_backup_roundtrip_and_no_plaintext() {
         .unwrap();
     let info = backup_info(blob.clone()).unwrap();
     assert!(!info.needs_password);
-    // O2: neither the phrase words nor the key appear in the blob.
-    let phrase = a.recovery_phrase().unwrap();
-    for w in phrase.split(' ').filter(|w| w.len() >= 5) {
-        assert!(!blob.windows(w.len()).any(|x| x == w.as_bytes()));
+    // Individual BIP39 words are not valid confidentiality sentinels: the public
+    // CBOR field "device_hint" contains "device" even when all secrets are sealed.
+    // This fixture deterministically demonstrates why the old word scan failed.
+    assert!(blob
+        .windows(b"device_hint".len())
+        .any(|x| x == b"device_hint"));
+    assert!(blob.windows(b"device".len()).any(|x| x == b"device"));
+    assert_eq!(a.recovery_phrase().unwrap(), phrase);
+    // Check complete secret representations, including the raw entropy that the
+    // format actually encrypts (the mnemonic text is reconstructed on restore).
+    for secret in [phrase.as_bytes(), entropy.as_slice(), key.as_slice()] {
+        assert!(!blob.windows(secret.len()).any(|x| x == secret));
     }
-    assert!(!blob.windows(32).any(|x| x == key.as_slice()));
     let r = open_backup_with_key(blob.clone(), key).unwrap();
     assert_eq!(r.phrase, phrase);
     assert!(r.contacts[0].verified);
