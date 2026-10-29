@@ -66,6 +66,11 @@ jobs:
         run: |
           ./scripts/build-rust.sh
           ./gradlew assembleRelease bundleRelease lintRelease testReleaseUnitTest --no-daemon --console=plain
+      - name: Validate unsigned packages and bundle-derived APK
+        run: |
+          scripts/ci/validate-android-packages.sh \
+            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            apps/android/app/build/outputs/bundle/release/app-release.aab
       - name: Stage packages, dependency resolution and checksums
         run: |
           mkdir -p "$RUNNER_TEMP/auralis-android"
@@ -123,6 +128,10 @@ jobs:
             -archivePath build/Auralis.xcarchive \
             -resultBundlePath build/Auralis-archive.xcresult \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
+      - name: Validate unsigned archive and retain privacy API inventory
+        run: |
+          python3 scripts/ci/check-ios-archive.py apps/ios/build/Auralis.xcarchive \
+            --report apps/ios/build/Privacy/archive-review.json
       - name: Stage archive, bindings, dependency resolution and checksums
         run: |
           mkdir -p "$RUNNER_TEMP/auralis-ios"
@@ -153,6 +162,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: auralis-ios-archive-results-${{ github.sha }}
-          path: apps/ios/build/Auralis-archive.xcresult
+          path: |
+            apps/ios/build/Auralis-archive.xcresult
+            apps/ios/build/Privacy/
+            apps/ios/build/Toolchain/
           if-no-files-found: warn
           retention-days: 14

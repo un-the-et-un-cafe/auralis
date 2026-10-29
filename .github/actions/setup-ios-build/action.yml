@@ -6,9 +6,21 @@ runs:
     - name: Select the reviewed Xcode version
       shell: bash
       run: |
-        DEVELOPER_DIR=/Applications/Xcode_16.4.app/Contents/Developer
+        export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
         test -d "$DEVELOPER_DIR"
+        # Confirm the actual tools, not just a mutable application-directory name.
+        test "$(xcodebuild -version)" = $'Xcode 26.3\nBuild version 17C529'
+        test "$(xcrun --sdk iphoneos --show-sdk-version)" = 26.2
+        test "$(xcrun --sdk iphonesimulator --show-sdk-version)" = 26.2
         echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+        mkdir -p "$GITHUB_WORKSPACE/apps/ios/build/Toolchain"
+        {
+          printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          uname -a
+          xcodebuild -version
+          xcodebuild -showsdks
+          xcrun simctl list runtimes -j
+        } > "$GITHUB_WORKSPACE/apps/ios/build/Toolchain/inventory.txt"
     - name: Install Rust targets and pinned XcodeGen
       shell: bash
       run: |

@@ -42,12 +42,12 @@ runs:
         fi
         mv "$TOOLS/cmdline-tools" "$SDK_CLI"
         SDKMANAGER="$SDK_CLI/bin/sdkmanager"
-        # Ignore only yes's expected SIGPIPE, not sdkmanager failure.
-        set +o pipefail
-        yes | "$SDKMANAGER" --sdk_root="${ANDROID_HOME:?Android SDK is required}" --licenses > /dev/null
-        set -o pipefail
+        # Use the hosted SDK's already accepted licenses only. A genuinely new
+        # license is an approval blocker, never blanket-accepted by this workflow.
         "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-          "platform-tools" "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0"
+          "platform-tools" "ndk;$NDK_VERSION" "platforms;android-36" "build-tools;35.0.0" < /dev/null
+        test -s "$ANDROID_HOME/platforms/android-36/android.jar"
+        test -x "$ANDROID_HOME/build-tools/35.0.0/zipalign"
         test "$(sed -n 's/^Pkg\.Revision[[:space:]]*=[[:space:]]*//p' \
           "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties")" = "$NDK_VERSION"
         # Override both supported aliases: the hosted image can export a different

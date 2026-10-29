@@ -9,7 +9,7 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v13)],
     products: [.library(name: "HoplaKit", targets: ["HoplaKit"])],
     targets: [
-        .target(name: "HoplaKit"),
+        .target(name: "HoplaKit", resources: [.process("PrivacyInfo.xcprivacy")]),
         .testTarget(name: "HoplaKitTests", dependencies: ["HoplaKit"]),
     ]
 )
