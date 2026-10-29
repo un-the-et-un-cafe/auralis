@@ -84,13 +84,14 @@
     {
       "path": "crates/omcp-ffi/src/tests.rs",
       "upstream_sha256": "3fc9835a54f7042f5d474bb539d2481d4d0ee2a2bb80bfbccb29daf5c2190880",
-      "accepted_sha256": "03a3d5f3db0171456514b00f2c3a82da04322a24d2f1bd4dab11da8c07ae765f",
-      "rationale": "Add adversarial bounds, admission cleanup, cancellation, durable ownership, replay and restore/refetch regressions; baseline tests retained.",
+      "accepted_sha256": "985d47ecb55ba3ab069270bf9c1fa791e6f8410fdc89239a8ae033e0364e14dc",
+      "rationale": "Add adversarial bounds, admission cleanup, cancellation, durable ownership, replay and restore/refetch regressions; baseline tests retained. Replace invalid individual-mnemonic-word backup plaintext scan with deterministic public-header collision regression and full secret representation checks; test-only, backup format and cryptography unchanged.",
       "evidence": [
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace (220 tests passed)",
-        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28",
+        "2026-10-29 independent parent review of exact test-only delta on PR14 base; identical backup function exercised against real encrypted export on PR13, dedicated-target 258 Rust tests passed there; exact-head PR14 CI remains required"
       ]
     }
   ]

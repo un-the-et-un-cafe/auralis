@@ -5,13 +5,15 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.getOrNull
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import chat.omcp.app.core.RustOmcpCore
@@ -38,7 +40,9 @@ class AppSmokeTest {
     private fun tab(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
     private fun composer() = compose.onNodeWithTag("message-composer")
     private fun assertDraft(expected: String) = composer().assert(
-        SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString(expected)),
+        SemanticsMatcher("EditableText text equals '$expected'") {
+            it.config.hasExactEditableText(expected)
+        },
     )
 
     private fun recreateThreadWithDraft(expected: String) {
@@ -70,13 +74,23 @@ class AppSmokeTest {
     /** Both AOSP and Google permission controllers, without relying on translated button text. */
     private fun denyPermissions(required: Boolean) {
         val deny = By.res(Pattern.compile(".*:id/permission_deny(?:_and_dont_ask_again)?_button"))
-        var button = device.wait(Until.findObject(deny), if (required) 5_000 else 1_000)
-        if (required) assertNotNull("Expected the real Android permission dialog", button)
-        repeat(3) {
-            button?.click() ?: return@repeat
-            button = device.wait(Until.findObject(deny), 1_000)
+        // Permission-controller windows can be replaced between lookup and click.
+        // Reacquire only stale handles within the original bounded wait; never
+        // retry the smoke test or skip the final denied-permission assertions.
+        fun denyOne(timeoutMs: Long) = clickFreshPermissionButton(
+            timeoutMs = timeoutMs,
+            nowMs = SystemClock::elapsedRealtime,
+            find = { remaining -> device.wait(Until.findObject(deny), remaining) },
+            click = { it.click() },
+        )
+        val firstDenied = denyOne(if (required) 5_000 else 1_000)
+        if (required) assertTrue("Expected the real Android permission dialog", firstDenied)
+        if (firstDenied) {
+            for (dialog in 1..2) {
+                if (!denyOne(1_000)) break
+            }
         }
-        assertNull("Permission dialog did not dismiss", button)
+        assertNull("Permission dialog did not dismiss", device.wait(Until.findObject(deny), 1_000))
         compose.waitForIdle()
         assertFalse(MeshPermissions.hasBle(compose.activity))
     }
@@ -163,5 +177,31 @@ class AppSmokeTest {
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText(text(R.string.onb_quiz_title)).assertExists()
         assertSecure()
+    }
+}
+
+// IME composition can decorate EditableText with an underline. The draft contract is
+// exact text, not presentation annotations; missing or changed editor text still fails.
+internal fun SemanticsConfiguration.hasExactEditableText(expected: String): Boolean =
+    getOrNull(SemanticsProperties.EditableText)?.text == expected
+
+/** Retry only an invalidated UI handle, sharing one deadline across reacquisitions. */
+internal fun <T> clickFreshPermissionButton(
+    timeoutMs: Long,
+    nowMs: () -> Long,
+    find: (Long) -> T?,
+    click: (T) -> Unit,
+): Boolean {
+    val deadline = nowMs() + timeoutMs
+    while (true) {
+        val remaining = deadline - nowMs()
+        if (remaining <= 0) return false
+        val button = find(remaining) ?: return false
+        try {
+            click(button)
+            return true
+        } catch (_: StaleObjectException) {
+            // The next iteration must look up the replacement, not reuse button.
+        }
     }
 }
