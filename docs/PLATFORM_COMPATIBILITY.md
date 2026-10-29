@@ -74,6 +74,9 @@ are unavailable; it does not run `yes | sdkmanager --licenses`.
   identities, mutual QR contacts, safety-number and storage-key calls on the
   asserted runtime page size. Never disables secure windows or substitutes a
   fake core. Existing runtime regression tests run alongside it.
+- `AppSmokeTest.kt`, `ImeAnimationObserver.kt` and `ImeDismissalAssertionTest.kt`:
+  test-only public IME animation observation and eight readiness state tests;
+  lifecycle cleanup preserves app callbacks, bounded waits and one Back.
 - `check-android-artifacts.py` and tests: every expected ABI/core/JNA library,
   all native ELF load/RELRO alignment, ZIP structure/alignment, official
   `zipalign`, bundle native-packaging configuration; malformed fixtures fail.
@@ -108,7 +111,7 @@ resolve SQLite reason policy and iOS secure-capture policy, test iOS17 and real
 Android/iOS/Hopla interoperability, real provider recovery, power-loss/full-disk
 and gesture-level flows. No signing/store upload is authorized by this work.
 
-### Local results for this working tree
+### Initial local results (before hosted CI)
 
 - `actionlint` 1.7.12: pass; official release archive checksum verified.
 - Source invariant guard: 72 protected files, 14 already-reviewed exceptions,
@@ -120,7 +123,8 @@ and gesture-level flows. No signing/store upload is authorized by this work.
   user/cache directories and local JDK21; **not** an assemble/native/JDK17 pass.
 - JNA native ELF metadata: both ABIs pass. CLI19/official API 36 image/emulator
   package registration and disposable AVD creation: pass. No emulator boot,
-  instrumentation, Android APK/AAB build, macOS archive or hosted CI run yet.
+  instrumentation, Android APK/AAB build, macOS archive or hosted CI run at that
+  initial checkpoint. Hosted results follow below.
 
 ### First hosted-run corrections (2026-10-29)
 
@@ -146,3 +150,27 @@ LOADs in the rounded protection range; fixtures retain failures for shared
 writable tails and overlapping LOADs. This is not a dependency upgrade or a
 blanket removal of RELRO checks. Actual bundle-derived unsigned verification
 remained unexecuted in the first run because this earlier check stopped the job.
+
+The second run, CI 40855504730 on head `a20923b`, passed the actual APK/AAB/ELF
+and unsigned bundle-derived APK gates. Bundletool explicitly emitted unsigned
+output, and the independent checker found no v1 entries or APK Signing Block.
+However, 4-GiB allocation did **not** fix API 36 UI readiness: the first Back
+following profile recreation was consumed without reaching Welcome, and the
+original 10-second destination assertion failed. The 16-KB FFI test passed again;
+that is not whole-suite success. The allocation is retained for independent
+resource-headroom reasons (the Google APIs guest still showed pressure), not as
+a claimed navigation fix. No additional RAM escalation or paid tier is selected.
+
+A narrowly authorized test-only readiness change observes public IME animation
+lifecycle before recreation, in addition to client insets and input focus. It
+must remain lifecycle-safe, preserve application callbacks, use bounded waits,
+and issue exactly one Back with the original destination assertion. Its full
+matrix validation is pending; no production navigation or security behavior is
+changed to make the test pass.
+
+Independent static review and eight JVM state tests passed for the observer.
+An animation-free snapshot does not prove absence of queued IME transactions
+before `onPrepare`; the full runtime gate must establish whether this is enough.
+Keyboard restoration after activity recreation is not imposed: current editors
+and assertions promise draft restoration, not IME visibility. No force-show,
+refocus, repeated Back or relaxed destination assertion is introduced.
