@@ -1726,7 +1726,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.15",
  "hex",
- "hkdf 0.12.4",
+ "hkdf 0.13.0",
  "ml-kem",
  "openmls",
  "openmls_basic_credential",
