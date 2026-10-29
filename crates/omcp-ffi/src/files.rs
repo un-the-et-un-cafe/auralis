@@ -63,7 +63,9 @@ pub struct ReceivedFile {
     pub name: String,
     pub mime: String,
     pub size: u64,
-    pub bytes: Vec<u8>,
+    pub receipt_token_hex: String,
+    pub content_hash_hex: String,
+    pub block_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -90,10 +92,18 @@ pub(crate) struct OutgoingFile {
 }
 
 pub(crate) struct IncomingFile {
-    peer: [u8; 32],
-    meta: FileMeta,
+    pub(crate) peer: [u8; 32],
+    pub(crate) meta: FileMeta,
     key: ContentKey,
     receiver: FileReassembler,
+    reserved_bytes: usize,
+}
+
+pub(crate) struct VerifiedFile {
+    pub peer: [u8; 32],
+    pub meta: FileMeta,
+    pub bytes: Zeroizing<Vec<u8>>,
+    pub needs_attempt: bool,
     reserved_bytes: usize,
 }
 
@@ -101,6 +111,9 @@ pub(crate) struct IncomingFile {
 pub(crate) struct FileState {
     pub out: HashMap<[u8; 32], VecDeque<OutgoingFile>>,
     pub incoming: HashMap<[u8; 16], IncomingFile>,
+    pub verified: HashMap<[u8; 16], VerifiedFile>,
+    pub durable_pending: Vec<omcp_core::store::ReceivedFileReceipt>,
+    pub durable_bytes: usize,
 }
 
 pub(crate) fn build_outgoing(
@@ -193,6 +206,9 @@ pub(crate) fn on_offer(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
     let Ok((id, rest)) = split_id(body) else {
         return;
     };
+    if st.verified.get(&id).is_some_and(|f| f.peer != peer) {
+        return fail(out, &id, &peer, "invalid");
+    }
     if st.incoming.get(&id).is_some_and(|f| f.peer != peer) {
         // An ID collision from a different authenticated contact must not erase
         // the original contact's partial transfer.
@@ -217,6 +233,21 @@ pub(crate) fn on_offer(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
         st.incoming.remove(&id);
         return fail(out, &id, &peer, "invalid");
     }
+    if let Some(f) = st.verified.get(&id) {
+        if f.meta != meta {
+            return fail(out, &id, &peer, "invalid");
+        }
+        out.file_progress.push(FileProgress {
+            transfer_id_hex: hex::encode(id),
+            contact_id: hex::encode(peer),
+            incoming: true,
+            name: meta.name,
+            size: meta.size,
+            done_chunks: meta.num_chunks,
+            total_chunks: meta.num_chunks,
+        });
+        return;
+    }
     if let Some(f) = st.incoming.get(&id) {
         if f.meta == meta && f.key == key {
             // Reconnect replays the same offer. Retain authenticated partial data
@@ -237,11 +268,30 @@ pub(crate) fn on_offer(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
     }
     // Metadata is bounded to an envelope before decode. Twice its wire size
     // covers its strings, wrapped-key structs/ciphertexts and allocation slack.
-    let reserved_bytes = buffer_bytes + 2 * rest.len() + std::mem::size_of::<IncomingFile>() + 256;
-    let reserved: usize = st.incoming.values().map(|f| f.reserved_bytes).sum();
+    let receiver_reservation =
+        buffer_bytes + 2 * rest.len() + std::mem::size_of::<IncomingFile>() + 256;
+    // Reserve the larger of volatile reassembly and eventual sealed block/index
+    // footprint (including final-path reservation), not only plaintext length.
+    let spool_reservation = meta.size as usize
+        + (meta.size as usize).div_ceil(FILE_CHUNK_BYTES) * 168
+        + 2 * rest.len()
+        + 8192;
+    let reserved_bytes = receiver_reservation.max(spool_reservation);
+    let reserved: usize = st
+        .incoming
+        .values()
+        .map(|f| f.reserved_bytes)
+        .sum::<usize>()
+        + st.verified
+            .values()
+            .map(|f| f.reserved_bytes)
+            .sum::<usize>()
+        + st.durable_bytes;
     if !incoming_budget_allows(
-        st.incoming.len(),
-        st.incoming.values().filter(|f| f.peer == peer).count(),
+        st.incoming.len() + st.verified.len() + st.durable_pending.len(),
+        st.incoming.values().filter(|f| f.peer == peer).count()
+            + st.verified.values().filter(|f| f.peer == peer).count()
+            + st.durable_pending.iter().filter(|f| f.peer == peer).count(),
         reserved,
         reserved_bytes,
     ) {
@@ -316,14 +366,18 @@ pub(crate) fn on_chunk(st: &mut FileState, peer: [u8; 32], body: &[u8], out: &mu
         return;
     };
     match f.receiver.finish() {
-        Ok(bytes) => out.files.push(ReceivedFile {
-            transfer_id_hex: hex::encode(id),
-            contact_id: hex::encode(peer),
-            name: f.meta.name,
-            mime: f.meta.mime,
-            size: f.meta.size,
-            bytes,
-        }),
+        Ok(bytes) => {
+            st.verified.insert(
+                id,
+                VerifiedFile {
+                    peer,
+                    meta: f.meta,
+                    bytes: Zeroizing::new(bytes),
+                    needs_attempt: true,
+                    reserved_bytes: f.reserved_bytes,
+                },
+            );
+        }
         Err(_) => fail(out, &id, &peer, "integrity"),
     }
 }
@@ -333,6 +387,11 @@ impl FileState {
     pub(crate) fn rekey(&mut self, old: &[u8; 32], new: &[u8; 32]) {
         if let Some(q) = self.out.remove(old) {
             self.out.entry(*new).or_default().extend(q);
+        }
+        for f in self.verified.values_mut() {
+            if &f.peer == old {
+                f.peer = *new;
+            }
         }
         for f in self.incoming.values_mut() {
             if &f.peer == old {
@@ -412,7 +471,7 @@ mod tests {
         on_chunk(&mut st, [1; 32], &chunk(id, &chunks[0]), &mut out);
         assert_eq!(st.incoming[&id].receiver.received_chunks(), 1);
         on_chunk(&mut st, [1; 32], &chunk(id, &chunks[1]), &mut out);
-        assert_eq!(out.files.last().unwrap().bytes, b"xy");
+        assert_eq!(&*st.verified[&id].bytes, b"xy");
         assert!(st.incoming.is_empty());
         on_offer(&mut st, [1; 32], &body, &mut out);
         on_offer(

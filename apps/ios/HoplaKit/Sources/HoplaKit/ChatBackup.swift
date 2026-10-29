@@ -94,8 +94,10 @@ public final class ChatBackupSync {
             guard let blob = try? blobs.get(p.blobName),
                   let bytes = try? core.restoreMediaFromBackup(msgId: p.msgId, blob: blob),
                   let path = saveMedia(p.msgId, p.mime, bytes) else { continue }
-            try? core.setReceivedFilePath(p.msgId, path: path)
-            restored += 1
+            do {
+                try core.setReceivedFilePath(p.msgId, path: path)
+                restored += 1
+            } catch { continue } // Never count a failed persistence as restored media.
         }
         return ChatRestoreResult(messages: s.messages, mediaPlaceholders: s.mediaPlaceholders - restored, mediaRestored: restored)
     }

@@ -32,6 +32,8 @@ data class FileAttachment(
         Requested,
         /** The partner no longer has it: "Ask to resend". */
         Unavailable,
+        /** Sealed verified bytes await durable private-file finalization. */
+        Finalizing,
     }
     val isPlaceholder get() = state == State.Missing || state == State.Requested || state == State.Unavailable
     val fraction: Float get() = if (sizeBytes <= 0) (if (state == State.Received || state == State.Sent) 1f else 0f) else doneBytes.toFloat() / sizeBytes
@@ -83,6 +85,16 @@ fun interface MeshKick {
     fun kick(contactId: String)
 }
 
+/** Immutable, per-discovery authorization snapshot; never persisted or exported. */
+data class ReceiptRepairAction(
+    val actionId: String,
+    val receipt: chat.omcp.app.core.ReceiveReceiptInfo,
+    val identityEpoch: Long,
+)
+
+/** A cancelled-generation request requires a separate explicit confirmation capability. */
+data class ReceiptRequestAction(val actionId: String, val receipt: chat.omcp.app.core.ReceiveReceiptInfo, val identityEpoch: Long)
+
 /**
  * Single source of truth for identity, contacts, messages and path status.
  *
@@ -95,6 +107,9 @@ class MeshRepository(
     val core: OmcpCore,
     private val store: AppStore,
     private val dbPath: String? = null,
+    private val receiptExecutor: java.util.concurrent.Executor = java.util.concurrent.Executors.newSingleThreadExecutor { job ->
+        Thread(job, "auralis-receipt-files").apply { isDaemon = true }
+    },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val _contacts = MutableStateFlow<List<Contact>>(emptyList())
@@ -105,11 +120,39 @@ class MeshRepository(
     val status: StateFlow<MeshStatus> = _status.asStateFlow()
     private val _onboarded = MutableStateFlow(false)
     val onboarded: StateFlow<Boolean> = _onboarded.asStateFlow()
+    private val _storageBlocked = MutableStateFlow(false)
+    val storageBlocked: StateFlow<Boolean> = _storageBlocked.asStateFlow()
+
+    /** Retry only the existing store. Never rename, delete or reset it after a failure. */
+    @Synchronized
+    fun retryRestore(): Boolean = try {
+        restore().also { if (it) retryFileFinalization() }
+    } catch (_: Exception) {
+        _storageBlocked.value = true
+        _onboarded.value = false
+        false
+    }
+
+    private fun hasStoreArtifacts(): Boolean = dbPath?.let { path ->
+        listOf(path, "$path-journal", "$path-wal", "$path-shm").any {
+            !java.nio.file.Files.notExists(java.nio.file.Paths.get(it))
+        }
+    } ?: false
 
     val appStore: AppStore get() = store
 
     @Volatile var kick: MeshKick? = null
     @Volatile var fileSink: FileSink? = null
+    @Volatile var receiptSink: chat.omcp.app.files.DurableReceiptSink? = null
+    private val _receiveFailure = MutableStateFlow(false)
+    val receiveFailure: StateFlow<Boolean> = _receiveFailure.asStateFlow()
+    private var identityEpoch = 0L
+    private val _repairableReceipts = MutableStateFlow<Map<String, ReceiptRepairAction>>(emptyMap())
+    val repairableReceipts: StateFlow<Map<String, ReceiptRepairAction>> = _repairableReceipts.asStateFlow()
+    private val _requestableReceipts = MutableStateFlow<Map<String, ReceiptRequestAction>>(emptyMap())
+    val requestableReceipts = _requestableReceipts.asStateFlow()
+    private val _receiptEligibilityRevision = MutableStateFlow(0L)
+    val receiptEligibilityRevision = _receiptEligibilityRevision.asStateFlow()
     /** Encrypted chat backup (Drive appDataFolder); null when not configured. */
     @Volatile var chatBackup: chat.omcp.app.backup.ChatBackupSync? = null
 
@@ -122,8 +165,15 @@ class MeshRepository(
     val restoredAtMs: StateFlow<Long?> = _restoredAtMs.asStateFlow()
 
     /** Load an existing identity from the store; returns true if onboarded. */
+    @Synchronized
     fun restore(): Boolean {
-        val phrase = store.recoveryPhrase ?: return false
+        val phrase = store.recoveryPhrase ?: run {
+            if (hasStoreArtifacts() || store.hasSavedIdentity) {
+                throw chat.omcp.app.core.StorageUnavailableException("saved identity unavailable")
+            }
+            _storageBlocked.value = false
+            return false
+        }
         loadCore(phrase, store.displayName ?: "Me")
         store.contacts.forEach { core.restoreContact(it) }
         // Contacts used to live in plain SharedPreferences: once in the encrypted store, drop them.
@@ -131,11 +181,13 @@ class MeshRepository(
         loadMessages()
         refresh()
         _restoredAtMs.value = runCatching { core.deviceInfo()?.restoredAtMs }.getOrNull()
+        _storageBlocked.value = false
         _onboarded.value = true
         return true
     }
 
     /** Create or restore identity from [phrase] and persist it (sealed). */
+    @Synchronized
     fun saveIdentity(phrase: String, name: String) {
         loadCore(phrase, name)
         store.recoveryPhrase = phrase
@@ -144,6 +196,7 @@ class MeshRepository(
     }
 
     /** Restore identity + contacts + verification state from a decrypted backup (O3). */
+    @Synchronized
     fun restoreFromBackup(r: chat.omcp.app.core.RestoredBackup, name: String) {
         saveIdentity(r.phrase, r.displayName?.takeIf { it.isNotBlank() } ?: name)
         r.contacts.forEach { core.restoreContact(it) }
@@ -156,6 +209,7 @@ class MeshRepository(
     }
 
     /** 24-word restore on a new install (no cloud blob): identity + new device key (RS1). */
+    @Synchronized
     fun restoreFromPhrase(phrase: String, name: String) {
         saveIdentity(phrase, name)
         markRestored()
@@ -171,6 +225,7 @@ class MeshRepository(
      * Restore chat text (and backed-up media) from the encrypted chat backup. Blocking (network):
      * call from the restore job. Media not in the backup stay placeholders that refill from partners.
      */
+    @Synchronized
     fun restoreChats(): chat.omcp.app.backup.ChatRestoreResult? {
         val sync = chatBackup ?: return null
         val sink = fileSink
@@ -192,6 +247,7 @@ class MeshRepository(
     }
 
     /** From the link: the partner asks for media again; answer with our saved copy (or "no longer have it"). */
+    @Synchronized
     fun onMediaRequest(r: chat.omcp.app.core.MediaRequestInfo) {
         val bytes = r.localPath?.let { p -> runCatching { java.io.File(p).readBytes() }.getOrNull() }
         runCatching { core.answerMediaRequest(r.contactId, r.msgId, bytes) }
@@ -232,20 +288,26 @@ class MeshRepository(
         _messages.value[contactId].orEmpty().count { it.file?.isPlaceholder == true }
 
     private fun loadCore(phrase: String, name: String) {
+        identityEpoch++
+        _requestableReceipts.value = emptyMap()
+        _receiptEligibilityRevision.update { it + 1 }
+        _repairableReceipts.value = emptyMap()
         val path = dbPath ?: run {
             core.load(phrase, name)
             return
         }
-        val key = store.storageKey ?: core.generateStorageKey().also { store.storageKey = it }
-        try {
-            core.open(phrase, name, path, key)
-        } catch (e: chat.omcp.app.core.StorageUnavailableException) {
-            // Unreadable with this key (Keystore reset, other identity, newer app): its data is
-            // unrecoverable here. Keep the file aside and start a fresh store rather than lock out.
-            java.io.File(path).renameTo(java.io.File("$path.unreadable-${clock()}"))
-            java.io.File("$path-journal").delete()
-            core.open(phrase, name, path, key)
+        val key = store.storageKey ?: run {
+            if (hasStoreArtifacts() || store.hasSavedStorageKey) {
+                throw chat.omcp.app.core.StorageUnavailableException("existing store key unavailable")
+            }
+            core.generateStorageKey().also {
+                store.storageKey = it
+                if (store.storageKey?.contentEquals(it) != true) {
+                    throw chat.omcp.app.core.StorageUnavailableException("storage key could not be saved")
+                }
+            }
         }
+        core.open(phrase, name, path, key)
         // Keep sent media: age limit is applied on start too (size limit on every insert).
         runCatching { core.evictKeptMedia(clock()) }
     }
@@ -255,6 +317,15 @@ class MeshRepository(
         _messages.value = core.contacts()
             .associate { c -> c.id to core.storedMessages(c.id).map(::toChatMessage) }
             .filterValues { it.isNotEmpty() }
+        _requestableReceipts.update { known -> known.filter { (id, action) ->
+            action.identityEpoch == identityEpoch && _messages.value[action.receipt.contactId].orEmpty().any {
+                it.id == id && it.file?.state == FileAttachment.State.Failed
+            }
+        } }
+        val pending = core.pendingReceivedFiles().associateBy { it.transferId }
+        _repairableReceipts.update { known -> known.filter { (id, action) ->
+            action.identityEpoch == identityEpoch && pending[id] == action.receipt
+        } }
     }
 
     private fun toChatMessage(m: chat.omcp.app.core.StoredMessageInfo): ChatMessage {
@@ -356,14 +427,29 @@ class MeshRepository(
         return o.transferId
     }
 
-    /** Cancel an outgoing (queued/sending) or incoming transfer and drop its bubble. */
+    /** Cancel durable work, then reload authoritative history (resend cancellation preserves its bubble). */
+    @Synchronized
     fun cancelFile(contactId: String, transferId: String) {
-        core.cancelFile(transferId)
-        _messages.update { all -> all + (contactId to all[contactId].orEmpty().filterNot { it.id == transferId }) }
+        val pending = core.pendingReceivedFiles().firstOrNull { it.transferId == transferId && it.contactId == contactId }
+        // Throwing/false cancellation must never remove the UI bubble or authorize file deletion.
+        if (!core.cancelFile(transferId)) return
+        _repairableReceipts.update { it - transferId }
+        if (pending != null) {
+            try { cleanupReceipt(pending) } catch (_: Exception) { _receiveFailure.value = true }
+        }
+        loadMessages()
     }
 
     /** From the link: chunks sealed (outgoing) or received (incoming). */
+    @Synchronized
     fun onFileProgress(p: chat.omcp.app.core.FileProgressInfo) {
+        if (core.linked) {
+            val durable = core.storedMessages(p.contactId).firstOrNull { it.id == p.transferId } ?: return
+            if (durable.file?.state in listOf("Finalizing", "Received", "IntegrityFailed")) {
+                loadMessages()
+                return
+            }
+        }
         val existing = find(p.contactId, p.transferId)
         if (existing == null) {
             if (!p.incoming) return // cancelled locally
@@ -376,7 +462,7 @@ class MeshRepository(
             return
         }
         val f = existing.file ?: return
-        if (f.state == FileAttachment.State.Received || f.state == FileAttachment.State.IntegrityFailed) return
+        if (f.state == FileAttachment.State.Received || f.state == FileAttachment.State.IntegrityFailed || f.state == FileAttachment.State.Finalizing) return
         val done = p.doneChunks >= p.totalChunks
         val state = when {
             p.incoming -> FileAttachment.State.Receiving
@@ -391,31 +477,167 @@ class MeshRepository(
         )
     }
 
-    /** From the link: a file arrived and its BLAKE3 hash matched (checked in Rust). */
-    fun onFileReceived(r: chat.omcp.app.core.ReceivedFileInfo) {
-        val path = fileSink?.save(r)
-        if (fileSink != null) runCatching { core.setReceivedFilePath(r.transferId, path) }
-        val f = FileAttachment(
-            r.name, r.bytes.size.toLong(), r.mime,
-            if (path != null || fileSink == null) FileAttachment.State.Received else FileAttachment.State.Failed,
-            r.bytes.size.toLong(), path,
-        )
-        val existing = find(r.contactId, r.transferId)
-        if (existing == null) {
-            append(ChatMessage(r.transferId, r.contactId, "", false, clock(), ChatMessage.Status.Received, f))
-        } else {
-            replace(existing.copy(file = f))
+    /** The event contains only a capability for already-durable sealed bytes. */
+    fun onFileReceived(r: chat.omcp.app.core.ReceiveReceiptInfo) {
+        receiptTask { finalizeReceipt(r) }
+    }
+
+    private fun receiptTask(block: () -> Boolean): java.util.concurrent.CompletableFuture<Boolean> {
+        val result = java.util.concurrent.CompletableFuture<Boolean>()
+        receiptExecutor.execute {
+            synchronized(this) {
+                try { result.complete(block()) }
+                catch (e: Exception) { _receiveFailure.value = true; result.completeExceptionally(e) }
+            }
+        }
+        return result
+    }
+
+    /** Never reinterpret a symlink/protection/permission error as missing media. */
+    @Synchronized
+    fun reconcileMissingFiles(): Boolean {
+        val sink = receiptSink ?: return true
+        var failed = false
+        for (m in _messages.value.values.flatten()) {
+            val file = m.file ?: continue
+            val path = file.localPath ?: continue
+            try {
+                if (m.burn == null && file.state == FileAttachment.State.Received && sink.isDefinitelyMissing(path)) {
+                    core.markReceivedFileMissing(m.id, path)
+                }
+            } catch (_: Exception) { failed = true }
+        }
+        try { loadMessages() } catch (_: Exception) { failed = true }
+        if (failed) _receiveFailure.value = true
+        return !failed
+    }
+
+    /** Startup and explicit retry share the same monitor as cancellation and identity reload. */
+    fun retryFileFinalization(): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val missingOk = reconcileMissingFiles()
+        // A busy reciprocal resend or one unavailable message must not starve other receipts.
+        val finalizationOk = retryFileFinalizationNow()
+        val ok = missingOk && finalizationOk
+        _receiveFailure.value = !ok
+        _receiptEligibilityRevision.update { it + 1 }
+        ok
+    }
+
+    private fun cleanupReceipt(receipt: chat.omcp.app.core.ReceiveReceiptInfo) {
+        val sink = checkNotNull(receiptSink) { "receipt cleanup sink unavailable" }
+        sink.discard(receipt) // Exact generation only; sink syncs its directory before returning.
+        core.acknowledgeReceivedFileCleanup(receipt.receiptToken)
+        _receiptEligibilityRevision.update { it + 1 }
+    }
+
+    private fun retryFileFinalizationNow(): Boolean {
+        var failed = false
+        // Core supplies one bounded (32) fair page. Never spin over all tombstones.
+        try {
+            for (receipt in core.cancelledReceivedFiles()) {
+                try { cleanupReceipt(receipt) } catch (_: Exception) { failed = true }
+            }
+        } catch (_: Exception) { failed = true }
+        try { core.retryReceivedFiles() } catch (_: Exception) { failed = true }
+        // A retained candidate failing to stage must not hide other durable receipts.
+        val pending = try { core.pendingReceivedFiles() } catch (_: Exception) {
+            _receiveFailure.value = true
+            return false
+        }
+        for (receipt in pending) if (!finalizeReceipt(receipt)) failed = true
+        _receiveFailure.value = failed
+        return !failed
+    }
+
+    /** UI supplies at most one bounded visible page. Discovery never requests media. */
+    fun discoverRequestableFiles(contactId: String, visibleIds: List<String>): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val actions = mutableMapOf<String, ReceiptRequestAction>()
+        for (id in visibleIds.distinct().take(32)) {
+            if (_messages.value[contactId].orEmpty().none { it.id == id && it.file?.state == FileAttachment.State.Failed }) continue
+            val receipt = core.recoverableReceivedFile(contactId, id) ?: continue
+            check(receipt.contactId == contactId && receipt.transferId == id)
+            val existing = _requestableReceipts.value[id]
+            actions[id] = existing?.takeIf { it.receipt == receipt && it.identityEpoch == identityEpoch }
+                ?: ReceiptRequestAction(java.util.UUID.randomUUID().toString(), receipt, identityEpoch)
+        }
+        _requestableReceipts.value = actions
+        true
+    }
+
+    fun requestCancelledFileAgain(transferId: String, expectedAction: String): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val action = _requestableReceipts.value[transferId] ?: return@receiptTask false
+        if (action.actionId != expectedAction || action.identityEpoch != identityEpoch) return@receiptTask false
+        // Consume before attempting the transaction: double-clicks cannot enqueue two requests.
+        _requestableReceipts.update { it - transferId }
+        try {
+            if (core.recoverableReceivedFile(action.receipt.contactId, transferId) != action.receipt) return@receiptTask false
+            core.requestCancelledReceivedFile(action.receipt)
+            loadMessages()
+            kick?.kick(action.receipt.contactId)
+            true
+        } finally {
+            // Rediscovery only; even after transaction failure a new confirmation is required.
+            _receiptEligibilityRevision.update { it + 1 }
         }
     }
 
+    /** Only an explicit UI request may enter repair; eligibility alone never mutates a file. */
+    fun repairLocalFile(transferId: String, expectedAction: String): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val action = _repairableReceipts.value[transferId] ?: return@receiptTask false
+        if (action.actionId != expectedAction || action.identityEpoch != identityEpoch) return@receiptTask false
+        if (core.pendingReceivedFiles().none { it == action.receipt }) {
+            _repairableReceipts.update { it - transferId }
+            return@receiptTask false
+        }
+        finalizeReceipt(action.receipt, repair = true)
+    }
+
+    private fun finalizeReceipt(receipt: chat.omcp.app.core.ReceiveReceiptInfo, repair: Boolean = false): Boolean {
+        _repairableReceipts.update { it - receipt.transferId }
+        return try {
+            // Stale/duplicate events cannot create a message or restart a cancelled writer.
+            val current = core.pendingReceivedFiles().firstOrNull { it.receiptToken == receipt.receiptToken }
+                ?: return false
+            check(current == receipt) { "receipt metadata changed" }
+            loadMessages()
+            val sink = receiptSink ?: run { _receiveFailure.value = true; return false }
+            val source = object : chat.omcp.app.files.ReceiptSource {
+                override fun readBlock(index: Int) = core.readReceivedFileBlock(receipt.receiptToken, index)
+                override fun verifier() = core.receivedFileVerifier(receipt.receiptToken)
+                override fun authorizeRepair() = core.validateReceivedFileForRepair(receipt.receiptToken) == receipt
+                override fun authorizeWrite(replacingIncomplete: Boolean) =
+                    core.pendingReceivedFiles().any { it == receipt }
+            }
+            val path = if (repair) sink.repair(receipt, source) else sink.finalize(receipt, source)
+            check(core.pendingReceivedFiles().any { it == receipt }) { "receipt no longer pending" }
+            core.commitReceivedFile(receipt.receiptToken, path)
+            loadMessages()
+            _receiveFailure.value = false
+            true
+        } catch (e: Exception) {
+            if (e is chat.omcp.app.core.ReceiveContentMismatch &&
+                runCatching { core.pendingReceivedFiles().any { it == receipt } }.getOrDefault(false)) {
+                _repairableReceipts.update { it + (receipt.transferId to ReceiptRepairAction(java.util.UUID.randomUUID().toString(), receipt, identityEpoch)) }
+            }
+            // Disk/verifier/commit failure retains core Finalizing and its sole sealed copy.
+            _receiveFailure.value = true
+            // Preserve the prior snapshot if the database itself is temporarily unavailable.
+            try { loadMessages() } catch (_: Exception) { /* failure remains observable above */ }
+            false
+        }
+    }
+
+    @Synchronized
     fun onFileFailed(e: chat.omcp.app.core.FileFailureInfo) {
         val m = find(e.contactId, e.transferId) ?: return
         val f = m.file ?: return
+        if (f.state == FileAttachment.State.Finalizing || f.state == FileAttachment.State.Received) return
         val state = if (e.reason == "integrity") FileAttachment.State.IntegrityFailed else FileAttachment.State.Failed
         replace(m.copy(file = f.copy(state = state)))
     }
 
     /** Link dropped mid-transfer: outgoing/incoming transfers wait for the next link (auto-resume). */
+    @Synchronized
     fun pauseTransfers(contactId: String) {
         _messages.update { all ->
             all + (
@@ -431,7 +653,7 @@ class MeshRepository(
         }
     }
 
-    /** Called by the transport when [count] queued texts to [contactId] went out. */
+    /** Called only after local durable commit of OS-accepted PDUs; not peer delivery. */
     fun markFlushed(contactId: String, count: Int) {
         if (count > 0) {
             _messages.update { all ->

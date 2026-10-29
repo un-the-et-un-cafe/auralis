@@ -1751,6 +1751,7 @@ dependencies = [
  "getrandom 0.2.15",
  "hex",
  "omcp-core",
+ "rusqlite",
  "tempfile",
  "thiserror 2.0.11",
  "uniffi",

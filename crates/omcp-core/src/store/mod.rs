@@ -21,8 +21,9 @@
 //! - **Ids are opaque**: `id = BLAKE3-keyed(id_key, table ‖ 0x00 ‖ natural id)`,
 //!   `grp` (chat / file grouping) likewise. The file reveals row counts, sizes
 //!   and insertion order (`seq`) — not peers, names, text or ids.
-//! - **Schema migrations** are numbered SQL batches applied in one transaction
-//!   each, tracked with `PRAGMA user_version` ([`SCHEMA_VERSION`]). A store
+//! - **Schema migrations** are numbered SQL batches applied atomically together
+//!   with initial key-check creation, tracked with `PRAGMA user_version`
+//!   ([`SCHEMA_VERSION`]). A store
 //!   written by a newer app is refused instead of being guessed at.
 //! - **Burn after read**: burn content lives only in the `burn` table, sealed
 //!   under its own random per-message key (the [`crate::burn::BurnStore`] key);
@@ -34,7 +35,7 @@
 //! - A wrong storage key fails cleanly ([`OmcpError::StoreAuth`]) via a sealed
 //!   key-check row; a store bound to another identity is refused.
 
-use std::path::Path;
+use std::{cell::Cell, path::Path};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -46,7 +47,9 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::burn::{BurnHeader, BurnSnapshot};
 use crate::error::{OmcpError, Result};
 
+mod receipts;
 mod records;
+pub use receipts::*;
 pub use records::*;
 
 #[cfg(test)]
@@ -56,6 +59,12 @@ mod tests;
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 /// Version of the plaintext history snapshot carried in backups.
 pub const HISTORY_VERSION: u8 = 1;
+/// Node-wide durable replay window for authenticated user-message IDs. Existing
+/// message records can provide longer-lived protection. Tombstones contain no
+/// content and intentionally survive message deletion/burning; they are not
+/// exported in history backups. This is bounded replay suppression, not an
+/// exactly-once delivery guarantee.
+pub const MAX_RECEIVED_TOMBSTONES: usize = 16_384;
 const AAD_PREFIX: &[u8] = b"OMCP-Store-v1";
 const KEY_CHECK: &[u8] = b"OMCP-Store key check v1";
 const CTX_ROW: &str = "OMCP-Store-v1 row-aead";
@@ -80,6 +89,17 @@ const MIGRATIONS: &[&str] = &[
     // v2 (v0.1.4b): kept local copies of sent media (index + sealed bytes rows).
     "CREATE TABLE kept_media(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
      CREATE INDEX kept_media_grp ON kept_media(grp, seq);",
+    // v3: bounded, content-free authenticated peer/message replay tombstones.
+    "CREATE TABLE received(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX received_seq ON received(seq);
+     CREATE INDEX received_grp ON received(grp, seq);",
+    // v4: sealed durable verified-receive spool (local-only, no wire change).
+    "CREATE TABLE receive_index(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX receive_index_grp ON receive_index(grp, seq);
+     CREATE TABLE receive_blocks(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
+     CREATE INDEX receive_blocks_grp ON receive_blocks(grp, seq);",
+    // v5: bounded cleanup pagination; sealed cancelled rows regrouped in init.
+    "CREATE INDEX receive_index_cleanup ON receive_index(grp, id);",
 ];
 
 const KEPT_INDEX_GRP: &[u8] = b"kept-index";
@@ -103,6 +123,9 @@ enum Table {
     Burn,
     BurnKeys,
     KeptMedia,
+    Received,
+    ReceiveIndex,
+    ReceiveBlocks,
 }
 
 impl Table {
@@ -118,6 +141,9 @@ impl Table {
             Table::Burn => "burn",
             Table::BurnKeys => "burn_keys",
             Table::KeptMedia => "kept_media",
+            Table::Received => "received",
+            Table::ReceiveIndex => "receive_index",
+            Table::ReceiveBlocks => "receive_blocks",
         }
     }
 }
@@ -174,9 +200,12 @@ fn xopen(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>
     .map_err(|_| OmcpError::StoreAuth)
 }
 
-/// Encrypted local store. Not `Sync`: keep it behind a mutex.
+/// Encrypted local store. Not `Sync`: keep it behind a mutex. A failed rollback
+/// or inconsistent transaction state quarantines all access until close/reopen.
 pub struct Store {
     conn: Connection,
+    transaction_depth: Cell<usize>,
+    poisoned: Cell<bool>,
     row_key: Zeroizing<[u8; 32]>,
     id_key: Zeroizing<[u8; 32]>,
 }
@@ -184,50 +213,95 @@ pub struct Store {
 impl Store {
     /// Open (creating and migrating if needed) the store at `path`.
     pub fn open(path: &Path, storage_key: &[u8; 32]) -> Result<Self> {
-        Self::init(Connection::open(path).map_err(db)?, storage_key)
+        Self::init(Connection::open(path).map_err(db)?, storage_key, None)
     }
 
     /// In-memory store (tests, or a node without persistence).
     pub fn open_in_memory(storage_key: &[u8; 32]) -> Result<Self> {
-        Self::init(Connection::open_in_memory().map_err(db)?, storage_key)
+        Self::init(Connection::open_in_memory().map_err(db)?, storage_key, None)
     }
 
-    fn init(conn: Connection, storage_key: &[u8; 32]) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; PRAGMA temp_store = MEMORY;",
+    /// Open for a known identity. Authenticate an existing owner (including the
+    /// legacy identity) before changing journal configuration or schema. Binding
+    /// and legacy re-keying remain the caller's explicit subsequent operation.
+    pub fn open_for_owner(
+        path: &Path,
+        storage_key: &[u8; 32],
+        peer_id: &[u8; 32],
+        legacy_id: &[u8; 32],
+    ) -> Result<Self> {
+        Self::init(
+            Connection::open(path).map_err(db)?,
+            storage_key,
+            Some((peer_id, legacy_id)),
         )
-        .map_err(db)?;
-        let mut s = Self {
+    }
+
+    fn init(
+        conn: Connection,
+        storage_key: &[u8; 32],
+        owners: Option<(&[u8; 32], &[u8; 32])>,
+    ) -> Result<Self> {
+        let s = Self {
             conn,
+            transaction_depth: Cell::new(0),
+            poisoned: Cell::new(false),
             row_key: Zeroizing::new(blake3::derive_key(CTX_ROW, storage_key)),
             id_key: Zeroizing::new(blake3::derive_key(CTX_ID, storage_key)),
         };
-        s.migrate()?;
-        s.check_key()?;
+        s.validate_open(owners)?;
+        // SQLite itself may recover a hot journal when opening/reading a file.
+        // We never delete that journal or replace an unreadable database.
+        s.conn.execute_batch(
+            "PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE; PRAGMA temp_store = MEMORY;",
+        ).map_err(db)?;
+        // Schema and first key-check are committed together. Failed creation
+        // must not leave an initialized schema without authentication metadata.
+        s.transaction(|s| {
+            let v = s.validate_open(owners)?;
+            for (i, sql) in MIGRATIONS.iter().enumerate().skip(v as usize) {
+                s.conn.execute_batch(sql).map_err(db)?;
+                if i + 1 == 5 {
+                    s.migrate_receipt_cleanup_groups()?;
+                }
+                s.conn
+                    .execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+                    .map_err(db)?;
+            }
+            s.check_key(v == 0)
+        })?;
         Ok(s)
     }
 
-    fn migrate(&mut self) -> Result<()> {
-        let v: u32 = self
-            .conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(db)?;
+    fn validate_open(&self, owners: Option<(&[u8; 32], &[u8; 32])>) -> Result<u32> {
+        let v = self.schema_version()?;
         if v > SCHEMA_VERSION {
             return Err(OmcpError::Store("store schema is newer than this app"));
         }
-        for (i, sql) in MIGRATIONS.iter().enumerate().skip(v as usize) {
-            let tx = self.conn.transaction().map_err(db)?;
-            tx.execute_batch(sql).map_err(db)?;
-            tx.execute_batch(&format!("PRAGMA user_version = {}", i + 1))
+        if v == 0 {
+            let objects: u64 = self
+                .conn
+                .query_row("SELECT COUNT(*) FROM sqlite_schema", [], |r| r.get(0))
                 .map_err(db)?;
-            tx.commit().map_err(db)?;
+            if objects != 0 {
+                return Err(OmcpError::Store("unversioned store is not empty"));
+            }
+        } else {
+            self.check_key(false)?;
+            if let Some((peer, legacy)) = owners {
+                if let Some(owner) = self.get_raw(Table::Meta, b"owner")? {
+                    if owner.as_slice() != peer && owner.as_slice() != legacy {
+                        return Err(OmcpError::Store("store belongs to another identity"));
+                    }
+                }
+            }
         }
-        Ok(())
+        Ok(v)
     }
 
     /// The key-check row lives at a fixed, unkeyed id so a wrong storage key is
     /// detected (AEAD failure) instead of silently starting an empty store.
-    fn check_key(&self) -> Result<()> {
+    fn check_key(&self, allow_create: bool) -> Result<()> {
         const RID: [u8; 32] = [0; 32];
         let aad = Self::aad(Table::Meta, &RID);
         let ct: Option<Vec<u8>> = self
@@ -244,6 +318,7 @@ impl Store {
                 Ok(p) if p.as_slice() == KEY_CHECK => Ok(()),
                 _ => Err(OmcpError::StoreAuth),
             },
+            None if !allow_create => Err(OmcpError::StoreAuth),
             None => {
                 let c = xseal(&self.row_key, &aad, KEY_CHECK)?;
                 self.conn
@@ -259,6 +334,7 @@ impl Store {
 
     /// `PRAGMA user_version` of the open store.
     pub fn schema_version(&self) -> Result<u32> {
+        self.ensure_healthy()?;
         self.conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db)
@@ -290,10 +366,15 @@ impl Store {
     /// (their X25519 key) to their PeerID: contact, chat, messages, queue,
     /// outgoing files and burn entries. All-or-nothing.
     pub fn rekey_peer(&self, old: &[u8; 32], new: &[u8; 32]) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
         self.transaction(|s| {
             if let Some(mut c) = s.get::<ContactRec>(Table::Contacts, old)? {
                 c.peer = *new;
-                s.put(Table::Contacts, new, None, &c)?;
+                if s.get::<ContactRec>(Table::Contacts, new)?.is_none() {
+                    s.put(Table::Contacts, new, None, &c)?;
+                }
                 s.del_raw(Table::Contacts, old)?;
             }
             if let Some(mut c) = s.get::<ChatRec>(Table::Chats, old)? {
@@ -305,6 +386,7 @@ impl Store {
                 m.peer = *new;
                 s.put(Table::Messages, &m.id, Some(new), &m)?;
             }
+            s.rekey_receipts(old, new)?;
             for mut q in s.list::<OutboxRec>(Table::Outbox, Some(old))? {
                 q.peer = *new;
                 s.put(Table::Outbox, &q.id, Some(new), &q)?;
@@ -323,6 +405,12 @@ impl Store {
                         &k,
                     )?;
                 }
+            }
+            for r in s.list::<ReceivedRec>(Table::Received, Some(old))? {
+                // Delete before inserting within this transaction so a full
+                // replay window does not evict an unrelated peer during re-key.
+                s.del_raw(Table::Received, &received_id(old, &r.id))?;
+                s.record_received(new, &r.id)?;
             }
             for mut b in s.list::<BurnRec>(Table::Burn, None)? {
                 if &b.peer == old {
@@ -349,6 +437,19 @@ impl Store {
 
     // ---- generic sealed rows ----
 
+    /// Only our live guards own transactions. SQLite can leave a transaction
+    /// open after a failed COMMIT/ROLLBACK, or end it automatically on an error.
+    /// Neither state may be mistaken for legitimate nesting or a durable write.
+    fn ensure_healthy(&self) -> Result<()> {
+        if self.poisoned.get() || self.conn.is_autocommit() != (self.transaction_depth.get() == 0) {
+            self.poisoned.set(true);
+            return Err(OmcpError::Store(
+                "store transaction state uncertain; reopen required",
+            ));
+        }
+        Ok(())
+    }
+
     fn rid(&self, t: Table, natural: &[u8]) -> [u8; 32] {
         let mut h = blake3::Hasher::new_keyed(&self.id_key);
         h.update(t.name().as_bytes());
@@ -373,6 +474,7 @@ impl Store {
     }
 
     fn put_raw(&self, t: Table, natural: &[u8], grp: Option<&[u8]>, plain: &[u8]) -> Result<()> {
+        self.ensure_healthy()?;
         let rid = self.rid(t, natural);
         let ct = xseal(&self.row_key, &Self::aad(t, &rid), plain)?;
         let grp = grp.map(|g| self.gid(g).to_vec());
@@ -388,6 +490,7 @@ impl Store {
     }
 
     fn get_raw(&self, t: Table, natural: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        self.ensure_healthy()?;
         let rid = self.rid(t, natural);
         let ct: Option<Vec<u8>> = self
             .conn
@@ -403,6 +506,7 @@ impl Store {
     }
 
     fn del_raw(&self, t: Table, natural: &[u8]) -> Result<()> {
+        self.ensure_healthy()?;
         let rid = self.rid(t, natural);
         self.conn
             .execute(
@@ -414,6 +518,7 @@ impl Store {
     }
 
     fn list_raw(&self, t: Table, grp: Option<&[u8]>) -> Result<Vec<Zeroizing<Vec<u8>>>> {
+        self.ensure_healthy()?;
         let rows: Vec<(Vec<u8>, Vec<u8>)> = match grp {
             Some(g) => {
                 let g = self.gid(g);
@@ -460,19 +565,86 @@ impl Store {
         self.list_raw(t, grp)?.iter().map(|p| uncbor(p)).collect()
     }
 
-    /// Run `f` in one transaction (all-or-nothing writes).
+    /// Run `f` in one transaction (all-or-nothing writes). Nested store
+    /// operations use a savepoint, so they remain part of the outer commit.
     pub fn transaction<R>(&self, f: impl FnOnce(&Self) -> Result<R>) -> Result<R> {
-        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db)?;
-        match f(self) {
-            Ok(r) => {
-                self.conn.execute_batch("COMMIT").map_err(db)?;
-                Ok(r)
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
-        }
+        self.transaction_with(f)
+    }
+
+    /// Transaction variant for callers whose error type wraps [`OmcpError`].
+    /// A failed COMMIT/RELEASE is rolled back just like a failed body. If rollback
+    /// fails, all access is quarantined until reopen; even a caller that catches
+    /// a nested failure cannot commit the outer transaction.
+    pub fn transaction_with<R, E: From<OmcpError>>(
+        &self,
+        f: impl FnOnce(&Self) -> std::result::Result<R, E>,
+    ) -> std::result::Result<R, E> {
+        self.ensure_healthy()?;
+        let parent_depth = self.transaction_depth.get();
+        let depth = parent_depth
+            .checked_add(1)
+            .ok_or(OmcpError::Store("transaction depth"))?;
+        let (begin, commit, rollback) = if parent_depth != 0 {
+            (
+                "SAVEPOINT omcp_store_nested",
+                "RELEASE omcp_store_nested",
+                "ROLLBACK TO omcp_store_nested; RELEASE omcp_store_nested",
+            )
+        } else {
+            ("BEGIN IMMEDIATE", "COMMIT", "ROLLBACK")
+        };
+        self.conn.execute_batch(begin).map_err(db)?;
+        self.transaction_depth.set(depth);
+        // SQLite savepoints with the same name are deliberately stack-scoped:
+        // RELEASE/ROLLBACK TO address the most recently created matching one.
+        let mut guard = TransactionRollback {
+            store: self,
+            parent_depth,
+            sql: rollback,
+            committed: false,
+        };
+        let result = f(self)?;
+        self.ensure_healthy()?;
+        self.conn.execute_batch(commit).map_err(db)?;
+        guard.committed = true;
+        drop(guard);
+        self.ensure_healthy()?;
+        Ok(result)
+    }
+
+    /// Whether this authenticated peer/message pair was successfully delivered
+    /// within the durable bounded replay window. Call only after authentication.
+    pub fn received_before(&self, peer: &[u8; 32], id: &[u8; 16]) -> Result<bool> {
+        Ok(self
+            .get::<ReceivedRec>(Table::Received, &received_id(peer, id))?
+            .is_some())
+    }
+
+    /// Record an authenticated *user* message ID after successful processing.
+    /// Group this with the message/burn writes in `transaction` (or
+    /// `transaction_with`); never record file-offer/chunk envelope IDs, whose
+    /// payload may need replay when in-memory partial reception is lost.
+    pub fn record_received(&self, peer: &[u8; 32], id: &[u8; 16]) -> Result<()> {
+        self.transaction(|s| {
+            s.put(
+                Table::Received,
+                &received_id(peer, id),
+                Some(peer),
+                &ReceivedRec {
+                    peer: *peer,
+                    id: *id,
+                },
+            )?;
+            s.conn
+                .execute(
+                    "DELETE FROM received WHERE id IN (
+                         SELECT id FROM received ORDER BY seq DESC LIMIT -1 OFFSET ?1
+                     )",
+                    params![MAX_RECEIVED_TOMBSTONES as u64],
+                )
+                .map_err(db)?;
+            Ok(())
+        })
     }
 
     // ---- contacts ----
@@ -481,7 +653,16 @@ impl Store {
         self.put(Table::Contacts, &c.peer, None, c)
     }
     pub fn delete_contact(&self, peer: &[u8; 32]) -> Result<()> {
-        self.del_raw(Table::Contacts, peer)
+        self.transaction(|s| {
+            for r in s
+                .pending_received_files()?
+                .into_iter()
+                .filter(|r| r.peer == *peer)
+            {
+                s.cancel_received_file(peer, &r.token.message_id)?;
+            }
+            s.del_raw(Table::Contacts, peer)
+        })
     }
     pub fn contacts(&self) -> Result<Vec<ContactRec>> {
         self.list(Table::Contacts, None)
@@ -504,27 +685,38 @@ impl Store {
     /// Insert or update a message (keeps its original position). Burn messages
     /// never store content: `text` is cleared defensively.
     pub fn put_message(&self, m: &MessageRec) -> Result<()> {
-        let mut m = m.clone();
-        if m.burn.is_some() {
-            m.text.zeroize();
-            m.text.clear();
-        }
-        self.put(Table::Messages, &m.id, Some(&m.peer), &m)?;
-        let chat = self.chat(&m.peer)?;
-        if chat.as_ref().is_none_or(|c| m.time_ms > c.last_ms) {
-            self.put_chat(&ChatRec {
-                peer: m.peer,
-                last_ms: m.time_ms,
-                last_read_ms: chat.map_or(0, |c| c.last_read_ms),
-            })?;
-        }
-        Ok(())
+        self.transaction(|st| {
+            st.guard_receipt_message(m)?;
+            let mut m = m.clone();
+            if m.burn.is_some() {
+                m.text.zeroize();
+                m.text.clear();
+            }
+            st.put(Table::Messages, &m.id, Some(&m.peer), &m)?;
+            let chat = st.chat(&m.peer)?;
+            if chat.as_ref().is_none_or(|c| m.time_ms > c.last_ms) {
+                st.put_chat(&ChatRec {
+                    peer: m.peer,
+                    last_ms: m.time_ms,
+                    last_read_ms: chat.map_or(0, |c| c.last_read_ms),
+                })?;
+            }
+            Ok(())
+        })
     }
     pub fn message(&self, id: &[u8; 16]) -> Result<Option<MessageRec>> {
         self.get(Table::Messages, id)
     }
     pub fn delete_message(&self, id: &[u8; 16]) -> Result<()> {
-        self.del_raw(Table::Messages, id)
+        self.transaction(|s| {
+            if let Some(m) = s.message(id)? {
+                if m.file.is_some() {
+                    s.record_received(&m.peer, id)?;
+                }
+            }
+            s.retain_deleted_receipt_cleanup(id)?;
+            s.del_raw(Table::Messages, id)
+        })
     }
     /// Messages of one chat, oldest first.
     pub fn messages(&self, peer: &[u8; 32]) -> Result<Vec<MessageRec>> {
@@ -540,18 +732,23 @@ impl Store {
     /// key) the payload is sealed under a sub-key of it, so burning the message
     /// also shreds its unsent copy.
     pub fn put_outbox(&self, q: &OutboxRec, burn_key: Option<&[u8; 32]>) -> Result<()> {
-        let stored = match burn_key {
-            None => q.clone(),
-            Some(k) => {
-                let sub = Zeroizing::new(blake3::derive_key(CTX_BURN_OUTBOX, k));
-                let mut s = q.clone();
-                s.inner.zeroize();
-                s.inner = xseal(&sub, &q.id, &q.inner)?;
-                s.burn = true;
-                s
+        self.transaction(|st| {
+            if st.has_receipt(&q.id)? {
+                return Err(OmcpError::Store("receipt owns outgoing ID"));
             }
-        };
-        self.put(Table::Outbox, &q.id, Some(&q.peer), &stored)
+            let stored = match burn_key {
+                None => q.clone(),
+                Some(k) => {
+                    let sub = Zeroizing::new(blake3::derive_key(CTX_BURN_OUTBOX, k));
+                    let mut s = q.clone();
+                    s.inner.zeroize();
+                    s.inner = xseal(&sub, &q.id, &q.inner)?;
+                    s.burn = true;
+                    s
+                }
+            };
+            st.put(Table::Outbox, &q.id, Some(&q.peer), &stored)
+        })
     }
     pub fn delete_outbox(&self, id: &[u8; 16]) -> Result<()> {
         self.del_raw(Table::Outbox, id)
@@ -580,29 +777,123 @@ impl Store {
 
     pub fn put_out_file<C: AsRef<[u8]>>(&self, f: &OutFileRec, chunks: &[C]) -> Result<()> {
         self.transaction(|s| {
-            s.put(Table::OutFiles, &f.id, Some(&f.peer), f)?;
-            for (i, c) in chunks.iter().enumerate() {
-                s.put_raw(
-                    Table::FileChunks,
-                    &chunk_id(&f.id, i as u32),
-                    Some(&f.id),
-                    c.as_ref(),
-                )?;
+            if s.has_receipt(&f.id)? {
+                return Err(OmcpError::Store("receipt owns outgoing ID"));
+            }
+            s.put_out_file_rows(f, chunks)
+        })
+    }
+    fn put_out_file_rows<C: AsRef<[u8]>>(&self, f: &OutFileRec, chunks: &[C]) -> Result<()> {
+        self.put(Table::OutFiles, &f.id, Some(&f.peer), f)?;
+        for (i, c) in chunks.iter().enumerate() {
+            self.put_raw(
+                Table::FileChunks,
+                &chunk_id(&f.id, i as u32),
+                Some(&f.id),
+                c.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+    /// Metadata-only lookup; cancellation must not load sealed outgoing payloads.
+    pub fn out_file_exists(&self, id: &[u8; 16]) -> Result<bool> {
+        Ok(self.get::<OutFileRec>(Table::OutFiles, id)?.is_some())
+    }
+    pub fn delete_out_file(&self, id: &[u8; 16]) -> Result<()> {
+        self.transaction(|s| {
+            if let Some(f) = s.get::<OutFileRec>(Table::OutFiles, id)? {
+                s.delete_out_file_rows(&f)?;
             }
             Ok(())
         })
     }
-    pub fn delete_out_file(&self, id: &[u8; 16]) -> Result<()> {
-        let Some(f) = self.get::<OutFileRec>(Table::OutFiles, id)? else {
-            return Ok(());
-        };
+
+    fn delete_out_file_rows(&self, f: &OutFileRec) -> Result<()> {
+        for i in 0..f.total.max(1) {
+            self.del_raw(Table::FileChunks, &chunk_id(&f.id, i))?;
+        }
+        self.del_raw(Table::OutFiles, &f.id)
+    }
+
+    /// Atomically finish one OS-accepted transport batch. This records only
+    /// local transport acceptance, not receipt by the remote peer. Queue rows
+    /// removed by cancellation/burning are harmless no-ops; no message is ever
+    /// recreated. Ownership mismatches fail the entire transaction.
+    pub fn commit_outgoing(
+        &self,
+        peer: &[u8; 32],
+        queued: &[([u8; 16], bool)],
+        file: Option<OutgoingFileCommit>,
+    ) -> Result<()> {
         self.transaction(|s| {
-            for i in 0..f.total.max(1) {
-                s.del_raw(Table::FileChunks, &chunk_id(id, i))?;
+            for (id, control) in queued {
+                let Some(q) = s.get::<OutboxRec>(Table::Outbox, id)? else {
+                    continue;
+                };
+                if q.peer != *peer || q.control != *control {
+                    return Err(OmcpError::Store("outgoing queue ownership mismatch"));
+                }
+                if !control {
+                    if let Some(mut m) = s.message(id)? {
+                        if m.peer != *peer || !m.mine || m.file.is_some() {
+                            return Err(OmcpError::Store("outgoing message ownership mismatch"));
+                        }
+                        m.status = STATUS_SENT;
+                        s.put_message(&m)?;
+                    }
+                }
+                s.delete_outbox(id)?;
             }
-            s.del_raw(Table::OutFiles, id)
+            if let Some(commit) = file {
+                if let Some(f) = s.get::<OutFileRec>(Table::OutFiles, &commit.id)? {
+                    if f.peer != *peer {
+                        return Err(OmcpError::Store("outgoing file ownership mismatch"));
+                    }
+                    if commit.done_bytes > f.size
+                        || (commit.complete && commit.done_bytes != f.size)
+                    {
+                        return Err(OmcpError::Store("invalid outgoing file progress"));
+                    }
+                    if let Some(mut m) = s.message(&commit.id)? {
+                        if m.peer != *peer || m.file.is_none() || m.burn.is_some() {
+                            return Err(OmcpError::Store(
+                                "outgoing file message ownership mismatch",
+                            ));
+                        }
+                        // A restored sender may ask us to return a file we
+                        // originally received. Its same-peer OutFile owns the
+                        // outgoing work, but its received history/path/hash
+                        // must not be rewritten as our sent message.
+                        if m.mine
+                            && !m.file.as_ref().is_some_and(|f| {
+                                matches!(
+                                    f.state,
+                                    FILE_RECEIVED | FILE_INTEGRITY_FAILED | FILE_FINALIZING
+                                )
+                            })
+                        {
+                            let metadata = m.file.as_mut().expect("checked file metadata");
+                            metadata.done_bytes = metadata.done_bytes.max(commit.done_bytes);
+                            metadata.state = if commit.complete {
+                                FILE_SENT
+                            } else {
+                                FILE_SENDING
+                            };
+                            if commit.complete {
+                                m.status = STATUS_SENT;
+                            }
+                            s.put_message(&m)?;
+                        }
+                    }
+                    if commit.complete {
+                        s.delete_out_file_rows(&f)?;
+                    }
+                }
+            }
+            Ok(())
         })
     }
+
     /// Outgoing transfers (oldest first) with their sealed chunk payloads.
     pub fn out_files(&self) -> Result<Vec<(OutFileRec, SealedChunks)>> {
         let files: Vec<OutFileRec> = self.list(Table::OutFiles, None)?;
@@ -792,16 +1083,30 @@ impl Store {
                 if m.burn.is_some() {
                     continue;
                 }
+                if let Some(local) = s.message(&m.id)? {
+                    if local.peer != m.peer || local.mine != m.mine {
+                        return Err(OmcpError::Store("history message ownership mismatch"));
+                    }
+                    if s.has_receipt(&m.id)? {
+                        continue;
+                    }
+                }
                 let mut m = m.clone();
                 if let Some(f) = m.file.as_mut() {
                     f.local_path = None;
-                    if !matches!(f.state, FILE_SENT | FILE_RECEIVED) {
+                    if matches!(f.state, FILE_RECEIVED | FILE_FINALIZING) {
+                        f.state = FILE_MISSING;
+                        f.done_bytes = 0;
+                    } else if f.state != FILE_SENT {
                         f.state = FILE_FAILED;
                     }
                 }
                 s.put_message(&m)?;
             }
             for q in &h.outbox {
+                if s.has_receipt(&q.id)? {
+                    continue;
+                }
                 if !q.burn && !q.control {
                     s.put_outbox(q, None)?;
                 }
@@ -809,6 +1114,42 @@ impl Store {
             Ok(())
         })
     }
+}
+
+/// File portion of a transport batch accepted by the local OS. Durable bytes
+/// remain queued until `complete`; intermediate cursors are intentionally not
+/// persisted, so a new crypto session replays the offer and starts at chunk 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutgoingFileCommit {
+    pub id: [u8; 16],
+    pub done_bytes: u64,
+    pub complete: bool,
+}
+
+struct TransactionRollback<'a> {
+    store: &'a Store,
+    parent_depth: usize,
+    sql: &'static str,
+    committed: bool,
+}
+
+impl Drop for TransactionRollback<'_> {
+    fn drop(&mut self) {
+        if !self.committed && self.store.conn.execute_batch(self.sql).is_err() {
+            self.store.poisoned.set(true);
+        }
+        self.store.transaction_depth.set(self.parent_depth);
+        if self.store.conn.is_autocommit() != (self.parent_depth == 0) {
+            self.store.poisoned.set(true);
+        }
+    }
+}
+
+fn received_id(peer: &[u8; 32], id: &[u8; 16]) -> [u8; 48] {
+    let mut natural = [0u8; 48];
+    natural[..32].copy_from_slice(peer);
+    natural[32..].copy_from_slice(id);
+    natural
 }
 
 /// Decrypted chunk payloads of one outgoing transfer, in order.

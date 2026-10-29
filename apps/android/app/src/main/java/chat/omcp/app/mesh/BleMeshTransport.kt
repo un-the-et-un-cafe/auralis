@@ -48,6 +48,8 @@ import java.util.concurrent.RejectedExecutionException
 @SuppressLint("MissingPermission") // callers check runtime permissions first (MeshService)
 class BleMeshTransport(private val context: Context, private val repo: MeshRepository) {
     private val tag = "OmcpBle"
+    // Includes retired callback fences, so missing Android callbacks cannot grow state unboundedly.
+    private val maxServerConnections = 8
     private val io = Executors.newSingleThreadExecutor()
     private val bt = context.getSystemService(BluetoothManager::class.java)
     private val service = UUID.fromString(OmcpGatt.SERVICE)
@@ -61,9 +63,14 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     /** Peripheral side: per-central responder links + pending notify queue. */
     private val serverLinks = ConcurrentHashMap<String, CoreLink>()
     private val notifyQueues = ConcurrentHashMap<String, PduSendQueue>()
+    // Android's server callback has only a device address, not a connection ID.
+    // Do not admit a replacement session until an old outstanding callback drains.
+    // If Android never sends it, that peer remains fenced until this transport restarts.
+    private val retiredNotifications = ConcurrentHashMap<String, PduSendQueue>()
     private val subscribed = ConcurrentHashMap<String, BluetoothDevice>()
     private val serverMore = ConcurrentHashMap<String, Boolean>()
     private val serverPeer = ConcurrentHashMap<String, String>()
+    private val serverReceiptRecovery = ConcurrentHashMap<String, ReceiptRecoveryGate>()
     /** IO-confined. After abort, late PDUs cannot silently create a responder on the old session. */
     private val serverConnections = mutableSetOf<String>()
 
@@ -75,6 +82,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         val key: String get() = contactId ?: address
         val writes = PduSendQueue()
         var closed = false
+        val receiptRecovery = ReceiptRecoveryGate()
         /** Rust has more file chunks for this link: flush again when [writes] drains. */
         var more = false
     }
@@ -113,9 +121,12 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             serverLinks.clear()
             serverPeer.values.forEach(repo::pauseTransfers)
             serverPeer.clear()
+            serverReceiptRecovery.clear()
             serverConnections.clear()
             serverMore.clear()
+            notifyQueues.values.forEach(PduSendQueue::cancel)
             notifyQueues.clear()
+            retiredNotifications.clear()
             subscribed.clear()
             runCatching { server?.close() }
             server = null
@@ -167,7 +178,12 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                 if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
                     closeServer(device, disconnect = false)
                 } else if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    serverConnections.add(device.address)
+                    if (retiredNotifications.containsKey(device.address) ||
+                        (device.address !in serverConnections &&
+                            serverConnections.size + retiredNotifications.size >= maxServerConnections)
+                    ) {
+                        runCatching { server?.cancelConnection(device) }
+                    } else serverConnections.add(device.address)
                 }
             }
         }
@@ -181,7 +197,11 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             d: BluetoothDevice, id: Int, desc: BluetoothGattDescriptor,
             prepared: Boolean, needResp: Boolean, offset: Int, value: ByteArray,
         ) {
-            if (desc.uuid == cccd) subscribed[d.address] = d
+            if (desc.uuid == cccd) dispatch {
+                if (d.address !in serverConnections) return@dispatch
+                if (value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) subscribed[d.address] = d
+                else closeServer(d)
+            }
             if (needResp) server?.sendResponse(d, id, BluetoothGatt.GATT_SUCCESS, 0, null)
         }
 
@@ -193,9 +213,12 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             if (c.uuid != inbox) return
             dispatch {
                 if (d.address !in serverConnections) return@dispatch
-                val link = serverLinks.getOrPut(d.address) { repo.core.openResponderLink() }
+                val link = runCatching {
+                    serverLinks.getOrPut(d.address) { repo.core.openResponderLink() }
+                }.getOrElse { closeServer(d); return@dispatch }
                 val r = runCatching { link.onPdu(value) }.getOrElse {
                     Log.w(tag, "responder pdu rejected: ${it.message}")
+                    if (isStorageError(it) && serverReceiptRecovery.getOrPut(d.address) { ReceiptRecoveryGate() }.observe(false, true)) repo.retryFileFinalization()
                     closeServer(d)
                     return@dispatch
                 }
@@ -204,9 +227,15 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         }
 
         override fun onNotificationSent(d: BluetoothDevice, status: Int) {
+            // Capture before dispatch: a later connection/operation must not inherit this callback.
+            val queue = retiredNotifications[d.address] ?: notifyQueues[d.address] ?: return
+            val ticket = queue.callbackTicket ?: return
             dispatch {
-                val queue = notifyQueues[d.address] ?: return@dispatch
-                if (!queue.complete(status == BluetoothGatt.GATT_SUCCESS)) return@dispatch
+                val completed = queue.complete(ticket, status == BluetoothGatt.GATT_SUCCESS)
+                if (retiredNotifications[d.address] === queue && queue.callbackTicket == null) {
+                    retiredNotifications.remove(d.address, queue)
+                }
+                if (notifyQueues[d.address] !== queue || !completed) return@dispatch
                 if (status == BluetoothGatt.GATT_SUCCESS) pumpNotify(d) else closeServer(d)
             }
         }
@@ -214,33 +243,52 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
     private fun closeServer(d: BluetoothDevice, disconnect: Boolean = true) {
         serverConnections.remove(d.address)
-        serverLinks.remove(d.address)?.close()
-        notifyQueues.remove(d.address)
+        val queue = notifyQueues[d.address]
+        queue?.cancel()
+        if (queue?.callbackTicket != null) retiredNotifications[d.address] = queue
+        if (queue != null) notifyQueues.remove(d.address, queue)
+        serverLinks.remove(d.address)?.let { link ->
+            queue?.batchToken?.let { runCatching { link.abortOutgoing(it) } }
+            link.close()
+        }
         subscribed.remove(d.address)
         serverMore.remove(d.address)
         serverPeer.remove(d.address)?.let(repo::pauseTransfers)
+        serverReceiptRecovery.remove(d.address)
         if (disconnect) runCatching { server?.cancelConnection(d) }
         repo.refresh()
     }
 
     private fun onServerResult(d: BluetoothDevice, r: LinkResult) {
         if (!serverLinks.containsKey(d.address)) return
+        if (serverReceiptRecovery.getOrPut(d.address) { ReceiptRecoveryGate() }
+                .observe(r.established, r.fileFailures.any { it.reason == "storage" })) repo.retryFileFinalization()
         r.peerContactId?.let { serverPeer[d.address] = it }
         serverMore[d.address] = r.morePending
+        val queue = notifyQueues.getOrPut(d.address) { PduSendQueue() }
+        if (runCatching { queue.addBatch(r.batchToken, r.outgoing) }.isFailure) {
+            closeServer(d)
+            return
+        }
         handle(r)
-        notifyQueues.getOrPut(d.address) { PduSendQueue() }.addAll(r.outgoing)
         pumpNotify(d)
     }
 
     private fun pumpNotify(d: BluetoothDevice) {
         val link = serverLinks[d.address] ?: return
         val q = notifyQueues.getOrPut(d.address) { PduSendQueue() }
+        q.readyToken?.let { token ->
+            val committed = runCatching { link.commitOutgoing(token) }.getOrElse { closeServer(d); return }
+            q.committed(token)
+            serverMore[d.address] = committed.morePending
+            handle(committed)
+        }
         if (q.isEmpty && serverMore[d.address] == true && link.isEstablished()) {
             serverMore[d.address] = false
             val r = runCatching { link.flush() }.getOrElse { closeServer(d); return }
             serverMore[d.address] = r.morePending
+            if (runCatching { q.addBatch(r.batchToken, r.outgoing) }.isFailure) { closeServer(d); return }
             handle(r)
-            q.addAll(r.outgoing)
         }
         if (q.isEmpty) return
         val gatt = server ?: return closeServer(d)
@@ -440,9 +488,11 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, ch: BluetoothGattCharacteristic, status: Int) {
+            if (ch.uuid != inbox) return
+            val ticket = c.writes.callbackTicket ?: return
             dispatch {
-                if (c.closed || ch.uuid != inbox) return@dispatch
-                if (!c.writes.complete(status == BluetoothGatt.GATT_SUCCESS)) return@dispatch
+                if (c.closed || g !== c.gatt) return@dispatch
+                if (!c.writes.complete(ticket, status == BluetoothGatt.GATT_SUCCESS)) return@dispatch
                 if (status == BluetoothGatt.GATT_SUCCESS) pumpWrites(c) else closeClient(c)
             }
         }
@@ -461,9 +511,11 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         private fun onNotify(g: BluetoothGatt, ch: BluetoothGattCharacteristic, value: ByteArray) {
             if (ch.uuid != outbox) return
             dispatch {
+                if (c.closed || g !== c.gatt) return@dispatch
                 val link = c.link ?: return@dispatch
                 val r = runCatching { link.onPdu(value) }.getOrElse {
                     Log.w(tag, "initiator pdu rejected: ${it.message}")
+                    if (isStorageError(it) && c.receiptRecovery.observe(false, true)) repo.retryFileFinalization()
                     closeClient(c)
                     return@dispatch
                 }
@@ -474,9 +526,10 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
     private fun onClientResult(c: Client, r: LinkResult) {
         if (c.closed) return
+        if (c.receiptRecovery.observe(r.established, r.fileFailures.any { it.reason == "storage" })) repo.retryFileFinalization()
         c.more = r.morePending
+        if (runCatching { c.writes.addBatch(r.batchToken, r.outgoing) }.isFailure) { closeClient(c); return }
         handle(r)
-        c.writes.addAll(r.outgoing)
         pumpWrites(c)
     }
 
@@ -484,7 +537,11 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         if (c.closed) return
         c.closed = true
         endProbe(c, useful = false)
-        c.link?.close()
+        c.writes.cancel()
+        c.link?.let { link ->
+            c.writes.batchToken?.let { runCatching { link.abortOutgoing(it) } }
+            link.close()
+        }
         c.link = null
         clients.remove(c.key, c)
         c.contactId?.let(repo::pauseTransfers)
@@ -496,14 +553,21 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     private fun pumpWrites(c: Client) {
         if (c.closed) return
         val g = c.gatt ?: return closeClient(c)
+        c.writes.readyToken?.let { token ->
+            val link = c.link ?: return closeClient(c)
+            val committed = runCatching { link.commitOutgoing(token) }.getOrElse { closeClient(c); return }
+            c.writes.committed(token)
+            c.more = committed.morePending
+            handle(committed)
+        }
         if (c.writes.isEmpty) {
             val link = c.link
             if (c.more && link != null && link.isEstablished()) {
                 c.more = false
                 val r = runCatching { link.flush() }.getOrElse { closeClient(c); return }
                 c.more = r.morePending
+                if (runCatching { c.writes.addBatch(r.batchToken, r.outgoing) }.isFailure) { closeClient(c); return }
                 handle(r)
-                c.writes.addAll(r.outgoing)
             }
         }
         if (c.writes.isEmpty) return
@@ -522,6 +586,9 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     }
 
     // ---------------- shared ----------------
+
+    private fun isStorageError(error: Throwable) = error is chat.omcp.ffi.FfiException.Storage ||
+        error is chat.omcp.app.core.StorageUnavailableException
 
     private fun handle(r: LinkResult) {
         r.received.forEach { repo.onReceived(it); MeshNotifications.onMessage(context, repo, it) }

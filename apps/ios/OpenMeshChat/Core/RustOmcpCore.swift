@@ -8,7 +8,12 @@ import OmcpFFI
 public final class RustOmcpCore: HoplaKit.OmcpCore {
     public let linked = true
     public var suiteLabel: String { OmcpFFI.suiteLabel() }
-    private var node: OmcpNode?
+    private let nodeLock = NSLock()
+    private var loadedNode: OmcpNode?
+    private var node: OmcpNode? {
+        get { nodeLock.lock(); defer { nodeLock.unlock() }; return loadedNode }
+        set { nodeLock.lock(); defer { nodeLock.unlock() }; loadedNode = newValue }
+    }
 
     public init() {}
 
@@ -20,6 +25,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     private static func map(_ e: Error) -> Error {
         guard let f = e as? FfiError else { return e }
         switch f {
+        case .FileContentMismatch: return CoreError.localReceiveContentMismatch
         case .WrongBackupPassword: return CoreError.wrongBackupPassword
         case .Invalid(let msg): return CoreError.invalid(msg)
         case .FileTooLarge(let size, let max): return CoreError.fileTooLarge(size: size, max: max)
@@ -54,6 +60,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
         case .missing: return .missing
         case .requested: return .requested
         case .unavailable: return .unavailable
+        case .finalizing: return .finalizing
         }
     }
 
@@ -97,9 +104,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
                 FileProgressInfo(transferId: $0.transferIdHex, contactId: $0.contactId, incoming: $0.incoming, name: $0.name,
                                  size: $0.size, doneChunks: Int($0.doneChunks), totalChunks: Int($0.totalChunks))
             },
-            files: o.files.map {
-                ReceivedFileInfo(transferId: $0.transferIdHex, contactId: $0.contactId, name: $0.name, mime: $0.mime, bytes: $0.bytes)
-            },
+            files: o.files.map(receipt),
             fileFailures: o.fileFailures.map { FileFailureInfo(transferId: $0.transferIdHex, contactId: $0.contactId, reason: $0.reason) },
             morePending: o.morePending,
             restoreNotices: o.restoreNotices.map {
@@ -107,7 +112,49 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
             },
             mediaRequests: o.mediaRequests.map(request),
             resendAsks: o.resendAsks.map(request),
-            mediaUpdates: o.mediaUpdates.map { MediaUpdateInfo(contactId: $0.contactId, msgId: $0.msgIdHex, state: fileState($0.state)) })
+            mediaUpdates: o.mediaUpdates.map { MediaUpdateInfo(contactId: $0.contactId, msgId: $0.msgIdHex, state: fileState($0.state)) },
+            batchToken: o.batchToken)
+    }
+
+    static func receipt(_ r: OmcpFFI.ReceivedFile) -> ReceiveReceiptInfo {
+        ReceiveReceiptInfo(transferId: r.transferIdHex, contactId: r.contactId, name: r.name, mime: r.mime,
+                           size: r.size, receiptToken: r.receiptTokenHex, contentHash: r.contentHashHex, blockCount: r.blockCount)
+    }
+    private final class ReceiptVerifier: ReceiveFileVerifier {
+        private let inner: OmcpFFI.ReceivedFileVerifier
+        init(_ inner: OmcpFFI.ReceivedFileVerifier) { self.inner = inner }
+        func update(_ bytes: Data) throws { do { try inner.update(bytes: bytes) } catch { throw RustOmcpCore.map(error) } }
+        func finish() throws { do { try inner.finish() } catch { throw RustOmcpCore.map(error) } }
+    }
+    public func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo {
+        try call { Self.receipt(try n().validateReceivedFileForRepair(receiptTokenHex: receiptToken)) }
+    }
+    public func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo? {
+        try call { try n().recoverableReceivedFile(contactId: contactId, msgIdHex: msgId).map(Self.receipt) }
+    }
+    public func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws {
+        try call { try n().requestCancelledReceivedFile(receipt: OmcpFFI.ReceivedFile(
+            transferIdHex: receipt.transferId, contactId: receipt.contactId, name: receipt.name,
+            mime: receipt.mime, size: receipt.size, receiptTokenHex: receipt.receiptToken,
+            contentHashHex: receipt.contentHash, blockCount: receipt.blockCount)) }
+    }
+    public func pendingReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().pendingReceivedFiles().map(Self.receipt) } }
+    public func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().cancelledReceivedFiles().map(Self.receipt) } }
+    @discardableResult public func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool {
+        try call { try n().acknowledgeReceivedFileCleanup(receiptTokenHex: receiptToken) }
+    }
+    public func retryReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().retryReceivedFiles().map(Self.receipt) } }
+    public func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data {
+        try call { try n().readReceivedFileBlock(receiptTokenHex: receiptToken, index: index) }
+    }
+    public func commitReceivedFile(_ receiptToken: String, path: String) throws {
+        try call { try n().commitReceivedFile(receiptTokenHex: receiptToken, localPath: path) }
+    }
+    public func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier {
+        try call { ReceiptVerifier(try n().receivedFileVerifier(receiptTokenHex: receiptToken)) }
+    }
+    @discardableResult public func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool {
+        try call { try n().markReceivedFileMissing(transferIdHex: transferId, expectedLocalPath: expectedPath) }
     }
 
     public func generateRecoveryPhrase() throws -> String { try call { try OmcpFFI.generateRecoveryPhrase() } }
@@ -280,7 +327,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
                              chunks: Int(o.numChunks))
     }
 
-    @discardableResult public func cancelFile(_ transferId: String) -> Bool { node?.cancelFile(transferIdHex: transferId) ?? false }
+    @discardableResult public func cancelFile(_ transferId: String) throws -> Bool { try call { try n().cancelFile(transferIdHex: transferId) } }
     public func queuedFor(_ contactId: String) -> Int { Int(node?.queuedFor(contactId: contactId) ?? 0) }
 
     public func pathStatus() -> MeshStatus {
@@ -362,6 +409,12 @@ final class RustLink: CoreLink {
     func onPdu(_ pdu: Data) throws -> LinkResult { try wrap { try link.onPdu(pdu: pdu) } }
     func sendText(_ text: String) throws -> LinkResult { try wrap { try link.sendText(text: text) } }
     func flush() throws -> LinkResult { try wrap { try link.flush() } }
+    func commitOutgoing(_ token: String) throws -> LinkResult {
+        try wrap { try link.commitOutgoing(token: token) }
+    }
+    func abortOutgoing(_ token: String) throws {
+        do { try link.abortOutgoing(token: token) } catch { throw CoreError.other("\(error)") }
+    }
     var isEstablished: Bool { link.isEstablished() }
     func close() { link.shutdown() }
 }

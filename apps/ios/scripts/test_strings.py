@@ -53,6 +53,14 @@ class LocalizationTests(unittest.TestCase):
                 strings.check()
         self.assertIn("auralis_gateway_usage (format args)", output.getvalue())
 
+    def test_sent_copy_distinguishes_os_acceptance_from_peer_receipt(self):
+        english, french = strings.S["msg_sent"]
+        self.assertIn("Bluetooth", english)
+        self.assertIn("Receipt unconfirmed", english)
+        self.assertIn("Bluetooth", french)
+        self.assertIn("Réception non confirmée", french)
+        self.assertTrue(all("Bluetooth" in value for value in strings.S["file_state_sent"]))
+
     def test_headlines_encode_line_breaks_not_literal_backslash_n(self):
         self.assertIn("\n", strings.S["auralis_welcome_title"][0])
         self.assertEqual(strings.esc('first\n"second"'), 'first\\n\\"second\\"')

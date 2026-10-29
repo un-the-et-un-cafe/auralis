@@ -334,3 +334,23 @@ for every feature claimed. Completion criterion for “fully OMCP compliant” i
 strictly stronger and remains blocked by the explicit implementation/spec gaps
 above. No deployment, repository publication or protocol changes were performed
 by this audit.
+
+### Explicit reviewed additions (manifest schema 2)
+
+The guard also supports schema `2`, whose exact top-level fields are `schema`,
+`upstream_commit`, `changes`, and `additions`. Schema `1` remains supported with
+its existing fields and semantics. The immutable upstream commit is unchanged.
+`changes` continues to require the original baseline hash for existing files.
+
+Each `additions` entry must contain exactly `path`, `accepted_sha256`, `rationale`,
+and `evidence` (a nonempty list of nonempty strings). An addition must be absent
+from the baseline, use a unique canonical relative literal path inside an existing
+protected directory, and match its explicitly reviewed SHA-256. Existing-file
+exceptions cannot be replaced with additions. Symlinks (including scope ancestor
+symlinks), path escapes, wildcards and special files are rejected. Missing,
+modified or unlisted protected files still fail the guard.
+
+Schema support does not approve any new source: a reviewer must inspect each new
+module and its regression evidence before adding its exact hash. Do not regenerate
+or automatically populate this list to make CI pass. This policy change leaves the
+current schema-1 manifest and all previously accepted source hashes untouched.

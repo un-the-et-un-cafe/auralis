@@ -14,7 +14,7 @@ import hashlib
 import io
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 import tarfile
@@ -60,8 +60,11 @@ def workspace_hashes(repo: Path) -> dict[str, str]:
     hashes = {}
     for scope in SCOPES:
         root = repo / scope
-        if root.is_symlink():
-            raise RuntimeError(f"symlink in protected scope: {scope}")
+        for parent in (root, *root.parents):
+            if parent == repo:
+                break
+            if parent.is_symlink():
+                raise RuntimeError(f"symlink in protected scope: {scope}")
         paths = root.rglob("*") if root.is_dir() else (root,)
         for path in paths:
             if path.is_symlink():
@@ -70,15 +73,20 @@ def workspace_hashes(repo: Path) -> dict[str, str]:
                 hashes[path.relative_to(repo).as_posix()] = hashlib.sha256(
                     path.read_bytes()
                 ).hexdigest()
+            elif path.exists() and not path.is_dir():
+                raise RuntimeError(f"unsupported protected file type: {path.relative_to(repo)}")
     return hashes
 
 
 def apply_reviewed_changes(expected: dict[str, str], policy: object) -> dict[str, str]:
     """Validate every exception against upstream; never accept globs or a new HEAD."""
-    if not isinstance(policy, dict) or set(policy) != {"schema", "upstream_commit", "changes"}:
-        raise RuntimeError("review manifest must contain schema, upstream_commit and changes")
-    if type(policy["schema"]) is not int or policy["schema"] != 1:
+    if not isinstance(policy, dict) or type(policy.get("schema")) is not int or policy["schema"] not in (1, 2):
         raise RuntimeError("unsupported review manifest schema")
+    fields = {"schema", "upstream_commit", "changes"}
+    if policy["schema"] == 2:
+        fields.add("additions")
+    if set(policy) != fields:
+        raise RuntimeError("review manifest fields do not match its schema")
     if policy["upstream_commit"] != DEFAULT_BASE:
         raise RuntimeError("review manifest must retain the immutable upstream commit")
     if not isinstance(policy["changes"], list):
@@ -109,7 +117,44 @@ def apply_reviewed_changes(expected: dict[str, str], policy: object) -> dict[str
         ):
             raise RuntimeError(f"missing regression evidence: {path}")
         accepted[path] = entry["accepted_sha256"]
+    if policy["schema"] == 2:
+        additions = policy["additions"]
+        if not isinstance(additions, list):
+            raise RuntimeError("review manifest additions must be a list")
+        for entry in additions:
+            if not isinstance(entry, dict) or set(entry) != {"path", "accepted_sha256", "rationale", "evidence"}:
+                raise RuntimeError("each reviewed addition needs path, accepted hash, rationale and evidence")
+            path = entry["path"]
+            validate_added_path(path)
+            if path in expected or path in seen:
+                raise RuntimeError(f"existing or duplicate protected addition: {path}")
+            seen.add(path)
+            value = entry["accepted_sha256"]
+            if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise RuntimeError(f"invalid accepted_sha256: {path}")
+            if not isinstance(entry["rationale"], str) or not entry["rationale"].strip():
+                raise RuntimeError(f"missing review rationale: {path}")
+            evidence = entry["evidence"]
+            if not isinstance(evidence, list) or not evidence or any(
+                not isinstance(item, str) or not item.strip() for item in evidence
+            ):
+                raise RuntimeError(f"missing regression evidence: {path}")
+            accepted[path] = value
     return accepted
+
+
+def validate_added_path(path: object) -> None:
+    """Only literal canonical repository paths inside existing guarded directories."""
+    if not isinstance(path, str) or not path or any(
+        char in path for char in "\\:*?[]"
+    ) or any(ord(char) < 32 or ord(char) == 127 for char in path):
+        raise RuntimeError(f"invalid protected addition path: {path!r}")
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or parsed.as_posix() != path or ".." in parsed.parts:
+        raise RuntimeError(f"noncanonical protected addition path: {path!r}")
+    # PROTOCOL.md is a protected file, never a new directory namespace.
+    if not any(path.startswith(scope + "/") for scope in SCOPES if scope != "PROTOCOL.md"):
+        raise RuntimeError(f"addition outside protected directories: {path}")
 
 
 def strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

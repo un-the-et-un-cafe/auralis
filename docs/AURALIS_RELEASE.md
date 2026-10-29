@@ -268,3 +268,31 @@ own manually dispatched run. Signed distribution and physical-device acceptance
 remain separate gates even after all build jobs pass. Adding these files alone
 does not publish a repository, sign or deploy an app, submit it to a store, or
 change external repository settings.
+
+## Known v1 reliability work still open
+
+The [durable transport-acceptance stage](TRANSPORT_ACCEPTANCE.md) addresses the
+sender queue/OS-acceptance boundary, not a peer-delivery acknowledgement. Its
+local tests do not replace exact-commit hosted/native/device release gates.
+
+**Receive-file finalization is the next bounded stage and blocks a v1 durable
+file-delivery claim.** `NodeState::persist_file_events` currently persists
+`FILE_RECEIVED` before Android/iOS `MeshRepository.onFileReceived` saves the
+returned bytes and calls `setReceivedFilePath`. A crash between those steps can
+leave no saved bytes/path while the completed-transfer guard suppresses replay.
+Add recoverable staging/finalization and crash/reopen tests both before native
+writing and after writing but before path acknowledgement, retaining peer/ID
+ownership and immutable fully finalized transfers. The sender-ACK patch does
+not fix or claim receive-side crash safety.
+
+**Safe downgrade/store-error recovery is also a v1 release gate.** The Rust
+schema-v3 refusal in older schema-v2 code is not sufficient: Android and iOS
+older `MeshRepository.loadCore` implementations caught generic store-unavailable
+errors, attempted to rename the database, deleted its rollback journal, and
+opened a fresh store.
+Downgrading may silently take that path; original database/journal preservation
+is not guaranteed for those older binaries. The current store-opening safety
+checkpoint authenticates key/owner before migrations and removes the automatic
+native reset, offering blocked startup and retry. Native SDK/runtime validation
+is still required, and the receive-file durable-finalization gate remains open.
+No safe downgrade or v1 release is claimed.

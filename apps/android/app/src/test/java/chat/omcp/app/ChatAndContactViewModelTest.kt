@@ -17,7 +17,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import chat.omcp.app.core.FileFailureInfo
 import chat.omcp.app.core.FileProgressInfo
-import chat.omcp.app.core.ReceivedFileInfo
+import chat.omcp.app.core.ReceiveReceiptInfo
 import chat.omcp.app.data.FileAttachment
 import chat.omcp.app.data.FileSink
 import org.junit.Test
@@ -125,23 +125,17 @@ class ChatAndContactViewModelTest {
         f = repo.messages.value[c.id]!!.single().file!!
         assertEquals(FileAttachment.State.Sent, f.state)
 
-        // Incoming: progress creates a Receiving bubble, then the verified file lands.
-        val saved = mutableListOf<String>()
-        repo.fileSink = FileSink { saved += it.name; "/data/files/${it.name}" }
+        // An unsolicited/stale metadata event cannot fabricate Received or invoke a sink.
         repo.onFileProgress(FileProgressInfo("in1", c.id, true, "b.jpg", 10, 0, 1))
+        repo.onFileReceived(ReceiveReceiptInfo("in1", c.id, "b.jpg", "image/jpeg", 10, "stale", "", 1))
         assertEquals(FileAttachment.State.Receiving, repo.messages.value[c.id]!!.last().file!!.state)
-        repo.onFileReceived(ReceivedFileInfo("in1", c.id, "b.jpg", "image/jpeg", ByteArray(10)))
-        f = repo.messages.value[c.id]!!.last().file!!
-        assertEquals(FileAttachment.State.Received, f.state)
-        assertEquals("/data/files/b.jpg", f.localPath)
-        assertEquals(listOf("b.jpg"), saved)
 
         repo.onFileProgress(FileProgressInfo("in2", c.id, true, "c.bin", 10, 0, 1))
         repo.onFileFailed(FileFailureInfo("in2", c.id, "integrity"))
         assertEquals(FileAttachment.State.IntegrityFailed, repo.messages.value[c.id]!!.last().file!!.state)
 
         repo.cancelFile(c.id, id)
-        assertTrue(repo.messages.value[c.id]!!.none { it.id == id })
+        assertTrue(repo.messages.value[c.id].orEmpty().none { it.id == id })
         assertFalse(core.files.contains(id))
     }
 

@@ -22,11 +22,15 @@ import javax.crypto.spec.GCMParameterSpec
 class PrefsAppStore(context: Context) : AppStore {
     private val prefs = context.getSharedPreferences("omcp", Context.MODE_PRIVATE)
 
+    override val hasSavedIdentity: Boolean get() = prefs.contains(K_PHRASE)
+
     override var recoveryPhrase: String?
         get() = prefs.getString(K_PHRASE, null)?.let { runCatching { open(it) }.getOrNull() }
         set(v) {
             prefs.edit().apply { if (v == null) remove(K_PHRASE) else putString(K_PHRASE, seal(v)) }.apply()
         }
+
+    override val hasSavedStorageKey: Boolean get() = prefs.contains(K_STORAGE_KEY)
 
     override var storageKey: ByteArray?
         get() = prefs.getString(K_STORAGE_KEY, null)?.let { s -> runCatching { Base64.decode(open(s), Base64.NO_WRAP) }.getOrNull() }

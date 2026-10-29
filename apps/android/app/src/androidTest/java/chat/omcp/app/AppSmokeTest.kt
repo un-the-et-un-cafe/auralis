@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -61,10 +62,23 @@ class AppSmokeTest {
     private fun back() { hideKeyboard(); device.pressBack(); compose.waitForIdle() }
     private fun hideKeyboard() {
         compose.runOnIdle {
+            // A restored focused editor can enqueue a late IME show. Relinquish
+            // focus before requesting hide so Back is tested as navigation.
+            compose.activity.currentFocus?.clearFocus()
             WindowCompat.getInsetsController(compose.activity.window, compose.activity.window.decorView)
                 .hide(WindowInsetsCompat.Type.ime())
         }
-        device.waitForIdle()
+        val gate = StableImeDismissal(stableForMs = 500)
+        compose.waitUntil(10_000) {
+            val (attached, visible) = compose.runOnIdle {
+                val decor = compose.activity.window.decorView
+                decor.isAttachedToWindow to ViewCompat.getRootWindowInsets(decor)
+                    ?.isVisible(WindowInsetsCompat.Type.ime())
+            }
+            val focused = compose.onAllNodes(isFocused()).fetchSemanticsNodes().isNotEmpty()
+            gate.observe(SystemClock.elapsedRealtime(), attached, visible, focused)
+        }
+        Log.i("AppSmokeTest", "IME hidden and input focus released before navigation")
     }
 
     private fun assertSecure() = compose.runOnIdle {
@@ -106,7 +120,11 @@ class AppSmokeTest {
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText("Smoke Alice").assertExists()
         // Back from an interrupted profile must not create or replace an identity.
-        back()
+        back() // Exactly one system Back after measured keyboard dismissal.
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText(text(R.string.onb_get_started)).fetchSemanticsNodes().size == 1
+        }
+        compose.onNodeWithText(text(R.string.onb_display_name)).assertDoesNotExist()
         assertNull(app.repository.core.identity())
         clickText(R.string.onb_get_started)
         clickText(R.string.cta_continue)

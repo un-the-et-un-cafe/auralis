@@ -12,6 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -34,6 +38,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -284,6 +291,22 @@ fun ChatThreadScreen(
             }
         }
     }
+    val receiveFailure by vm.repo.receiveFailure.collectAsState()
+    val requestableReceipts by vm.repo.requestableReceipts.collectAsState()
+    val eligibilityRevision by vm.repo.receiptEligibilityRevision.collectAsState()
+    val receiptListState = rememberLazyListState()
+    val eligibilityMessages by rememberUpdatedState(msgs)
+    val latestEligibilityRevision by rememberUpdatedState(eligibilityRevision)
+    LaunchedEffect(vm.contactId) {
+        // snapshotFlow conflates while this single collector awaits its bounded IO pass.
+        snapshotFlow {
+            val failed = eligibilityMessages.filter { it.file?.state == S.Failed }.map { it.id }.toSet()
+            receiptListState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.filter { it in failed }.take(32) to latestEligibilityRevision
+        }.distinctUntilChanged().collect { (visible, _) ->
+            withContext(Dispatchers.IO) { runCatching { vm.repo.discoverRequestableFiles(vm.contactId, visible).get() } }
+        }
+    }
+    val repairableReceipts by vm.repo.repairableReceipts.collectAsState()
     val fileError by vm.fileError.collectAsState()
     if (fileError) {
         AlertDialog(
@@ -412,6 +435,10 @@ fun ChatThreadScreen(
             if (composer.sendFailed) {
                 Callout(stringResource(R.string.auralis_send_failed), CalloutKind.Danger, Modifier.padding(12.dp))
             }
+            if (receiveFailure) {
+                Callout(stringResource(R.string.file_receive_retry_notice), CalloutKind.Danger,
+                    Modifier.padding(12.dp).clickable(role = Role.Button, onClick = vm::retryFileFinalization))
+            }
             // Path banner: mesh / gateway / mixed / queued only.
             PathBanner(
                 kind = path,
@@ -439,6 +466,7 @@ fun ChatThreadScreen(
                     Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clickable { vm.dismissResendAsk(a.msgId) })
             }
             LazyColumn(
+                state = receiptListState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -471,6 +499,12 @@ fun ChatThreadScreen(
                             f = f,
                             peerName = contact?.displayName ?: "",
                             onCancel = { vm.cancelTransfer(m.id) },
+                            onRetry = vm::retryFileFinalization,
+                            transferId = m.id,
+                            requestAction = requestableReceipts[m.id]?.actionId,
+                            onRequestAgain = vm::requestCancelledFileAgain,
+                            repairAction = repairableReceipts[m.id]?.actionId,
+                            onRepair = vm::repairLocalFile,
                             onOpen = {
                                 val path = f.localPath ?: return@FileBubble
                                 val app = ctx.applicationContext as chat.omcp.app.OmcpApplication
@@ -480,7 +514,7 @@ fun ChatThreadScreen(
                     } else {
                         val meta = time(m.timeMs) + " · " + when (m.status) {
                             ChatMessage.Status.Queued -> "Queued"
-                            ChatMessage.Status.Sent -> "Sent · Mesh"
+                            ChatMessage.Status.Sent -> stringResource(R.string.message_transport_accepted)
                             ChatMessage.Status.Received -> "Mesh"
                             ChatMessage.Status.System -> ""
                         }
@@ -503,6 +537,12 @@ private fun FileBubble(
     peerName: String,
     onCancel: () -> Unit,
     onOpen: () -> Unit,
+    onRetry: () -> Unit,
+    transferId: String,
+    requestAction: String?,
+    onRequestAgain: (String, String) -> Unit,
+    repairAction: String?,
+    onRepair: (String, String) -> Unit,
 ) {
     val c = LocalOmcpColors.current
     val done = mb(f.doneBytes)
@@ -512,6 +552,7 @@ private fun FileBubble(
         S.Sending -> stringResource(R.string.file_state_sending, done, total)
         S.Sent -> stringResource(R.string.file_state_sent, total)
         S.Receiving -> stringResource(R.string.file_state_receiving, done, total)
+        S.Finalizing -> stringResource(R.string.file_state_finalizing)
         S.Paused -> stringResource(R.string.file_state_paused, done, total)
         S.Received -> stringResource(R.string.file_state_received, total)
         S.Failed -> stringResource(R.string.file_state_failed)
@@ -548,7 +589,7 @@ private fun FileBubble(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(f.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 when (f.state) {
-                    S.Queued, S.Sending, S.Paused, S.Receiving -> {
+                    S.Queued, S.Sending, S.Paused, S.Receiving, S.Finalizing -> {
                         val a11y = if (mine) stringResource(R.string.file_cancel_a11y, f.name) else stringResource(R.string.file_cancel_receive_a11y, f.name)
                         IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = a11y) }
                     }
@@ -570,6 +611,11 @@ private fun FileBubble(
                     .semantics { contentDescription = progressLabel },
                 color = barColor,
             )
+            if (f.state == S.Failed && requestAction != null) chat.omcp.app.ui.components.CancelledFileRequestAction(transferId, requestAction, onRequestAgain)
+            if (f.state == S.Finalizing) {
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.file_retry_finalizing)) }
+                if (repairAction != null) chat.omcp.app.ui.components.LocalFileRepairAction(transferId, repairAction, onRepair)
+            }
             meta?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.ink2, modifier = Modifier.padding(top = 4.dp)) }
         }
     }

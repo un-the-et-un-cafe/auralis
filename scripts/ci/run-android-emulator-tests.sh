@@ -75,14 +75,12 @@ ADB="$ANDROID_HOME/platform-tools/adb"
 export ANDROID_SERIAL=emulator-5554
 EMULATOR_PID=
 LOGCAT_PID=
+source "$(dirname "$0")/android-emulator-cleanup.sh"
 cleanup() {
   local result=$?
   trap - EXIT
-  if [[ -n "$LOGCAT_PID" ]]; then kill "$LOGCAT_PID" 2>/dev/null || true; fi
-  if [[ -n "$EMULATOR_PID" ]]; then
-    "$ADB" -s "$ANDROID_SERIAL" emu kill >/dev/null 2>&1 || true
-    kill "$EMULATOR_PID" 2>/dev/null || true
-    wait "$EMULATOR_PID" 2>/dev/null || true
+  if ! auralis_cleanup_android "$ADB" "$ANDROID_SERIAL" "$EMULATOR_PID" "$LOGCAT_PID"; then
+    echo "Android cleanup incomplete; preserving original test exit status $result." >&2
   fi
   exit "$result"
 }

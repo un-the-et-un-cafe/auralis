@@ -199,6 +199,51 @@ public struct ReceivedFileInfo: Equatable, Sendable {
     }
 }
 
+/// Durable metadata-only receipt. Verified bytes remain sealed until native commit.
+public struct ReceiveReceiptInfo: Equatable, Sendable {
+    public var transferId: String
+    public var contactId: String
+    public var name: String
+    public var mime: String
+    public var size: UInt64
+    public var receiptToken: String
+    public var contentHash: String
+    public var blockCount: UInt32
+    public init(transferId: String, contactId: String, name: String, mime: String, size: UInt64,
+                receiptToken: String, contentHash: String, blockCount: UInt32) {
+        self.transferId = transferId; self.contactId = contactId; self.name = name; self.mime = mime
+        self.size = size; self.receiptToken = receiptToken; self.contentHash = contentHash; self.blockCount = blockCount
+    }
+}
+
+/// Streaming Rust BLAKE3/length verifier, fed only bytes read back from the file.
+/// A snapshot issued only after a typed local full-length hash mismatch.
+public struct LocalReceiptRepairAction: Equatable, Sendable {
+    public let receipt: ReceiveReceiptInfo
+    let identityEpoch: UInt64
+}
+
+/// One-shot confirmation snapshot; only the repository can issue it.
+public struct CancelledReceiptRequestAction: Equatable, Sendable {
+    public let receipt: ReceiveReceiptInfo
+    let identityEpoch: UInt64
+    let actionId: UUID
+}
+
+/// Confirmation state shared by the view and callback tests. Dismissal never invokes work.
+public struct CancelledFileRequestConfirmation {
+    private var action: (() -> Void)?
+    public init() {}
+    public mutating func present(_ action: @escaping () -> Void) { self.action = action }
+    public mutating func dismiss() { action = nil }
+    public mutating func confirm() { let captured = action; action = nil; captured?() }
+}
+
+public protocol ReceiveFileVerifier: AnyObject {
+    func update(_ bytes: Data) throws
+    func finish() throws
+}
+
 /// `integrity` (hash/AEAD failed), `invalid` or `busy`.
 public struct FileFailureInfo: Equatable, Sendable {
     public var transferId: String
@@ -214,15 +259,17 @@ public struct FileFailureInfo: Equatable, Sendable {
 /// PDUs to transmit (in order) + decrypted messages from one link step.
 public struct LinkResult: Sendable {
     public var outgoing: [Data]
+    /// Commit only after every PDU is accepted by the OS transport; not peer receipt.
+    public var batchToken: String?
     public var received: [IncomingText]
     public var established: Bool
     public var peerContactId: String?
     public var flushed: Int
     public var opened: [OpenedInfo]
     public var fileProgress: [FileProgressInfo]
-    public var files: [ReceivedFileInfo]
+    public var files: [ReceiveReceiptInfo]
     public var fileFailures: [FileFailureInfo]
-    /// More file chunks wait: call `flush()` again once the BLE write/notify queue is empty.
+    /// More work waits: call `flush()` only after the current batch has committed.
     public var morePending: Bool
     /// RS1: contacts now on a new (restored) device; the core already stored the system notice.
     public var restoreNotices: [RestoreNoticeInfo] = []
@@ -233,15 +280,16 @@ public struct LinkResult: Sendable {
     /// CB3: placeholder state changes (requested / unavailable).
     public var mediaUpdates: [MediaUpdateInfo] = []
     public init(outgoing: [Data], received: [IncomingText], established: Bool, peerContactId: String?, flushed: Int,
-                opened: [OpenedInfo] = [], fileProgress: [FileProgressInfo] = [], files: [ReceivedFileInfo] = [],
+                opened: [OpenedInfo] = [], fileProgress: [FileProgressInfo] = [], files: [ReceiveReceiptInfo] = [],
                 fileFailures: [FileFailureInfo] = [], morePending: Bool = false,
                 restoreNotices: [RestoreNoticeInfo] = [], mediaRequests: [MediaRequestInfo] = [],
-                resendAsks: [MediaRequestInfo] = [], mediaUpdates: [MediaUpdateInfo] = []) {
+                resendAsks: [MediaRequestInfo] = [], mediaUpdates: [MediaUpdateInfo] = [], batchToken: String? = nil) {
         self.restoreNotices = restoreNotices
         self.mediaRequests = mediaRequests
         self.resendAsks = resendAsks
         self.mediaUpdates = mediaUpdates
         self.outgoing = outgoing
+        self.batchToken = batchToken
         self.received = received
         self.established = established
         self.peerContactId = peerContactId
@@ -347,6 +395,7 @@ public struct StoredMessageInfo: Equatable, Sendable {
 }
 
 public enum CoreError: Error, Equatable {
+    case localReceiveContentMismatch
     case wrongBackupPassword
     case invalid(String)
     case fileTooLarge(size: UInt64, max: UInt64)
@@ -476,6 +525,10 @@ public protocol CoreLink: AnyObject {
     func onPdu(_ pdu: Data) throws -> LinkResult
     func sendText(_ text: String) throws -> LinkResult
     func flush() throws -> LinkResult
+    /// Atomically retire a batch accepted by the OS, never an end-to-end delivery ACK.
+    func commitOutgoing(_ token: String) throws -> LinkResult
+    /// Discard this session and its ciphertext, preserving logical durable work for reconnect.
+    func abortOutgoing(_ token: String) throws
     var isEstablished: Bool { get }
     func close()
 }
@@ -500,6 +553,18 @@ public protocol OmcpCore: AnyObject {
     func storedMessages(_ contactId: String) -> [StoredMessageInfo]
     /// Record where a verified received file was saved (nil = couldn't save).
     func setReceivedFilePath(_ transferId: String, path: String?) throws
+    func pendingReceivedFiles() throws -> [ReceiveReceiptInfo]
+    func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo]
+    @discardableResult func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool
+    func retryReceivedFiles() throws -> [ReceiveReceiptInfo]
+    func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data
+    func commitReceivedFile(_ receiptToken: String, path: String) throws
+    func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier
+    func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo
+    func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo?
+    func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws
+    @discardableResult func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool
+
     /// Import `RestoredBackup.history` into the local store.
     func restoreHistory(_ history: Data) throws
 
@@ -553,7 +618,7 @@ public protocol OmcpCore: AnyObject {
     func burnSpecValid(_ spec: BurnSpec) -> Bool
     /// Queue a file (≤ `maxFileBytes()`, checked in Rust before encryption). Throws `.fileTooLarge`.
     func queueFile(_ contactId: String, name: String, mime: String, bytes: Data) throws -> FileOfferInfo
-    @discardableResult func cancelFile(_ transferId: String) -> Bool
+    @discardableResult func cancelFile(_ transferId: String) throws -> Bool
     func queuedFor(_ contactId: String) -> Int
     func pathStatus() -> MeshStatus
 
@@ -587,6 +652,18 @@ public extension OmcpCore {
     }
     func storedMessages(_ contactId: String) -> [StoredMessageInfo] { [] }
     func setReceivedFilePath(_ transferId: String, path: String?) throws {}
+    func pendingReceivedFiles() throws -> [ReceiveReceiptInfo] { [] }
+    func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { [] }
+    func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool { throw CoreError.storageUnavailable("receipt cleanup acknowledgement unavailable") }
+    func retryReceivedFiles() throws -> [ReceiveReceiptInfo] { try pendingReceivedFiles() }
+    func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data { throw CoreError.storageUnavailable("receipt blocks unavailable") }
+    func commitReceivedFile(_ receiptToken: String, path: String) throws { throw CoreError.storageUnavailable("receipt commit unavailable") }
+    func recoverableReceivedFile(_ contactId: String, msgId: String) throws -> ReceiveReceiptInfo? { nil }
+    func requestCancelledReceivedFile(_ receipt: ReceiveReceiptInfo) throws { throw CoreError.storageUnavailable("cancelled request unavailable") }
+    func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo { throw CoreError.storageUnavailable("repair validation unavailable") }
+    func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier { throw CoreError.storageUnavailable("receipt verifier unavailable") }
+    func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool { throw CoreError.storageUnavailable("missing-file transition unavailable") }
+
     func restoreHistory(_ history: Data) throws {}
 
     func chatBackupDue(nowMs: Int64, onWifi: Bool, allowMobile: Bool) -> Bool { false }

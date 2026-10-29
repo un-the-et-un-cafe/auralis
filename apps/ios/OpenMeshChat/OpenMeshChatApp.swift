@@ -14,7 +14,13 @@ struct OpenMeshChatApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if model.onboarded {
+                if model.repo.storageBlocked {
+                    VStack(spacing: 16) {
+                        Text(L("store_blocked_title")).font(.title2)
+                        Text(L("store_blocked_body"))
+                        Button(L("store_retry")) { model.retryStore() }
+                    }.padding(24)
+                } else if model.onboarded {
                     AuralisRootView()
                 } else {
                     OnboardingView()

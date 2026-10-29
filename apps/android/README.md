@@ -151,12 +151,26 @@ recovery remains the explicit encrypted backup / phrase flow. File selection enf
 size cap while reading, even when a document provider reports an unknown or incorrect length.
 Drafts survive activity recreation only in memory, never in saved-state Bundles.
 
-**Remaining transport release blocker:** rejected or failed GATT operations now close the crypto
-session rather than skipping/replaying nonce-bearing PDUs. However, the core currently consumes
-the durable outbox when generating PDUs, before a transport acknowledgement. A radio failure can
-therefore leave a generated message or final file batch marked sent without delivery. A coordinated
-core/mobile acknowledgement-and-requeue contract and two-device failure-injection testing are
-required before claiming reliable delivery. Reconnection alone does not resolve this gap.
+**Transport acceptance, not peer delivery:** every Rust PDU batch has a token. Android
+commits it only after all central writes or peripheral notifications report successful OS
+callbacks. Until that durable commit, text and final-file work remain replayable; any
+submission, callback, or commit failure aborts the crypto session instead of skipping or
+reusing nonce-bearing PDUs. Sender progress/status changes only after commit. The UI says
+“Sent to Bluetooth · Not confirmed”: no protocol peer-delivery receipt is invented.
+
+The queue captures an operation ticket when a callback enters the app, before serial
+execution, so already-queued duplicate/late callbacks cannot consume a newer operation.
+Central callbacks also retain their connection object. Android peripheral callbacks expose
+only a device address, so reconnect is fenced while an old notification callback is still
+outstanding. Active peripheral connections plus retired fences are capped at eight.
+If Android never supplies a retired callback, that peer cannot reconnect until the transport
+restarts. Arbitrarily delayed duplicate OS callbacks arriving after a newer submission are
+not distinguishable by Android's API; the transport relies on the platform's per-operation
+callback contract. Real two-device radio/failure-injection testing remains required. OS
+acceptance does not prove that a peer received or persisted the bytes, and a process crash
+before local commit can replay work. Durable receiver replay guards suppress supported
+logical-message/file duplicates within the core’s bounded retention and restore limits;
+this is not an exactly-once delivery guarantee.
 
 ## Notifications (v0.1.2)
 - Default ON: sender + preview (N1). Global **Private notifications** (You tab) and per-chat toggle (Security centre / chat info) show only "Auralis: New message" with no sender, preview or avatar (N2). **Hide on lock screen** uses `VISIBILITY_SECRET`; otherwise `VISIBILITY_PRIVATE` with a generic public version.
@@ -193,3 +207,87 @@ required before claiming reliable delivery. Reconnection alone does not resolve 
 
 ## Roadmap
 - **v0.3 Auralis Nearby** (not started): dating, plus a Nearby session (Android foreground service with an ongoing notification, 30/60/120 min) and area mode over the gateway geohash. Acceptance NX1–NX3: first card < 1 s from cache, an iOS session lasting 60 min while locked, and an area-mode match notified within 5 min.
+
+## Durable receive finalization (integration work in progress)
+
+Ordinary non-burn file events carry a sealed-store receipt capability and metadata, not a
+whole plaintext file. A single background executor serializes recovery and file writers;
+UI cancel/retry dispatch runs off main. Store/identity startup returns before receipt I/O.
+The repository monitor also orders cancellation and identity changes with writers. BLE
+callbacks may wait for that monitor; progress is not queued into an unbounded work list.
+
+The private sink exclusively creates a generation-specific private candidate with
+`O_EXCL|O_NOFOLLOW`, streams 64 KiB blocks, verifies length and Rust BLAKE3 on readback,
+syncs the file and directory, and only then commits the receipt in Rust. **The database
+commit is Android's publication boundary**, not a filesystem rename. Before commit the
+candidate has no Received/localPath/UI/FileProvider exposure. Android SELinux denies
+hardlink creation for ordinary app data; this implementation does not retry that denied
+operation through alternate paths or weaken permissions.
+
+A complete existing candidate must verify and sync without rewriting. Only a positively
+short single-link regular candidate may be repaired, after repeated exact pending-token
+and metadata authorization plus device/inode checks under the serialized repository
+lifecycle boundary. Legacy backup imports cannot authorize this repair and use a fixed, disjoint `backup-`
+filename namespace rather than transport `receipt-` paths. Unknown read,
+verification, storage or capability errors preserve the candidate and sealed spool.
+Full-sized corrupt or oversized candidates still refuse automatic repair. A distinct
+**Repair local copy** action is offered only after a typed full-length content mismatch;
+confirmation captures a one-time eligibility action containing the full receipt metadata
+and identity epoch. Rekey, identity reload or a fresh retry invalidates old confirmations. It re-verifies the mismatch, validates
+the entire encrypted spool, rechecks exact Pending metadata and the same regular,
+single-link inode, then removes only that damaged candidate and runs the existing durable
+finalizer. Generic read/verifier/store errors, length mismatches, stale capabilities and
+backup paths never authorize deletion. No database transaction spans filesystem I/O.
+Cancellation tombstones remain protective; this action never requests a cancelled transfer
+again. Restart/normal retry discovers eligible damage but never repairs it automatically.
+This checkpoint's new UI/runtime tests still require exact-head hosted validation.
+Random generation names
+and exclusive private app mutation are the ownership boundary, not a guarantee against
+malicious code running with the same application UID. Any failed commit retains the
+sealed receipt, allowing a complete valid candidate to be verified and committed later.
+
+All file operations use pinned private directory descriptors and no-follow regular-file
+opens. Missing-file transitions require a positively observed ENOENT with checked,
+unchanged non-symlink ancestors; permissions/protected storage and uncertain paths do
+not imply missing. The production wrapper recognizes only the exact current
+OS-provided lexical app-files root (for legacy `/data/user/0` paths), mapping that prefix
+to the current trusted physical root while leaving the suffix for strict no-follow
+checks. Persisted full paths are never canonicalized; foreign containers, lookalike
+prefixes and traversal are refused. The original stored path is retained for the core's
+compare-and-set missing transition. Cancellation discards only the matching receipt generation, after
+core cancellation succeeds. Each recovery pass also processes one bounded fair page of
+up to 32 durable cancelled-generation cleanup obligations. Only successful exact-path
+discard plus directory sync permits cleanup acknowledgement; disk/ACK failures leave
+the obligation for a later pass, including after restart. Broad orphan collection is deferred until the core exposes
+a complete authoritative inventory, including histories of deleted contacts.
+
+Recovery retries retained candidates once, then separately processes already-durable
+receipts even if candidate staging failed. Startup, explicit retry, and a bounded
+per-link establishment/storage-error gate trigger recovery; there is no per-chunk retry
+loop. Failures remain observable with a retry banner and Finalizing state. Core limits
+remain 50,000,000 bytes per file, 8 node/2 peer pending and 128 MiB live sealed ciphertext;
+this is not a physical SQLite-size or power-loss guarantee, nor a peer delivery ACK.
+
+Local focused JVM checks cover repository ordering/retry/cancellation and recovery-gate
+coalescing. `ReceiptFilesystemTest` exercises real Android syscalls and injected
+write/sync/exclusive-create errors; `RustBridgeTest` exercises generated bindings and the real
+Rust verifier. These new Android SDK/emulator tests are **not yet run** at this private
+WIP checkpoint. Real-device crash/protected-storage and Hopla interoperability checks
+remain separate release gates; source review or JVM fakes do not establish them.
+
+### Explicit request after cancelled-copy cleanup
+
+A separate **Request this file again** confirmation is offered only for a Failed receipt
+whose cancelled generation has completed durable private-file cleanup. Discovery checks
+at most 32 currently visible Failed message IDs per serialized IO pass; scrolling signals
+are conflated while a pass runs. Discovery, restart and dismissal never send a request.
+Confirmation captures immutable full receipt metadata, identity epoch and an action nonce.
+Unchanged discovery preserves a live action, while reload/rekey/new generation or an
+attempted request invalidates the old confirmation. Acceptance rechecks the exact live
+recoverable capability, calls the core atomic durable request API, reloads authoritative
+history and only then kicks transport. No legacy missing-media helper or automatic
+re-request is used. Failed cleanup, unknown store errors and stale actions fail closed;
+transaction failure preserves Failed history and requires a new confirmation. No
+receipt token is displayed or logged. The sender must still have the original media.
+This checkpoint requires exact-head hosted Compose and Android runtime tests; local
+narrow API compilation and host/JVM checks are not device evidence.

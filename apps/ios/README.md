@@ -143,7 +143,8 @@ its ordered journey deliberately retains state to check process relaunch. See
 - APNs token is stored locally only (no gateway registration yet).
 - Calls don't exist yet; `NotificationPolicy.callContent` is the policy the call stack will use.
 - NFC, PeerID entry, Nearby: not in this beta. File transfer has no end-to-end ack yet (sender
-  shows "Sent" once the last chunk is on the link).
+  shows "Sent" only after all PDUs in the final batch are accepted by the OS transport
+  and the durable queue commit succeeds; this does not prove peer receipt).
 - The core’s encrypted local store reloads contacts and message history; the Swift repository
   keeps its current UI projection in memory. No storage format was changed by this rewrite.
 - The strict, legacy APNs wire fallback still uses the literal title `Hopla`. The extension and
@@ -152,3 +153,32 @@ its ordered journey deliberately retains state to check process relaunch. See
 - The former store-and-forward toggle only changed local view state; it is replaced by an
   explicit unavailable note. Gateway metering is still zero until the underlying implementation
   supplies real traffic measurements.
+
+## Durable received-file integration (development)
+
+The receiver keeps verified non-burn bytes in the encrypted Rust receipt store until native
+publication succeeds. Swift reads one 64 KiB block at a time, verifies the private file's full
+readback with Rust's BLAKE3/length verifier, fsyncs it, publishes with an atomic **no-replace
+hard link**, removes the temporary name, fsyncs the directory, then commits the receipt token.
+An exact two-name inode pair or a final file left before the DB commit is verified and recovered
+on startup/retry. Any failure retains Finalizing and the sealed bytes; nil sinks are not success.
+This is not a peer acknowledgement or a power-loss guarantee.
+
+Production I/O runs on a utility serial queue, shared with cancel/retry. UI publication returns
+to main. Identity replacement/history import fails explicitly while receipt I/O owns the gate
+instead of blocking the UI on a large file. Incoming failures cannot downgrade an already
+Received/Finalizing bubble. A cancelled pending generation cleans only its token-specific files;
+completed reciprocal-resend cancellation preserves history and file paths. No contact-based or
+broad orphan-file garbage collection is performed. Cleanup obligations remain in Rust until
+exact-generation deletion and directory sync are acknowledged. Startup/retry processes one bounded
+fair page even if receive staging fails. Filesystem or acknowledgement failures retain the obligation
+and are surfaced; native code never loops over an unbounded cleanup inventory.
+
+Paths are generated from receipt tokens beneath the app's private container. Descriptor-relative
+no-follow opens reject symlink ancestors and shared hard links. Missing-media reconciliation
+requires an absent leaf under a still-identical verified parent; a missing container, protected
+storage, and other errors do not retire a receipt. Resend reads use the same no-follow boundary.
+The existing resend FFI still requires one full bounded payload; receive finalization streams.
+Burn/view-once content never enters this path. Native Apple compilation, device data-protection,
+crash/power-loss behavior, and Hopla interoperability need their own gates; Linux Swift tests
+are not evidence of those Apple runtime behaviors.

@@ -99,6 +99,20 @@ fun AuralisApp(
     requestDeviceAuth: ((() -> Unit) -> Unit),
 ) {
     val ctx = LocalContext.current
+    val storageBlocked by repo.storageBlocked.collectAsState()
+    if (storageBlocked) {
+        androidx.compose.foundation.layout.Column(
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
+        ) {
+            Text(stringResource(R.string.store_blocked_title), style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.store_blocked_body))
+            androidx.compose.material3.Button(onClick = { if (repo.storageBlocked.value) repo.retryRestore() }) {
+                Text(stringResource(R.string.restore_try_again))
+            }
+        }
+        return
+    }
     val onboarded by repo.onboarded.collectAsState()
     val contacts by repo.contacts.collectAsState()
     val meshStatus by repo.status.collectAsState()

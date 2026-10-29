@@ -45,6 +45,10 @@ final class ChatBackupSyncTests: XCTestCase {
 
 /// Simulates a Keychain that rejects writes while the rest of preferences remain writable.
 private final class RejectingSecretStore: AppStore {
+    var sealedPhraseUnavailable = false
+    var sealedKeyUnavailable = false
+    var hasSavedIdentity: Bool { sealedPhraseUnavailable || recoveryPhrase != nil }
+    var hasSavedStorageKey: Bool { sealedKeyUnavailable || storageKey != nil }
     var rejectPhrase = false
     var rejectKey = false
     private var phrase: String?
@@ -95,5 +99,129 @@ final class SecretPersistenceFailureTests: XCTestCase {
         XCTAssertNil(core.identity())
         XCTAssertNil(store.storageKey)
         XCTAssertNil(store.recoveryPhrase)
+    }
+}
+
+final class StoreOpenFailureTests: XCTestCase {
+    func testFailedOpenPreservesFilesAndRetriesOnceWithSameKey() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = dir.appendingPathComponent("store.db")
+        let journal = dir.appendingPathComponent("store.db-journal")
+        let original = Data([1, 2, 3]), originalJournal = Data([4, 5])
+        try original.write(to: db); try originalJournal.write(to: journal)
+        let core = FakeOmcpCore(), store = InMemoryAppStore()
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        store.storageKey = Data(repeating: 7, count: 32)
+        core.storageOpenError = .storageUnavailable("locked")
+        let repo = MeshRepository(core: core, store: store, dbPath: db.path)
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertEqual(core.storageOpenCount, 1)
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertEqual(core.storageOpenCount, 2)
+        XCTAssertEqual(try Data(contentsOf: db), original)
+        XCTAssertEqual(try Data(contentsOf: journal), originalJournal)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path).count, 2)
+        core.storageOpenError = nil
+        XCTAssertTrue(repo.restore())
+        XCTAssertFalse(repo.storageBlocked)
+        XCTAssertEqual(core.storageOpenCount, 3)
+        XCTAssertEqual(store.storageKey, Data(repeating: 7, count: 32))
+    }
+
+    func testExistingStoreWithMissingKeyOrIdentityFailsClosed() throws {
+        let db = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data([1]).write(to: db)
+        defer { try? FileManager.default.removeItem(at: db) }
+        let core = FakeOmcpCore(), store = InMemoryAppStore()
+        let repo = MeshRepository(core: core, store: store, dbPath: db.path)
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertNil(store.storageKey)
+        XCTAssertEqual(core.storageOpenCount, 0)
+        XCTAssertEqual(try Data(contentsOf: db), Data([1]))
+    }
+
+    func testMissingRequiredStorePathDoesNotFallBackToMemory() throws {
+        let core = FakeOmcpCore(), store = InMemoryAppStore()
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        let repo = MeshRepository(core: core, store: store, persistentStoreRequired: true)
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertNil(core.identity())
+    }
+
+    func testConfirmedAbsentDatabaseCanCreateKeyAndOpen() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("absent.db").path
+        XCTAssertThrowsError(try FileManager.default.attributesOfItem(atPath: path))
+        let core = FakeOmcpCore(), store = InMemoryAppStore()
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        let repo = MeshRepository(core: core, store: store, dbPath: path)
+        XCTAssertTrue(repo.restore())
+        XCTAssertFalse(repo.storageBlocked)
+        XCTAssertEqual(core.storageOpenCount, 1)
+        XCTAssertEqual(store.storageKey?.count, 32)
+    }
+
+    func testUnavailableStoreDirectoryCanResolveOnRetryWithoutMemoryFallback() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let canonical = dir.appendingPathComponent("store.db").path
+        var path: String?
+        var resolutions = 0
+        let core = FakeOmcpCore(), store = InMemoryAppStore()
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        let repo = MeshRepository(core: core, store: store, persistentStoreRequired: true,
+                                  dbPathProvider: { resolutions += 1; return path })
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertNil(core.identity())
+        XCTAssertNil(store.storageKey)
+        XCTAssertEqual(core.storageOpenCount, 0)
+        path = canonical
+        XCTAssertTrue(repo.restore())
+        XCTAssertFalse(repo.storageBlocked)
+        XCTAssertNotNil(core.identity())
+        let count = resolutions
+        path = nil
+        XCTAssertTrue(repo.restore())
+        XCTAssertEqual(resolutions, count, "a resolved canonical store path is never replaced")
+    }
+
+    func testUnavailableSealedSecretsAreNotTreatedAsAbsent() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let core = FakeOmcpCore(), store = RejectingSecretStore()
+        let repo = MeshRepository(core: core, store: store, dbPath: dir.appendingPathComponent("absent.db").path)
+        store.sealedPhraseUnavailable = true
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertNil(store.recoveryPhrase)
+        XCTAssertNil(store.storageKey)
+        store.sealedPhraseUnavailable = false
+        store.recoveryPhrase = try core.generateRecoveryPhrase()
+        store.sealedKeyUnavailable = true
+        XCTAssertFalse(repo.restore())
+        XCTAssertTrue(repo.storageBlocked)
+        XCTAssertNil(store.storageKey)
+        XCTAssertEqual(core.storageOpenCount, 0)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+    }
+
+    func testNewInstallCanStillOnboard() {
+        let repo = MeshRepository(core: FakeOmcpCore(), store: InMemoryAppStore())
+        XCTAssertFalse(repo.restore())
+        XCTAssertFalse(repo.storageBlocked)
     }
 }

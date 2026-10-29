@@ -156,7 +156,7 @@
     <string name="file_state_received">%1$s MB · Received</string>
     <string name="file_integrity_checked">Integrity checked</string>
     <string name="file_state_sending">Sending · %1$s of %2$s MB</string>
-    <string name="file_state_sent">%1$s MB · Sent</string>
+    <string name="file_state_sent">%1$s MB · Sent to Bluetooth</string>
     <string name="file_state_receiving">Receiving · %1$s of %2$s MB</string>
     <string name="file_state_paused">Paused · out of range · %1$s of %2$s MB</string>
     <string name="file_paused_meta">Waiting for mesh · resumes automatically</string>
@@ -302,4 +302,14 @@
     <string name="storage_keep_size">Up to</string>
     <string name="storage_days">%1$d days</string>
     <string name="storage_usage">%1$d items · %2$s used</string>
+    <string name="message_transport_accepted">Sent to Bluetooth · Not confirmed</string>
+    <string name="store_blocked_title">Local storage unavailable</string>
+    <string name="store_blocked_body">Auralis could not open your saved account. Your database has not been reset. Unlock this device or return to a compatible app version, then try again. If it still fails, restart Auralis.</string>
+    <string name="file_state_finalizing">Saving securely…</string>
+    <string name="file_retry_finalizing">Retry saving</string>
+    <string name="file_receive_retry_notice">Some received files are waiting to be saved. Tap to retry.</string>
+    <string name="file_repair_local">Repair local copy</string>
+    <string name="file_repair_confirm">Replace the damaged local copy using the verified encrypted copy on this device? This does not request a new transfer.</string>
+    <string name="file_request_again">Request this file again</string>
+    <string name="file_request_again_confirm">Ask your contact to send this file again? The cancelled local copy has been cleaned up. This sends a new request; your contact must still have the file.</string>
 </resources>

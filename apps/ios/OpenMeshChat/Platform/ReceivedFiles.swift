@@ -1,35 +1,63 @@
 import Foundation
 import HoplaKit
 
-/// Saves verified received files under the app container
-/// (`Application Support/received/<transfer>/<name>`, excluded from iCloud device backup and
-/// protected until first unlock). Opening happens in-app via Quick Look; nothing is shared
-/// until the user chooses to.
+/// App-private durable sink. Canonicalize only the trusted OS container anchor;
+/// peer data never enters a directory or filename, and all descendant opens are no-follow.
 final class ReceivedFiles: FileSink {
-    private let root: URL
+    private let suppliedRoot: URL?
+    private let sinkLock = NSLock()
+    private var sink: DurableReceivedFiles?
 
-    init(root: URL? = nil) {
-        self.root = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("received", isDirectory: true)
-    }
+    init(root: URL? = nil) { suppliedRoot = root }
 
-    func save(_ file: ReceivedFileInfo) -> String? {
-        do {
-            var dir = root.appendingPathComponent(Self.safe(file.transferId), isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try? dir.setResourceValues(values)
-            let name = Self.safe(file.name)
-            let url = dir.appendingPathComponent(name.isEmpty ? "file" : name)
-            try file.bytes.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            return url.path
-        } catch {
-            return nil
+    private func resolvedSink() throws -> DurableReceivedFiles {
+        sinkLock.lock(); defer { sinkLock.unlock() }
+        if let sink { return sink }
+        // Only the OS home anchor is resolved. A supplied root is deliberately
+        // passed unchanged, and all appended descendants remain no-follow.
+        let root: URL
+        let legacyRoot: String?
+        if let suppliedRoot { root = suppliedRoot; legacyRoot = nil }
+        else {
+            let anchor = try DurableReceivedFiles.physicalTrustedDirectory(
+                URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
+            root = anchor.appendingPathComponent("Library/Application Support/received", isDirectory: true)
+            // Match only the current OS-provided lexical root used by the old
+            // client. Verify its trusted home anchor belongs to this container;
+            // never resolve any persisted path or app-controlled descendant.
+            let suffix = "/Library/Application Support/received"
+            guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                throw CoreError.storageUnavailable("application support directory unavailable")
+            }
+            let lexical = support.appendingPathComponent("received", isDirectory: true).path
+            guard lexical.hasSuffix(suffix) else { throw CoreError.storageUnavailable("unexpected application support root") }
+            let lexicalHome = String(lexical.dropLast(suffix.count))
+            guard try DurableReceivedFiles.physicalTrustedDirectory(URL(fileURLWithPath: lexicalHome)).path == anchor.path else {
+                throw CoreError.storageUnavailable("application support container changed")
+            }
+            legacyRoot = lexical
         }
+        let resolved = DurableReceivedFiles(root: root, trustedLexicalRoot: legacyRoot, prepareRoot: { directory in
+            var directory = directory
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try directory.setResourceValues(values)
+        })
+        sink = resolved // Pin first successful anchor; failed resolution can retry.
+        return resolved
     }
-
-    /// Strip path separators and control characters from a peer-supplied name.
+    func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data, verifier: ReceiveFileVerifier) throws -> String {
+        try resolvedSink().finalize(receipt, readBlock: readBlock, verifier: verifier)
+    }
+    func removeCorruptLocalCopy(_ receipt: ReceiveReceiptInfo, verifier: ReceiveFileVerifier, authorize: () throws -> Void) throws {
+        try resolvedSink().removeCorruptLocalCopy(receipt, verifier: verifier, authorize: authorize)
+    }
+    func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { try resolvedSink().discardCancelled(receipt) }
+    func readForResend(_ path: String) throws -> Data? { try resolvedSink().readForResend(path) }
+    func validatedPathForOpening(_ path: String) throws -> String? { try resolvedSink().validatedPathForOpening(path) }
+    func isDefinitelyMissing(_ path: String) throws -> Bool { try resolvedSink().isDefinitelyMissing(path) }
+    // Backup restoration is separately verified by Rust. It must not reuse a
+    // pending receipt ID; the legacy core setter enforces that boundary.
+    func save(_ file: ReceivedFileInfo) -> String? { try? resolvedSink().save(file) }
     static func safe(_ name: String) -> String {
         let last = name.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
         let cleaned = last.unicodeScalars.filter { $0.value >= 0x20 && $0 != ":" }

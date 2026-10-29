@@ -35,10 +35,10 @@ GATT identifiers, cryptographic algorithms, and the secure-capture implementatio
   not acknowledged as successful. Unsubscribing clears that responder's old queued
   ciphertext so a subsequent session does not inherit it.
 
-**Still open:** the transport/core still marks messages flushed before successful transport
-acknowledgement. Fail-closed session handling is not durable retry/ACK delivery semantics.
-The coordinated FFI/native acknowledgement stage remains a release blocker; no guaranteed
-message delivery or physical reconnection result is claimed here.
+**Historical gap at this tranche's baseline:** the transport/core marked messages flushed
+before successful transport acknowledgement. The coordinated batch-acceptance implementation
+in the final section below supersedes that gap. Fail-closed handling alone was not durable
+retry semantics, and neither stage promises peer delivery or physical reconnection.
 
 ## Tests implemented
 
@@ -101,3 +101,46 @@ of the UI journey still need a new hosted run.** No full UI pass is claimed from
 Physical iPhone/Android interop, background BLE, secure capture behavior, device Keychain
 entitlements, Face ID/passcode, and real iCloud/Google account operations still require
 provisioned-device acceptance.
+
+## Durable transport acceptance stage (local implementation)
+
+The prior-stage acknowledgement gap above is addressed by the coordinated Rust/native
+batch contract, not by a new wire-level receipt. `LinkResult.batchToken` identifies one
+outstanding batch; the native layer calls `commitOutgoing` only after every PDU is accepted.
+Text `flushed` and outgoing file progress arrive from the successful durable commit, not
+from ciphertext generation. **Sent still does not mean delivered or read by the peer.**
+
+- Central writes use `.withResponse`: a successful callback consumes one PDU. The token
+  remains outstanding until the final callback and Rust transaction both succeed.
+- Peripheral notifications commit only after `updateValue` returns `true` for every PDU.
+  `false` is backpressure: retain exactly those ciphertext bytes until the ready callback.
+- Receive-only outputs cannot replace a pending token. Handshake/control replies queued
+  while the previous OS callback is pending are drained after that batch commits.
+- Failed callbacks, core commit errors, stop, power loss, and unsubscribe close the session;
+  shutdown retains uncommitted logical work for a fresh handshake. Already OS-accepted
+  bytes cannot be recalled. OS acceptance does not establish remote-app delivery.
+- The queue rejects overlapping/malformed batches. Manager, peripheral, and characteristic
+  identity checks reject old callbacks; failed central sessions remain registered until
+  disconnect. CoreBluetooth supplies no per-write operation ID, so matching callbacks while
+  a later write is outstanding still relies on the SDK's ordered one-operation callback
+  contract. Physical-device interruption/reconnect coverage remains necessary.
+
+Independent source review is required before updating the protected-source manifest:
+
+| File | Change rationale |
+| --- | --- |
+| `HoplaKit/Sources/HoplaKit/CoreModels.swift` | Explicit optional batch token and commit/abort CoreLink contract; no wire types or bytes changed. |
+| `HoplaKit/Sources/HoplaKit/LinkWriteQueue.swift` | One retained token/batch, acceptance-counted drain, synchronous notify backpressure, fail-closed lifecycle. |
+| `OpenMeshChat/Core/RustOmcpCore.swift` | Map generated token and bridge explicit commit/abort calls without implementing crypto. |
+| `OpenMeshChat/Mesh/BleMeshTransport.swift` | Central and peripheral callback acceptance, token retirement, deferred replies, and complete shutdown cleanup. |
+| `HoplaKit/Tests/HoplaKitTests/LinkWriteQueueTests.swift` | First/middle/final failure, receive interleaving, malformed/overlap/stale tokens, backpressure, shutdown/commit-failure policy. |
+| `OpenMeshChatTests/RustBridgeTests.swift` | Explicit batch acceptance in in-memory transport plus abort/replay, stale-token and handshake-before-callback regressions. |
+| `scripts/strings.py`, `scripts/test_strings.py`, `OpenMeshChat/Resources/{en,fr}.lproj/Localizable.strings` | Sent labels identify Bluetooth acceptance and unconfirmed receipt; generated EN/FR resources and semantic-copy regression stay synchronized. |
+
+Final local evidence on Swift 6.4.1: **59 HoplaKit tests passed**, including seven batch-queue
+tests; **11 real-Rust Swift bridge tests passed** against the final rebuilt host FFI, including
+three acceptance/abort/interleaving regressions. EN/FR 287-key parity/freshness and **six
+localization tests passed**; all iOS Swift sources parsed successfully. The native CoreBluetooth
+file is syntax-checked, not type-checked on Linux. Xcode simulator and physical-device results
+for this stage remain unrun; earlier CI results do not validate these changes. The protected
+manifest is intentionally unchanged pending independent review.

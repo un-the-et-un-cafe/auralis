@@ -20,7 +20,11 @@ final class AppModel: ObservableObject {
     init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore(),
          persistentStore: Bool = true,
          clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
-        repo = MeshRepository(core: core, store: store, dbPath: persistentStore ? Self.localStorePath() : nil, clock: clock)
+        let receiptQueue = DispatchQueue(label: "chat.auralis.received-files", qos: .utility)
+        repo = MeshRepository(core: core, store: store, dbPath: persistentStore ? Self.localStorePath() : nil,
+            persistentStoreRequired: persistentStore, dbPathProvider: persistentStore ? { Self.localStorePath() } : nil,
+            receiveExecutor: { work in receiptQueue.async(execute: work) },
+            receivePublisher: { work in DispatchQueue.main.async(execute: work) }, clock: clock)
         onboarded = false
         backupGate = repo.backupGate()
         repo.notifier = LocalNotifier()
@@ -33,7 +37,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.revision &+= 1
-                self.onboarded = self.repo.store.onboarded && self.repo.core.identity() != nil
+                self.onboarded = !self.repo.storageBlocked && self.repo.store.onboarded && self.repo.core.identity() != nil
                 self.refreshTimeSensitiveState()
             }
         }
@@ -52,7 +56,7 @@ final class AppModel: ObservableObject {
 
     /// Application Support/omcp-store.db, excluded from iCloud/iTunes backup (its key is
     /// this-device-only anyway) and protected until first unlock.
-    static func localStorePath() -> String? {
+    nonisolated static func localStorePath() -> String? {
         let fm = FileManager.default
         guard var dir = try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else {
             return nil
@@ -76,7 +80,7 @@ final class AppModel: ObservableObject {
     }
 
     func startMesh() {
-        guard ble == nil, core.identity() != nil else { return }
+        guard !repo.storageBlocked, ble == nil, core.identity() != nil else { return }
         let t = BleMeshTransport(repo: repo)
         repo.kick = t
         ble = t
@@ -87,6 +91,13 @@ final class AppModel: ObservableObject {
     func refreshTimeSensitiveState() {
         let next = repo.backupGate()
         if backupGate != next { backupGate = next }
+    }
+
+    func retryStore() {
+        guard repo.storageBlocked else { return }
+        onboarded = repo.restore() && store.onboarded
+        revision &+= 1
+        if onboarded { startMesh() }
     }
 
     func touch() { revision &+= 1 }

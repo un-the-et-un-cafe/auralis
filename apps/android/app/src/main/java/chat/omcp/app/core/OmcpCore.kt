@@ -94,6 +94,20 @@ data class FileProgressInfo(
 /** A fully received file whose BLAKE3 hash was verified in Rust. */
 class ReceivedFileInfo(val transferId: String, val contactId: String, val name: String, val mime: String, val bytes: ByteArray)
 
+/** Metadata capability for bytes already committed to the encrypted receive spool. */
+data class ReceiveReceiptInfo(
+    val transferId: String, val contactId: String, val name: String, val mime: String,
+    val size: Long, val receiptToken: String, val contentHash: String, val blockCount: Int,
+)
+/** Positive full-length content mismatch only; never an I/O or stale-capability error. */
+class ReceiveContentMismatch(cause: Throwable? = null) : Exception("local received content mismatch", cause)
+
+interface ReceiptVerifier : AutoCloseable {
+    fun update(bytes: ByteArray)
+    fun finish()
+    override fun close() {}
+}
+
 /** `integrity` (hash/AEAD failed), `invalid` or `busy`. */
 data class FileFailureInfo(val transferId: String, val contactId: String, val reason: String)
 
@@ -106,14 +120,16 @@ data class LinkResult(
     val flushed: Int,
     val opened: List<chat.omcp.app.burn.OpenedInfo> = emptyList(),
     val fileProgress: List<FileProgressInfo> = emptyList(),
-    val files: List<ReceivedFileInfo> = emptyList(),
+    val files: List<ReceiveReceiptInfo> = emptyList(),
     val fileFailures: List<FileFailureInfo> = emptyList(),
-    /** More file chunks wait: call [CoreLink.flush] again once the GATT queue is empty. */
+    /** Queued work remains; flush only after the outstanding batch has been committed. */
     val morePending: Boolean = false,
     val restoreNotices: List<RestoreNoticeInfo> = emptyList(),
     val mediaRequests: List<MediaRequestInfo> = emptyList(),
     val resendAsks: List<MediaRequestInfo> = emptyList(),
     val mediaUpdates: List<MediaUpdateInfo> = emptyList(),
+    /** Commit only after every outgoing PDU receives successful OS acceptance. */
+    val batchToken: String? = null,
 )
 
 enum class NetworkType { Offline, Wifi, Cellular }
@@ -170,6 +186,10 @@ interface CoreLink {
     fun onPdu(pdu: ByteArray): LinkResult
     fun sendText(text: String): LinkResult
     fun flush(): LinkResult
+    /** Local durable commit, not a receipt from the peer. */
+    fun commitOutgoing(token: String): LinkResult
+    /** Closes the crypto session but retains uncommitted durable work. */
+    fun abortOutgoing(token: String)
     fun isEstablished(): Boolean
     fun close()
 }
@@ -206,6 +226,19 @@ interface OmcpCore {
 
     /** Record where a verified received file was saved (null = couldn't save). */
     fun setReceivedFilePath(transferId: String, path: String?) {}
+
+    fun markReceivedFileMissing(transferId: String, expectedLocalPath: String): Boolean = false
+    fun pendingReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun recoverableReceivedFile(contactId: String, transferId: String): ReceiveReceiptInfo? = null
+    fun requestCancelledReceivedFile(receipt: ReceiveReceiptInfo): Unit = error("cancelled receipt request unavailable")
+    fun validateReceivedFileForRepair(receiptToken: String): ReceiveReceiptInfo = error("receipt repair validation unavailable")
+    fun cancelledReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun acknowledgeReceivedFileCleanup(receiptToken: String): Boolean = error("receipt cleanup unavailable")
+    fun retryReceivedFiles(): List<ReceiveReceiptInfo> = pendingReceivedFiles()
+    fun readReceivedFileBlock(receiptToken: String, index: Int): ByteArray = error("receipt reads unavailable")
+    fun receivedFileVerifier(receiptToken: String): ReceiptVerifier = error("receipt verifier unavailable")
+    fun commitReceivedFile(receiptToken: String, localPath: String): Unit = error("receipt commit unavailable")
+
 
     /** Import [RestoredBackup.history] into the local store. */
     fun restoreHistory(history: ByteArray) {}

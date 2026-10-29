@@ -67,6 +67,103 @@ pub use persist::{
     ChatSummary, MessageStatus, StoredBurnState, StoredFile, StoredFileState, StoredMessage,
 };
 
+fn receipt_to_ffi(r: st::ReceivedFileReceipt) -> ReceivedFile {
+    let mut token = r.token.message_id.to_vec();
+    token.extend_from_slice(&r.token.nonce);
+    ReceivedFile {
+        transfer_id_hex: hex::encode(r.token.message_id),
+        contact_id: hex::encode(r.peer),
+        name: r.name,
+        mime: r.mime,
+        size: r.size,
+        receipt_token_hex: hex::encode(token),
+        content_hash_hex: hex::encode(r.hash),
+        block_count: r.blocks,
+    }
+}
+fn parse_receipt_token(value: &str) -> Result<st::ReceivedFileToken, FfiError> {
+    let bytes = hex::decode(value).map_err(|_| invalid("receipt token"))?;
+    if bytes.len() != 48 {
+        return Err(invalid("receipt token"));
+    }
+    Ok(st::ReceivedFileToken {
+        message_id: bytes[..16]
+            .try_into()
+            .map_err(|_| invalid("receipt token"))?,
+        nonce: bytes[16..]
+            .try_into()
+            .map_err(|_| invalid("receipt token"))?,
+    })
+}
+fn pending_receipt(
+    node: &NodeState,
+    token: &st::ReceivedFileToken,
+) -> Result<st::ReceivedFileReceipt, FfiError> {
+    node.db
+        .pending_received_files()?
+        .into_iter()
+        .find(|r| r.token == *token)
+        .ok_or_else(|| invalid("stale or unknown receipt"))
+}
+
+struct ReceiveVerification {
+    hasher: Option<blake3::Hasher>,
+    receipt: st::ReceivedFileReceipt,
+    seen: u64,
+}
+/// A single-use, token-bound verifier for bounded native file readback.
+#[derive(uniffi::Object)]
+pub struct ReceivedFileVerifier {
+    node: Arc<NodeInner>,
+    token: st::ReceivedFileToken,
+    state: Mutex<ReceiveVerification>,
+}
+#[uniffi::export]
+impl ReceivedFileVerifier {
+    pub fn update(&self, bytes: Vec<u8>) -> Result<(), FfiError> {
+        let bytes = Zeroizing::new(bytes);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| invalid("verifier poisoned"))?;
+        let next = state.seen.checked_add(bytes.len() as u64);
+        if bytes.len() > FILE_CHUNK_BYTES || next.is_none_or(|n| n > state.receipt.size) {
+            state.hasher = None;
+            return Err(invalid("file verification length"));
+        }
+        state
+            .hasher
+            .as_mut()
+            .ok_or_else(|| invalid("verifier already finished"))?
+            .update(&bytes);
+        state.seen = next.expect("checked count");
+        Ok(())
+    }
+    pub fn finish(&self) -> Result<(), FfiError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| invalid("verifier poisoned"))?;
+        let hash = state
+            .hasher
+            .take()
+            .ok_or_else(|| invalid("verifier already finished"))?
+            .finalize();
+        let node = self.node.lock();
+        let receipt = pending_receipt(&node, &self.token)?;
+        if state.seen != state.receipt.size || receipt != state.receipt {
+            return Err(invalid("file verification length or stale metadata"));
+        }
+        // Only a complete native readback with fresh Pending authority can be
+        // classified as local content mismatch. Store/spool failures never use
+        // this variant and cannot authorize destructive local repair.
+        if hash.as_bytes() != &state.receipt.hash {
+            return Err(FfiError::FileContentMismatch);
+        }
+        Ok(())
+    }
+}
+
 /// Max handshake bytes per PDU chunk.
 pub const HANDSHAKE_CHUNK: usize = 480;
 /// Full existing u8 chunk-count range, with no unbounded repeated appends.
@@ -84,6 +181,8 @@ const QR_PREFIX_V2: &str = "omcp:2:";
 const QR_PREFIX_V3: &str = "omcp:3:";
 const TTL_HOPS: u8 = 8;
 const MAX_TEXT_BYTES: usize = 16 * 1024;
+/// Bound each transport batch without reducing the accepted message size.
+const TEXTS_PER_FLUSH: usize = 16;
 
 /// Errors surfaced to Kotlin.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -109,6 +208,10 @@ pub enum FfiError {
     /// identity + device key (e.g. a QR from before a restore, RS2).
     #[error("safety number doesn't match")]
     VerificationFailed,
+    /// Full-length native file readback differs from the live Pending receipt.
+    /// Explicit local repair must separately validate the entire retained spool.
+    #[error("local received-file content does not match the pending receipt")]
+    FileContentMismatch,
 }
 
 impl From<omcp_core::OmcpError> for FfiError {
@@ -267,14 +370,17 @@ pub fn burn_expires_at_ms(sent_ms: u64, spec: BurnSpec) -> Result<u64, FfiError>
 #[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
 pub struct LinkOutput {
     pub outgoing: Vec<Vec<u8>>,
+    /// Commit only after every PDU is accepted by the platform transport. This
+    /// is not a peer-delivery receipt. Never retransmit this batch on this link.
+    pub batch_token: Option<String>,
     pub received: Vec<ReceivedText>,
     pub established: bool,
     pub peer_contact_id: Option<String>,
-    /// Number of queued user messages flushed onto this link by this call (control messages excluded).
+    /// User messages accepted by the transport on commit (control messages excluded).
     pub flushed: u32,
     /// `OPENED` receipts received on this call (our copies already handled in Rust).
     pub opened: Vec<OpenedEvent>,
-    /// File transfer progress (sender: chunks sealed; receiver: chunks received).
+    /// File transfer progress (sender: transport accepted; receiver: chunks received).
     pub file_progress: Vec<FileProgress>,
     /// Files fully received and verified (BLAKE3) on this call.
     pub files: Vec<ReceivedFile>,
@@ -537,6 +643,8 @@ struct NodeState {
     links_up: HashMap<u64, [u8; 32]>,
     active_links: HashSet<u64>,
     next_link: u64,
+    /// A peer backlog has one owner until drained or its link is retired.
+    outgoing_owner: HashMap<[u8; 32], u64>,
     seen: SeenCache,
     files: files::FileState,
     /// Encrypted local store (in-memory for [`OmcpNode::from_phrase`]).
@@ -546,6 +654,7 @@ struct NodeState {
 }
 
 /// One queued outbound message: envelope id fixed at queue time so `OPENED` can match.
+#[derive(Clone)]
 struct Queued {
     envelope_id: [u8; 16],
     created_ms: u64,
@@ -719,7 +828,12 @@ impl OmcpNode {
                 .try_into()
                 .map_err(|_| invalid("storage key must be 32 bytes"))?,
         );
-        let db = Store::open(std::path::Path::new(&db_path), &key)?;
+        // Parse identity before touching the database, then authenticate its
+        // existing owner before any schema migration or journal-mode change.
+        let seed = recovery::phrase_to_seed(&phrase)?;
+        let peer_id = core_device::peer_id_from_seed(&seed)?;
+        let legacy_id = core_device::legacy_dh_public(&seed)?;
+        let db = Store::open_for_owner(std::path::Path::new(&db_path), &key, &peer_id, &legacy_id)?;
         Self::build(phrase, display_name, db)
     }
 }
@@ -749,6 +863,7 @@ impl OmcpNode {
                     links_up: HashMap::new(),
                     active_links: HashSet::new(),
                     next_link: 1,
+                    outgoing_owner: HashMap::new(),
                     seen: SeenCache::default(),
                     files: files::FileState::default(),
                     db,
@@ -1132,6 +1247,7 @@ impl OmcpNode {
         let mut st = self.inner.lock();
         st.burn_in.close(&id);
         if !st.burn_in.is_live(&id) {
+            st.discard_queued(&id);
             st.persist_burn(&id)?;
             st.burn_message_now(&id)?;
         }
@@ -1144,6 +1260,7 @@ impl OmcpNode {
         let mut out = st.burn_in.tick(now_ms);
         out.extend(st.burn_out.tick(now_ms));
         for id in &out {
+            st.discard_queued(id);
             // Best effort: a failure here is retried by `load` on the next start.
             let _ = st.db().delete_burn(id);
             let _ = st.burn_message_now(id);
@@ -1178,7 +1295,7 @@ impl OmcpNode {
         let tid = random_id16()?;
         let f = files::build_outgoing(tid, &name, &mime, &bytes)?;
         let mut st = self.inner.lock();
-        st.persist_out_file(&id, &f)?;
+        st.persist_out_file(&id, &f, None)?;
         let msg = MessageRec {
             id: tid,
             peer: id,
@@ -1215,21 +1332,98 @@ impl OmcpNode {
         Ok(offer)
     }
 
-    /// Cancel an outbound transfer (queued or in progress). Returns whether it existed.
-    pub fn cancel_file(&self, transfer_id_hex: String) -> bool {
-        let Ok(tid) = parse_msg_id(&transfer_id_hex) else {
-            return false;
-        };
-        let mut st = self.inner.lock();
-        let _ = st.db().delete_out_file(&tid);
-        let _ = st.db().delete_message(&tid);
-        for q in st.files.out.values_mut() {
-            if let Some(i) = q.iter().position(|f| f.id == tid) {
-                q.remove(i);
-                return true;
+    /// Cancel durable incomplete work first; database errors are never swallowed.
+    /// Completed history survives cancellation of a reciprocal outgoing resend.
+    pub fn cancel_file(&self, transfer_id_hex: String) -> Result<bool, FfiError> {
+        let id = parse_msg_id(&transfer_id_hex)?;
+        let mut node = self.inner.lock();
+        let volatile = node
+            .files
+            .incoming
+            .get(&id)
+            .map(|f| (f.peer, f.meta.clone()))
+            .or_else(|| {
+                node.files
+                    .verified
+                    .get(&id)
+                    .map(|f| (f.peer, f.meta.clone()))
+            });
+        let changed = node.db.transaction_with::<_, FfiError>(|db| {
+            let mut message = db.message(&id)?;
+            if message.is_none() {
+                if let Some((peer, meta)) = &volatile {
+                    message = Some(MessageRec {
+                        id,
+                        peer: *peer,
+                        mine: false,
+                        time_ms: now_ms(),
+                        status: st::STATUS_RECEIVED,
+                        text: String::new(),
+                        mime: None,
+                        burn: None,
+                        burn_state: st::BURN_NONE,
+                        burn_at_ms: None,
+                        file: Some(st::FileRec {
+                            name: meta.name.clone(),
+                            mime: meta.mime.clone(),
+                            size: meta.size,
+                            state: st::FILE_RECEIVING,
+                            done_bytes: 0,
+                            local_path: None,
+                            hash: Some(meta.content_hash.to_vec()),
+                            locator: Some(id.to_vec()),
+                        }),
+                    });
+                }
+            }
+            let Some(mut m) = message else {
+                return Ok(false);
+            };
+            if m.burn.is_some() || m.file.is_none() {
+                return Ok(false);
+            }
+            let outgoing = db.out_file_exists(&id)?;
+            if outgoing {
+                db.delete_out_file(&id)?;
+            }
+            let f = m.file.as_ref().expect("checked file");
+            if matches!(f.state, st::FILE_RECEIVED | st::FILE_SENT) {
+                return Ok(outgoing);
+            }
+            if db.cancel_received_file(&m.peer, &id)? {
+                return Ok(true);
+            }
+            if f.state == st::FILE_FAILED {
+                return Ok(outgoing);
+            }
+            if !outgoing
+                && volatile.is_none()
+                && !matches!(
+                    f.state,
+                    st::FILE_QUEUED
+                        | st::FILE_SENDING
+                        | st::FILE_RECEIVING
+                        | st::FILE_PAUSED
+                        | st::FILE_REQUESTED
+                )
+            {
+                return Ok(false);
+            }
+            let f = m.file.as_mut().expect("checked file");
+            f.state = st::FILE_FAILED;
+            f.done_bytes = 0;
+            f.local_path = None;
+            db.put_message(&m)?;
+            Ok(true)
+        })?;
+        if changed {
+            node.files.incoming.remove(&id);
+            node.files.verified.remove(&id);
+            for queue in node.files.out.values_mut() {
+                queue.retain(|f| f.id != id);
             }
         }
-        st.files.incoming.remove(&tid).is_some()
+        Ok(changed)
     }
 
     /// Outbound file transfers (active + queued) for a contact.
@@ -1310,23 +1504,191 @@ impl OmcpNode {
             .collect())
     }
 
-    /// Record where the app saved a verified received file (None = couldn't save).
+    /// Bounded read-only lookup for an explicitly recoverable cancelled file.
+    /// Cleanup must already have completed; this never retires a capability.
+    pub fn recoverable_received_file(
+        &self,
+        contact_id: String,
+        msg_id_hex: String,
+    ) -> Result<Option<ReceivedFile>, FfiError> {
+        let peer = parse_id(&contact_id)?;
+        let id = parse_msg_id(&msg_id_hex)?;
+        let node = self.inner.lock();
+        if !node.contacts.contains_key(&peer) {
+            return Ok(None);
+        }
+        Ok(node
+            .db
+            .cancelled_received_file_for_request(&peer, &id)?
+            .map(receipt_to_ffi))
+    }
+
+    /// Explicit confirmed recovery. Durable retirement, message state and the
+    /// existing MEDIA_REQUEST outbox entry commit together before queue mutation.
+    pub fn request_cancelled_received_file(&self, receipt: ReceivedFile) -> Result<(), FfiError> {
+        let token = parse_receipt_token(&receipt.receipt_token_hex)?;
+        let peer = parse_id(&receipt.contact_id)?;
+        let id = parse_msg_id(&receipt.transfer_id_hex)?;
+        if token.message_id != id {
+            return Err(invalid("receipt message mismatch"));
+        }
+        let mut node = self.inner.lock();
+        if !node.contacts.contains_key(&peer) {
+            return Err(invalid("unknown contact"));
+        }
+        let expected = node
+            .db
+            .cancelled_received_file_for_request(&peer, &id)?
+            .ok_or_else(|| invalid("receipt is not recoverable"))?;
+        if receipt_to_ffi(expected.clone()) != receipt {
+            return Err(invalid("receipt metadata changed"));
+        }
+        // Volatile work must not coexist with a cancelled generation. Keep all
+        // state unchanged if an inconsistent live transfer is observed.
+        if node.files.incoming.contains_key(&id)
+            || node.files.verified.contains_key(&id)
+            || node
+                .files
+                .out
+                .values()
+                .any(|q| q.iter().any(|f| f.id == id))
+        {
+            return Err(invalid("conflicting live file transfer"));
+        }
+        let q = node
+            .db
+            .request_cancelled_received_file(&expected, random_id16()?, now_ms())?;
+        node.queues.entry(q.peer).or_default().push_back(Queued {
+            envelope_id: q.id,
+            created_ms: q.created_ms,
+            inner: Zeroizing::new(q.inner.clone()),
+            control: q.control,
+        });
+        Ok(())
+    }
+
+    pub fn cancelled_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .cancelled_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn acknowledge_received_file_cleanup(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<bool, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .acknowledge_received_file_cleanup(&token)?)
+    }
+    pub fn pending_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .pending_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn retry_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        let mut node = self.inner.lock();
+        node.stage_verified_files(now_ms(), true)?;
+        Ok(node
+            .db
+            .pending_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn read_received_file_block(
+        &self,
+        receipt_token_hex: String,
+        index: u32,
+    ) -> Result<Vec<u8>, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .read_received_block(&token, index)?
+            .to_vec())
+    }
+    pub fn commit_received_file(
+        &self,
+        receipt_token_hex: String,
+        local_path: String,
+    ) -> Result<(), FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        let mut node = self.inner.lock();
+        node.db.commit_received_file(&token, &local_path)?;
+        node.refresh_receive_budget()
+    }
+    /// Validate the complete sealed spool before an explicit native-file repair.
+    /// This does not retire tokens, publish paths or hold a transaction over IO.
+    pub fn validate_received_file_for_repair(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<ReceivedFile, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(receipt_to_ffi(
+            self.inner
+                .lock()
+                .db
+                .validate_received_file_for_repair(&token)?,
+        ))
+    }
+
+    pub fn received_file_verifier(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<Arc<ReceivedFileVerifier>, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        let receipt = pending_receipt(&self.inner.lock(), &token)?;
+        Ok(Arc::new(ReceivedFileVerifier {
+            node: self.inner.clone(),
+            token,
+            state: Mutex::new(ReceiveVerification {
+                hasher: Some(blake3::Hasher::new()),
+                receipt,
+                seen: 0,
+            }),
+        }))
+    }
+    pub fn mark_received_file_missing(
+        &self,
+        transfer_id_hex: String,
+        expected_local_path: String,
+    ) -> Result<bool, FfiError> {
+        let id = parse_msg_id(&transfer_id_hex)?;
+        let mut node = self.inner.lock();
+        let changed = node
+            .db
+            .mark_received_file_missing(&id, &expected_local_path)?;
+        node.refresh_receive_budget()?;
+        Ok(changed)
+    }
+    /// Legacy backup attachment only. Nil is a failed save, not a state transition;
+    /// receipt-owned files require token commit and cannot use this bypass.
     pub fn set_received_file_path(
         &self,
         transfer_id_hex: String,
         local_path: Option<String>,
     ) -> Result<(), FfiError> {
         let id = parse_msg_id(&transfer_id_hex)?;
-        self.inner.lock().update_message(&id, |m| {
-            if let Some(f) = m.file.as_mut() {
-                f.state = if local_path.is_some() {
-                    st::FILE_RECEIVED
-                } else {
-                    st::FILE_FAILED
-                };
-                f.local_path = local_path;
-            }
-        })
+        let path = local_path.ok_or_else(|| invalid("no durable received file path"))?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .set_legacy_received_file_path(&id, &path)?)
     }
 
     pub fn mark_chat_read(&self, contact_id: String, now_ms: u64) -> Result<(), FfiError> {
@@ -1384,37 +1746,28 @@ impl OmcpNode {
         if !st.contacts.contains_key(&id) {
             return Err(FfiError::UnknownContact);
         }
+        let mut staged_burn = BurnStore::default();
         if let Some(h) = header {
             let body: &[u8] = match &content {
                 AppContent::Text(t) => t.as_bytes(),
                 AppContent::Media { bytes, .. } => bytes,
-                AppContent::Opened(_)
-                | AppContent::FileMeta(_)
-                | AppContent::FileChunk(_)
-                | AppContent::MediaControl(_) => &[],
+                _ => &[],
             };
-            st.burn_out.insert(envelope_id, h, body, now)?;
-            st.burn_meta.insert(
-                envelope_id,
-                BurnMeta {
-                    peer: id,
-                    mime: mime.clone(),
-                },
-            );
-            st.persist_burn(&envelope_id)?;
+            staged_burn.insert(envelope_id, h, body, now)?;
         }
+        let snapshot = staged_burn.snapshot(&envelope_id);
         let text = match (&content, header) {
             (AppContent::Text(t), None) => t.clone(),
             _ => String::new(),
         };
-        st.db().put_message(&MessageRec {
+        let message = MessageRec {
             id: envelope_id,
             peer: id,
             mine: true,
             time_ms: now,
             status: st::STATUS_QUEUED,
             text,
-            mime,
+            mime: mime.clone(),
             burn: header.map(|h| h.encode().to_vec()),
             burn_state: if header.is_some() {
                 st::BURN_UNOPENED
@@ -1423,14 +1776,36 @@ impl OmcpNode {
             },
             burn_at_ms: None,
             file: None,
-        })?;
+        };
         let q = Queued {
             envelope_id,
             created_ms: now,
             inner: Zeroizing::new(inner),
             control: false,
         };
-        st.persist_queued(&id, &q)?;
+        st.db().transaction_with::<_, FfiError>(|db| {
+            if let Some(snapshot) = &snapshot {
+                db.put_burn(snapshot, &id, st::BurnDir::Out, mime.as_deref())?;
+            }
+            db.put_message(&message)?;
+            db.put_outbox(
+                &st::OutboxRec {
+                    id: envelope_id,
+                    peer: id,
+                    created_ms: now,
+                    inner: q.inner.to_vec(),
+                    control: false,
+                    burn: false,
+                },
+                snapshot.as_ref().map(|s| &*s.key),
+            )?;
+            Ok(())
+        })?;
+        if let Some(snapshot) = snapshot {
+            st.burn_out.restore(snapshot);
+            st.burn_meta
+                .insert(envelope_id, BurnMeta { peer: id, mime });
+        }
         st.queues.entry(id).or_default().push_back(q);
         Ok(hex::encode(envelope_id))
     }
@@ -1461,6 +1836,8 @@ impl OmcpNode {
                 hs_buf: Vec::new(),
                 hs_total: 0,
                 hs_next: 0,
+                pending: None,
+                last_committed: None,
             }),
         }))
     }
@@ -1505,6 +1882,20 @@ struct LinkState {
     hs_buf: Vec<u8>,
     hs_total: u8,
     hs_next: u16,
+    pending: Option<PendingBatch>,
+    last_committed: Option<String>,
+}
+
+struct PendingBatch {
+    token: String,
+    queued: Vec<([u8; 16], bool)>,
+    file: Option<PendingFile>,
+}
+
+struct PendingFile {
+    id: [u8; 16],
+    cursor: usize,
+    progress: FileProgress,
 }
 
 /// One BLE connection's secure session.
@@ -1541,12 +1932,21 @@ impl MeshLink {
     pub fn start(&self) -> Result<LinkOutput, FfiError> {
         let mut st = self.lock();
         let mut out = LinkOutput::default();
-        if let Role::Initiator(init) = &mut st.role {
-            let node = &self.node;
-            let m1 = init.write_message_1_with(|h| node.handshake_payload(h))?;
-            chunk_handshake(&m1, &mut out.outgoing)?;
+        let result = (|| {
+            if st.pending.is_none() {
+                if let Role::Initiator(init) = &mut st.role {
+                    let m1 = init.write_message_1_with(|h| self.node.handshake_payload(h))?;
+                    chunk_handshake(&m1, &mut out.outgoing)?;
+                }
+                Self::finish_batch(&mut st, &mut out)?;
+            }
+            Self::fill(&st, &mut out);
+            Ok(out)
+        })();
+        if result.is_err() {
+            self.shutdown_locked(&mut st);
         }
-        Ok(out)
+        result
     }
 
     /// Feed one PDU received from the peer (Inbox write or Outbox notify).
@@ -1554,68 +1954,68 @@ impl MeshLink {
         let mut st = self.lock();
         let result = self.on_pdu_locked(&mut st, &pdu);
         if result.is_err() {
-            // A transport/app nonce may already have advanced. Never continue a
-            // failed session: release its unauthenticated/fragment buffers and
-            // keys, mark it offline, and let a fresh link replay queued work.
+            // A nonce may have advanced. Retire keys and replay durable logical
+            // work only after a new handshake, never on this failed session.
             self.shutdown_locked(&mut st);
         }
         result
     }
 
-    /// Send text now if established, otherwise queue it on the node.
+    /// Persist text before generating PDUs, even on an established link.
     pub fn send_text(&self, text: String) -> Result<LinkOutput, FfiError> {
-        let mut st = self.lock();
-        let mut out = LinkOutput::default();
-        let peer = st.peer.ok_or(FfiError::UnknownContact)?;
-        match &mut st.role {
-            Role::Up(up) => {
-                if text.len() > MAX_TEXT_BYTES {
-                    return Err(invalid("text too long"));
-                }
-                let q = Queued {
-                    envelope_id: random_id16()?,
-                    created_ms: now_ms(),
-                    inner: Zeroizing::new(core_burn::encode_app(
-                        None,
-                        &AppContent::Text(text.clone()),
-                    )?),
-                    control: false,
-                };
-                Self::seal_into(&self.node, up, &q, &mut out)?;
-                self.node.lock().db().put_message(&MessageRec {
-                    id: q.envelope_id,
-                    peer,
-                    mine: true,
-                    time_ms: q.created_ms,
-                    status: st::STATUS_SENT,
-                    text,
-                    mime: None,
-                    burn: None,
-                    burn_state: st::BURN_NONE,
-                    burn_at_ms: None,
-                    file: None,
-                })?;
-            }
-            _ => {
-                drop(st);
-                return OmcpNode {
-                    inner: self.node.clone(),
-                }
-                .queue_text(hex::encode(peer), text)
-                .map(|_| LinkOutput::default());
-            }
+        let peer = self.lock().peer.ok_or(FfiError::UnknownContact)?;
+        OmcpNode {
+            inner: self.node.clone(),
         }
-        Self::fill(&st, &mut out);
-        Ok(out)
+        .queue_text(hex::encode(peer), text)?;
+        self.flush()
     }
 
-    /// Flush any queued texts for this peer (e.g. after queueing elsewhere).
+    /// Prepare a bounded batch. While one is outstanding this emits no PDUs.
     pub fn flush(&self) -> Result<LinkOutput, FfiError> {
         let mut st = self.lock();
         let mut out = LinkOutput::default();
-        self.flush_locked(&mut st, &mut out)?;
-        Self::fill(&st, &mut out);
-        Ok(out)
+        let result = self.flush_locked(&mut st, &mut out).and_then(|()| {
+            Self::finish_batch(&mut st, &mut out)?;
+            Self::fill(&st, &mut out);
+            Ok(out)
+        });
+        if result.is_err() {
+            self.shutdown_locked(&mut st);
+        }
+        result
+    }
+
+    /// Atomically retire logical work after EVERY PDU in the batch was accepted
+    /// by the OS transport. Does not imply peer receipt. A duplicate of the most
+    /// recent successful commit is a no-op; stale/wrong tokens cannot mutate.
+    pub fn commit_outgoing(&self, token: String) -> Result<LinkOutput, FfiError> {
+        let mut st = self.lock();
+        if !matches!(st.role, Role::Closed) && st.last_committed.as_ref() == Some(&token) {
+            let mut out = LinkOutput::default();
+            Self::fill(&st, &mut out);
+            out.more_pending = self.has_work(&st);
+            return Ok(out);
+        }
+        if st.pending.as_ref().is_none_or(|p| p.token != token) {
+            return Err(invalid("stale or unknown outgoing batch token"));
+        }
+        let result = self.commit_locked(&mut st);
+        if result.is_err() {
+            self.shutdown_locked(&mut st);
+        }
+        result
+    }
+
+    /// Retire a failed/abandoned transport batch and its key session. Logical
+    /// durable work remains queued for a fresh link. Never skip/retry a PDU.
+    pub fn abort_outgoing(&self, token: String) -> Result<(), FfiError> {
+        let mut st = self.lock();
+        if st.pending.as_ref().is_none_or(|p| p.token != token) {
+            return Err(invalid("stale or unknown outgoing batch token"));
+        }
+        self.shutdown_locked(&mut st);
+        Ok(())
     }
 
     pub fn is_established(&self) -> bool {
@@ -1631,12 +2031,15 @@ impl MeshLink {
 impl MeshLink {
     fn shutdown_locked(&self, st: &mut LinkState) {
         st.role = Role::Closed;
+        st.pending = None;
+        st.last_committed = None;
         st.hs_buf = Vec::new();
         st.hs_total = 0;
         st.hs_next = 0;
         let mut node = self.node.lock();
         node.links_up.remove(&self.handle);
         node.active_links.remove(&self.handle);
+        node.outgoing_owner.retain(|_, owner| *owner != self.handle);
         if let Some(peer) = st.peer {
             if !node.links_up.values().any(|p| *p == peer) {
                 let _ = node.pause_transfers(&peer);
@@ -1696,17 +2099,33 @@ impl MeshLink {
                     let (ct, plain) = open_app_envelope(&key, &peer, &env, &mut up.app_recv)?;
                     let plain = Zeroizing::new(plain);
                     let mut node = self.node.lock();
-                    if !node.seen.check_and_insert(env.envelope_id, Instant::now()) {
+                    // User-message replay is durable and peer-bound, not the
+                    // short-lived gossip cache (which must not hide DB retries).
+                    let user_message = ct == CONTENT_TYPE_TEXT_PLAIN
+                        || matches!(
+                            core_burn::decode_app(&plain)?,
+                            (_, AppContent::Text(_) | AppContent::Media { .. })
+                        );
+                    let mut seen_key = blake3::Hasher::new();
+                    seen_key.update(&peer);
+                    seen_key.update(&env.envelope_id);
+                    let seen_key: [u8; 16] = seen_key.finalize().as_bytes()[..16]
+                        .try_into()
+                        .expect("hash prefix");
+                    if user_message || !node.seen.contains(&seen_key, Instant::now()) {
                         let from = (
                             out.file_progress.len(),
                             out.files.len(),
                             out.file_failures.len(),
                         );
                         Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
-                        node.check_refetched(&mut out, from.1);
-                        node.persist_file_events(&out, from, now_ms())?;
+                        node.persist_file_events(&mut out, from, now_ms())?;
+                        if !user_message {
+                            node.seen.check_and_insert(seen_key, Instant::now());
+                        }
                     }
-                    let replies = node.queues.get(&peer).is_some_and(|q| !q.is_empty());
+                    let replies = node.queues.get(&peer).is_some_and(|q| !q.is_empty())
+                        || node.files.out.get(&peer).is_some_and(|q| !q.is_empty());
                     drop(node);
                     if replies {
                         self.flush_locked(st, &mut out)?;
@@ -1715,6 +2134,7 @@ impl MeshLink {
             }
             _ => return Err(invalid("unknown pdu kind")),
         }
+        Self::finish_batch(st, &mut out)?;
         Self::fill(st, &mut out);
         Ok(out)
     }
@@ -1764,13 +2184,29 @@ impl MeshLink {
         };
         if ct == CONTENT_TYPE_TEXT_PLAIN {
             rt.text = String::from_utf8(plain.to_vec()).map_err(|_| invalid("utf8"))?;
-            node.db().put_message(&received(&rt.text, None, None))?;
+            if Self::received_user_before(node, &peer, &env.envelope_id)? {
+                return Ok(());
+            }
+            Self::persist_received_user(node, &received(&rt.text, None, None), None)?;
             out.received.push(rt);
             return Ok(());
         }
         let (burn, content) = core_burn::decode_app(plain)?;
+        if matches!(&content, AppContent::Text(_) | AppContent::Media { .. })
+            && Self::received_user_before(node, &peer, &env.envelope_id)?
+        {
+            return Ok(());
+        }
         match (burn, content) {
             (_, AppContent::Opened(r)) => {
+                // OPENED is valid only for our outgoing burn message, never a
+                // received message whose peer happens to match burn_meta.
+                let Some(message) = node.db().message(&r.msg_id)? else {
+                    return Ok(());
+                };
+                if !message.mine || message.peer != peer || message.burn.is_none() {
+                    return Ok(());
+                }
                 let Some(meta) = node.burn_meta.get(&r.msg_id) else {
                     return Ok(());
                 };
@@ -1780,7 +2216,11 @@ impl MeshLink {
                 let media = meta.mime.is_some();
                 let shredded = node
                     .burn_out
-                    .on_remote_opened(&r.msg_id, r.opened_ms, media);
+                    .on_remote_opened(&r.msg_id, r.opened_ms, media)
+                    || !node.burn_out.is_live(&r.msg_id);
+                if shredded {
+                    node.discard_queued(&r.msg_id);
+                }
                 let burn_at_ms = node.burn_out.burn_at(&r.msg_id);
                 node.persist_burn(&r.msg_id)?;
                 if shredded {
@@ -1804,17 +2244,36 @@ impl MeshLink {
                 // owner before allocating a receiver or emitting a file result.
                 if let Some(id) = b.get(..16) {
                     let id: [u8; 16] = id.try_into().expect("16-byte transfer id");
+                    if node.db().message(&id)?.is_none() && node.db().received_before(&peer, &id)? {
+                        return Ok(());
+                    }
                     if let Some(m) = node.db().message(&id)? {
                         // A completed transfer ID is immutable. Replayed offers
                         // and chunks must not discard its saved path or emit a
                         // second file. Explicit missing-media states still admit
                         // the existing hash-verified re-fetch flow.
                         if m.peer == peer
-                            && m.file
-                                .as_ref()
-                                .is_some_and(|f| f.state == st::FILE_RECEIVED)
+                            && m.file.as_ref().is_some_and(|f| {
+                                matches!(f.state, st::FILE_RECEIVED | st::FILE_FINALIZING)
+                            })
                         {
                             return Ok(());
+                        }
+                        if m.peer == peer {
+                            if let (Some(f), Some(meta_bytes)) = (m.file.as_ref(), b.get(48..)) {
+                                if let Ok(meta) = omcp_core::files::FileMeta::decode(meta_bytes) {
+                                    if f.hash.as_deref().is_some_and(|h| h != meta.content_hash)
+                                        || (f.hash.is_some() && f.size != meta.size)
+                                    {
+                                        out.file_failures.push(FileFailure {
+                                            transfer_id_hex: hex::encode(id),
+                                            contact_id: hex::encode(peer),
+                                            reason: "integrity".into(),
+                                        });
+                                        return Ok(());
+                                    }
+                                }
+                            }
                         }
                         if !persist::accepts_incoming_file(&m, &peer) {
                             out.file_failures.push(FileFailure {
@@ -1826,6 +2285,7 @@ impl MeshLink {
                         }
                     }
                 }
+                node.refresh_receive_budget()?;
                 files::on_offer(&mut node.files, peer, &b, out)
             }
             (None, AppContent::FileChunk(b)) => files::on_chunk(&mut node.files, peer, &b, out),
@@ -1835,14 +2295,13 @@ impl MeshLink {
             (None, AppContent::MediaControl(c)) => node.on_media_control(peer, c, out)?,
             (Some(_), AppContent::MediaControl(_)) => return Err(invalid("burn control")),
             (None, AppContent::Text(t)) => {
-                node.db().put_message(&received(&t, None, None))?;
+                Self::persist_received_user(node, &received(&t, None, None), None)?;
                 rt.text = t;
                 out.received.push(rt);
             }
             (None, AppContent::Media { mime, .. }) => {
                 // TODO(M5.x): non-burn media goes through the chunked file path.
-                node.db()
-                    .put_message(&received("", Some(mime.clone()), None))?;
+                Self::persist_received_user(node, &received("", Some(mime.clone()), None), None)?;
                 rt.mime = Some(mime);
                 out.received.push(rt);
             }
@@ -1855,8 +2314,17 @@ impl MeshLink {
                     | AppContent::FileChunk(_)
                     | AppContent::MediaControl(_) => unreachable!(),
                 };
-                node.burn_in
-                    .insert(env.envelope_id, h, body, env.created_ms)?;
+                // Stage the burn entry separately; failed persistence must not
+                // leave a live unrecorded copy or consume the replay ID.
+                let mut staged = BurnStore::default();
+                staged.insert(env.envelope_id, h, body, env.created_ms)?;
+                let snapshot = staged.snapshot(&env.envelope_id).expect("staged burn");
+                Self::persist_received_user(
+                    node,
+                    &received("", mime.clone(), Some(&h)),
+                    Some(&snapshot),
+                )?;
+                node.burn_in.restore(snapshot);
                 node.burn_meta.insert(
                     env.envelope_id,
                     BurnMeta {
@@ -1864,15 +2332,48 @@ impl MeshLink {
                         mime: mime.clone(),
                     },
                 );
-                node.persist_burn(&env.envelope_id)?;
-                node.db()
-                    .put_message(&received("", mime.clone(), Some(&h)))?;
                 rt.burn = Some(BurnSpec::from_header(&h));
                 rt.mime = mime;
                 out.received.push(rt);
             }
         }
         Ok(())
+    }
+
+    fn received_user_before(
+        node: &NodeState,
+        peer: &[u8; 32],
+        id: &[u8; 16],
+    ) -> Result<bool, FfiError> {
+        if let Some(m) = node.db().message(id)? {
+            // Message IDs are a shared durable namespace: an authenticated peer
+            // may not overwrite another peer, our own send, or a file record.
+            if m.peer != *peer || m.mine || m.file.is_some() {
+                return Err(invalid("received message ID ownership mismatch"));
+            }
+            return Ok(true);
+        }
+        Ok(node.db().received_before(peer, id)?)
+    }
+
+    fn persist_received_user(
+        node: &NodeState,
+        message: &MessageRec,
+        burn: Option<&core_burn::BurnSnapshot>,
+    ) -> Result<(), FfiError> {
+        node.db().transaction_with(|db| {
+            if let Some(snapshot) = burn {
+                db.put_burn(
+                    snapshot,
+                    &message.peer,
+                    st::BurnDir::In,
+                    message.mime.as_deref(),
+                )?;
+            }
+            db.put_message(message)?;
+            db.record_received(&message.peer, &message.id)?;
+            Ok(())
+        })
     }
 
     fn seal_into(
@@ -1890,10 +2391,6 @@ impl MeshLink {
             &mut up.app_send,
             TTL_HOPS,
         )?;
-        // Remember our own envelope so a gossip echo is not shown as received.
-        node.lock()
-            .seen
-            .check_and_insert(env.envelope_id, Instant::now());
         let bytes = env.encode()?;
         for f in fragment_and_seal(
             &mut up.link,
@@ -1909,76 +2406,199 @@ impl MeshLink {
         Ok(())
     }
 
+    fn has_work(&self, st: &LinkState) -> bool {
+        let Some(peer) = st.peer else { return false };
+        let node = self.node.lock();
+        !node
+            .outgoing_owner
+            .get(&peer)
+            .is_some_and(|h| *h != self.handle)
+            && (node.queues.get(&peer).is_some_and(|q| !q.is_empty())
+                || node.files.out.get(&peer).is_some_and(|q| !q.is_empty()))
+    }
+
+    fn finish_batch(st: &mut LinkState, out: &mut LinkOutput) -> Result<(), FfiError> {
+        if !out.outgoing.is_empty() {
+            if st.pending.is_none() {
+                st.pending = Some(PendingBatch {
+                    token: hex::encode(random_id16()?),
+                    queued: Vec::new(),
+                    file: None,
+                });
+            }
+            out.batch_token = st.pending.as_ref().map(|p| p.token.clone());
+        }
+        Ok(())
+    }
+
     fn flush_locked(&self, st: &mut LinkState, out: &mut LinkOutput) -> Result<(), FfiError> {
+        if st.pending.is_some() {
+            out.more_pending = self.has_work(st);
+            return Ok(());
+        }
         let (Some(peer), Role::Up(up)) = (st.peer, &mut st.role) else {
             return Ok(());
         };
-        let pending: Vec<Queued> = self
-            .node
-            .lock()
-            .queues
-            .remove(&peer)
-            .map(Vec::from)
-            .unwrap_or_default();
-        for q in &pending {
-            Self::seal_into(&self.node, up, q, out)?;
-            if !q.control {
-                out.flushed += 1;
-            }
-            let node = self.node.lock();
-            node.db().delete_outbox(&q.envelope_id)?;
-            if !q.control {
-                node.update_message(&q.envelope_id, |m| m.status = st::STATUS_SENT)?;
-            }
-        }
-        // Then the active file transfer, a few chunks per call.
         let mut node = self.node.lock();
-        let Some(q) = node.files.out.get_mut(&peer) else {
+        if node
+            .outgoing_owner
+            .get(&peer)
+            .is_some_and(|h| *h != self.handle)
+        {
             return Ok(());
-        };
-        let mut batch: Vec<Queued> = Vec::new();
-        let from = out.file_progress.len();
-        if let Some(f) = q.front_mut() {
+        }
+        // Shredded burn payloads must not survive in the in-memory send queue.
+        let expired: HashSet<_> = node
+            .queues
+            .get(&peer)
+            .into_iter()
+            .flatten()
+            .filter(|q| {
+                node.burn_meta.contains_key(&q.envelope_id)
+                    && !node.burn_out.is_live(&q.envelope_id)
+            })
+            .map(|q| q.envelope_id)
+            .collect();
+        for id in &expired {
+            node.db().delete_outbox(id)?;
+        }
+        if let Some(q) = node.queues.get_mut(&peer) {
+            q.retain(|q| !expired.contains(&q.envelope_id));
+        }
+        let mut messages: Vec<Queued> = node
+            .queues
+            .get(&peer)
+            .into_iter()
+            .flatten()
+            .take(TEXTS_PER_FLUSH)
+            .cloned()
+            .collect();
+        let queued = messages
+            .iter()
+            .map(|q| (q.envelope_id, q.control))
+            .collect();
+        let file = if let Some(f) = node.files.out.get(&peer).and_then(|q| q.front()) {
+            let mut cursor = if f.link == Some(self.handle) {
+                f.cursor
+            } else {
+                0
+            };
             if f.link != Some(self.handle) {
-                f.link = Some(self.handle);
-                f.cursor = 0;
-                batch.push(Queued {
+                messages.push(Queued {
                     envelope_id: random_id16()?,
                     created_ms: now_ms(),
                     inner: f.offer.clone(),
                     control: true,
                 });
             }
-            for _ in 0..files::FILE_CHUNKS_PER_FLUSH {
-                let Some(c) = f.chunks.get(f.cursor) else {
-                    break;
-                };
-                batch.push(Queued {
+            for c in f
+                .chunks
+                .iter()
+                .skip(cursor)
+                .take(files::FILE_CHUNKS_PER_FLUSH)
+            {
+                messages.push(Queued {
                     envelope_id: random_id16()?,
                     created_ms: now_ms(),
                     inner: c.clone(),
                     control: true,
                 });
-                f.cursor += 1;
+                cursor += 1;
             }
-            out.file_progress.push(f.progress(&peer));
-            if f.cursor >= f.chunks.len() {
-                let id = f.id;
-                q.pop_front();
-                node.db().delete_out_file(&id)?;
+            let mut progress = f.progress(&peer);
+            progress.done_chunks = cursor as u32;
+            Some(PendingFile {
+                id: f.id,
+                cursor,
+                progress,
+            })
+        } else {
+            None
+        };
+        if messages.is_empty() {
+            if node.outgoing_owner.get(&peer) == Some(&self.handle) {
+                node.outgoing_owner.remove(&peer);
             }
+            return Ok(());
         }
-        out.more_pending = node.files.out.get(&peer).is_some_and(|q| !q.is_empty());
-        node.persist_file_events(
-            out,
-            (from, out.files.len(), out.file_failures.len()),
-            now_ms(),
-        )?;
+        node.outgoing_owner.insert(peer, self.handle);
         drop(node);
-        for m in &batch {
-            Self::seal_into(&self.node, up, m, out)?;
+        st.pending = Some(PendingBatch {
+            token: hex::encode(random_id16()?),
+            queued,
+            file,
+        });
+        for q in &messages {
+            Self::seal_into(&self.node, up, q, out)?;
         }
+        // This includes the prepared batch until commit. The commit result gives
+        // the authoritative remainder, including replies queued while pending.
+        out.more_pending = true;
         Ok(())
+    }
+
+    fn commit_locked(&self, st: &mut LinkState) -> Result<LinkOutput, FfiError> {
+        let batch = st.pending.as_ref().expect("validated pending batch");
+        let mut out = LinkOutput::default();
+        let mut node = self.node.lock();
+        if let Some(peer) = st.peer {
+            let live: Vec<_> = batch
+                .queued
+                .iter()
+                .copied()
+                .filter(|(id, _)| {
+                    node.queues
+                        .get(&peer)
+                        .is_some_and(|q| q.iter().any(|q| q.envelope_id == *id))
+                })
+                .collect();
+            let file = batch.file.as_ref().filter(|p| {
+                node.files
+                    .out
+                    .get(&peer)
+                    .is_some_and(|q| q.iter().any(|f| f.id == p.id))
+            });
+            let file_commit = file.map(|p| st::OutgoingFileCommit {
+                id: p.id,
+                done_bytes: if p.progress.total_chunks == 0 {
+                    p.progress.size
+                } else {
+                    p.progress.size * u64::from(p.progress.done_chunks)
+                        / u64::from(p.progress.total_chunks)
+                },
+                complete: p.progress.done_chunks >= p.progress.total_chunks,
+            });
+            node.db().commit_outgoing(&peer, &live, file_commit)?;
+            let ids: HashSet<_> = live.iter().map(|(id, _)| *id).collect();
+            if let Some(q) = node.queues.get_mut(&peer) {
+                q.retain(|q| !ids.contains(&q.envelope_id));
+            }
+            out.flushed = live
+                .iter()
+                .filter(|(id, control)| {
+                    !*control && (!node.burn_meta.contains_key(id) || node.burn_out.is_live(id))
+                })
+                .count() as u32;
+            if let Some(p) = file {
+                if let Some(q) = node.files.out.get_mut(&peer) {
+                    if let Some(f) = q.iter_mut().find(|f| f.id == p.id) {
+                        f.cursor = p.cursor;
+                        f.link = Some(self.handle);
+                    }
+                    q.retain(|f| f.id != p.id || p.cursor < f.chunks.len());
+                }
+                out.file_progress.push(p.progress.clone());
+            }
+            out.more_pending = node.queues.get(&peer).is_some_and(|q| !q.is_empty())
+                || node.files.out.get(&peer).is_some_and(|q| !q.is_empty());
+            if !out.more_pending && node.outgoing_owner.get(&peer) == Some(&self.handle) {
+                node.outgoing_owner.remove(&peer);
+            }
+        }
+        st.last_committed = Some(batch.token.clone());
+        st.pending = None;
+        Self::fill(st, &mut out);
+        Ok(out)
     }
 
     fn complete_handshake(
