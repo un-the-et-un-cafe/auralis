@@ -80,6 +80,14 @@ source "$(dirname "$0")/android-emulator-cleanup.sh"
 cleanup() {
   local result=$?
   trap - EXIT
+  if [[ $result != 0 && -n ${theme:-} ]]; then
+    # Retain only completed, test-owned captures privately for diagnosis/review.
+    mkdir -p "app/build/private-ui-captures/$theme" "app/build/private-ui-captures/_diagnostics"
+    "$ADB" -s "$ANDROID_SERIAL" pull /sdcard/Android/data/chat.auralis.app.uicapture/files/ui-captures/. \
+      "app/build/private-ui-captures/$theme/" || true
+    "$ADB" -s "$ANDROID_SERIAL" logcat -d -v threadtime 'AndroidRuntime:E' '*:S' \
+      > app/build/private-ui-captures/_diagnostics/android-runtime-errors.txt || true
+  fi
   if ! auralis_cleanup_android "$ADB" "$ANDROID_SERIAL" "$EMULATOR_PID" "$LOGCAT_PID"; then
     echo "Android cleanup incomplete; preserving original test exit status $result." >&2
   fi

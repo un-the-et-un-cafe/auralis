@@ -63,16 +63,24 @@ class PrivateUiCaptureTest {
         SystemClock.sleep(600)
     }
 
-    private fun dismissPermissionIfPresent() {
+    private fun denyPermissions(required: Boolean) {
         val deny = By.res(Pattern.compile(".*:id/permission_deny(?:_and_dont_ask_again)?_button"))
-        repeat(3) {
-            val deadline = SystemClock.elapsedRealtime() + 1000
+        fun denyOne(timeoutMs: Long): Boolean {
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs
             while (SystemClock.elapsedRealtime() < deadline) {
-                val button = device.wait(Until.findObject(deny), (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1)) ?: break
-                try { button.click(); break } catch (_: StaleObjectException) { /* Reacquire within deadline. */ }
+                val button = device.wait(Until.findObject(deny), (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1)) ?: return false
+                try { button.click(); return true } catch (_: StaleObjectException) { /* Reacquire within deadline. */ }
             }
+            return false
         }
+        val firstDenied = denyOne(if (required) 5000 else 1000)
+        if (required) assertTrue("Expected the real nearby-device permission dialog", firstDenied)
+        if (firstDenied) {
+            for (dialog in 1..2) if (!denyOne(1000)) break
+        }
+        assertNull("Permission dialog must be dismissed", device.wait(Until.findObject(deny), 1000))
         compose.waitForIdle()
+        assertFalse(chat.omcp.app.mesh.MeshPermissions.hasBle(compose.activity))
     }
 
     @Test fun captureImplementedScreensWithFictionalLocalData() {
@@ -93,6 +101,13 @@ class PrivateUiCaptureTest {
         click(R.string.onb_start_chatting)
         tab(R.string.tab_chats).assertIsSelected()
         capture("03-empty-chats")
+        // Follow the already validated real-app smoke's permission order.
+        tab(R.string.tab_mesh).performClick()
+        click(R.string.onb_find_nearby)
+        denyPermissions(required = true)
+        tab(R.string.tab_mesh).assertIsSelected()
+        assertFalse(chat.omcp.app.mesh.MeshPermissions.hasBle(compose.activity))
+        tab(R.string.tab_chats).performClick()
 
         val peer = RustOmcpCore().also { it.load(it.generateRecoveryPhrase(), "Sam") }
         compose.onNodeWithContentDescription(text(R.string.contact_add_title)).performClick()
@@ -100,7 +115,7 @@ class PrivateUiCaptureTest {
         compose.onNodeWithText("omcp:1:…").performScrollTo().performTextInput(peer.qrPayload())
         click(R.string.cta_continue)
         click(R.string.chat_without_verifying)
-        dismissPermissionIfPresent()
+        denyPermissions(required = false)
         compose.onNodeWithTag("message-composer").performTextInput("See you at the park at 3!")
         hideKeyboard()
         capture("04-message-draft")

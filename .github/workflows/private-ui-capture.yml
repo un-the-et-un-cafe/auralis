@@ -25,21 +25,29 @@ jobs:
           OMCP_ABIS=x86_64 ./scripts/build-rust.sh
           ./gradlew -PAURALIS_UI_CAPTURE=true assembleUiCapture assembleUiCaptureAndroidTest --no-daemon --console=plain
       - name: Capture implemented screens with fictional content
+        id: capture
         working-directory: apps/android
         run: ../../scripts/ci/run-private-ui-capture.sh 35
       - name: Record exact provenance without including keys or recovery phrases
+        if: ${{ always() && steps.capture.outcome != 'skipped' }}
         env:
           CAPTURE_SHA: ${{ github.sha }}
           CAPTURE_RUN: ${{ github.run_id }}
+          CAPTURE_RESULT: ${{ steps.capture.outcome }}
         run: |
           python3 - <<'PY'
           import hashlib, json, os
           from pathlib import Path
           root = Path('apps/android/app/build/private-ui-captures')
-          files = sorted(root.glob('*/*.png'))
-          assert len(files) == 18, f'Expected 9 real app captures in each theme; got {len(files)}'
+          names = {'01-welcome.png', '02-profile.png', '03-empty-chats.png', '04-message-draft.png', '05-queued-message.png', '06-chat-list.png', '07-mesh.png', '08-you.png', '09-backup-settings.png'}
+          files = sorted(p for p in root.glob('*/*.png') if p.parent.name in {'light', 'dark'} and p.name in names)
+          root.mkdir(parents=True, exist_ok=True)
+          if os.environ['CAPTURE_RESULT'] == 'success':
+              assert len(files) == 18, f'Expected 9 real app captures in each theme; got {len(files)}'
           manifest = {
               'commit': os.environ['CAPTURE_SHA'],
+              'captureTestResult': os.environ['CAPTURE_RESULT'],
+              'completeSet': len(files) == 18,
               'run': os.environ['CAPTURE_RUN'],
               'platform': 'Android API 35, Pixel 2 emulator, normal font scale',
               'applicationId': 'chat.auralis.app.uicapture',
@@ -51,18 +59,28 @@ jobs:
           (root / 'PROVENANCE.json').write_text(json.dumps(manifest, indent=2) + '\n')
           PY
       - name: Encrypt private captures before artifact storage
+        if: ${{ always() && steps.capture.outcome != 'skipped' }}
         run: |
           # Only the corresponding private key in the review workspace can decrypt this.
           # Public repository readers must never receive plaintext screenshots.
-          cd apps/android/app/build/private-ui-captures
-          zip -qr "$RUNNER_TEMP/private-ui-captures.zip" .
-          cd "$GITHUB_WORKSPACE"
+          python3 - <<'PYZIP'
+          import json, os, zipfile
+          from pathlib import Path
+          root = Path('apps/android/app/build/private-ui-captures')
+          manifest = json.loads((root / 'PROVENANCE.json').read_text())
+          with zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'private-ui-captures.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in [*manifest['files'], 'PROVENANCE.json', '_diagnostics/android-runtime-errors.txt']:
+                  path = root / name
+                  if path.is_file():
+                      archive.write(path, name)
+          PYZIP
           openssl cms -encrypt -binary -aes-256-gcm \
             -in "$RUNNER_TEMP/private-ui-captures.zip" \
             -out "$RUNNER_TEMP/private-ui-captures.cms" -outform DER \
             scripts/ci/ui-capture-public-certificate.pem
           rm "$RUNNER_TEMP/private-ui-captures.zip"
       - name: Upload encrypted captures only, never PNGs or capture APK
+        if: ${{ always() && steps.capture.outcome != 'skipped' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: encrypted-android-ui-captures-${{ github.sha }}
