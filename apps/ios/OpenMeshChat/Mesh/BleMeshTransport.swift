@@ -42,6 +42,7 @@ final class BleMeshTransport: NSObject, MeshKick {
         let central: CBCentral
         let link: CoreLink
         var writes = LinkWriteQueue()
+        var receiptRecoveryScheduled = false
         var more = false
         var peer: String?
         init(_ central: CBCentral, _ link: CoreLink) { self.central = central; self.link = link }
@@ -58,6 +59,7 @@ final class BleMeshTransport: NSObject, MeshKick {
         var control: CBCharacteristic?
         var writes = LinkWriteQueue()
         /// Rust has more file chunks for this link: flush again when `writes` drains.
+        var receiptRecoveryScheduled = false
         var more = false
         var started = false
         init(_ p: CBPeripheral) { self.p = p }
@@ -106,15 +108,20 @@ final class BleMeshTransport: NSObject, MeshKick {
         }
     }
 
+    private func recoverAfterStorageFailure(_ error: Error) {
+        guard case CoreError.storageUnavailable = error else { return }
+        onMain { [repo] in repo.retryReceivedFiles() }
+    }
+
     // MARK: MeshKick
     func kick(_ contactId: String) {
         q.async { [self] in
             for c in clients.values where c.contactId == contactId && c.link?.isEstablished == true {
                 guard let link = c.link else { continue }
-                do { onClientResult(c, try link.flush()) } catch { abortClient(c) }
+                do { onClientResult(c, try link.flush()) } catch { recoverAfterStorageFailure(error); abortClient(c) }
             }
             for (id, r) in Array(responders) where r.link.isEstablished {
-                do { onResponderResult(id, try r.link.flush()) } catch { dropResponder(id) }
+                do { onResponderResult(id, try r.link.flush()) } catch { recoverAfterStorageFailure(error); dropResponder(id) }
             }
             pumpNotify()
         }
@@ -125,6 +132,10 @@ final class BleMeshTransport: NSObject, MeshKick {
         guard c.writes.append(contentsOf: r.outgoing, batchToken: r.batchToken) else {
             abortClient(c)
             return false
+        }
+        if r.established && !c.receiptRecoveryScheduled {
+            c.receiptRecoveryScheduled = true
+            onMain { [repo] in repo.retryReceivedFiles() }
         }
         c.more = r.morePending
         handle(r, contact: c.contactId)
@@ -142,6 +153,10 @@ final class BleMeshTransport: NSObject, MeshKick {
             return
         }
         if let peer = output.peerContactId { r.peer = peer }
+        if output.established && !r.receiptRecoveryScheduled {
+            r.receiptRecoveryScheduled = true
+            onMain { [repo] in repo.retryReceivedFiles() }
+        }
         r.more = output.morePending
         handle(output, contact: r.peer)
     }
@@ -160,7 +175,7 @@ final class BleMeshTransport: NSObject, MeshKick {
             }
             guard let pdu = c.writes.next() else { return }
             c.p.writeValue(pdu, for: ch, type: .withResponse)
-        } catch { abortClient(c) }
+        } catch { recoverAfterStorageFailure(error); abortClient(c) }
     }
 
     private func pumpNotify() {
@@ -191,7 +206,7 @@ final class BleMeshTransport: NSObject, MeshKick {
                     return // Retry these identical bytes only when CoreBluetooth signals ready.
                 }
                 guard r.writes.complete(succeeded: true) else { dropResponder(id); continue }
-            } catch { dropResponder(id) }
+            } catch { recoverAfterStorageFailure(error); dropResponder(id) }
         }
     }
 
@@ -293,7 +308,7 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
             c.link = link
             if let ob = c.outbox { p.setNotifyValue(true, for: ob) }
         } else if ch === c.outbox, let link = c.link {
-            do { onClientResult(c, try link.onPdu(value)) } catch { abortClient(c) }
+            do { onClientResult(c, try link.onPdu(value)) } catch { recoverAfterStorageFailure(error); abortClient(c) }
         }
     }
 
@@ -302,7 +317,7 @@ extension BleMeshTransport: CBCentralManagerDelegate, CBPeripheralDelegate {
         guard error == nil, ch.isNotifying, let link = c.link else { abortClient(c); return }
         guard !c.started else { return }
         c.started = true
-        do { onClientResult(c, try link.start()) } catch { abortClient(c) }
+        do { onClientResult(c, try link.start()) } catch { recoverAfterStorageFailure(error); abortClient(c) }
     }
 
     func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
@@ -373,6 +388,7 @@ extension BleMeshTransport: CBPeripheralManagerDelegate {
                 onResponderResult(id, try r.link.onPdu(value))
                 if responders[id] == nil { result = .unlikelyError; break }
             } catch {
+                recoverAfterStorageFailure(error)
                 // Reject rather than acknowledging a rejected/closed Noise session. The peer
                 // must establish a new session; queued ciphertext for this one is discarded.
                 dropResponder(id)

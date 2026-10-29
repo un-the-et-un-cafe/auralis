@@ -67,6 +67,102 @@ pub use persist::{
     ChatSummary, MessageStatus, StoredBurnState, StoredFile, StoredFileState, StoredMessage,
 };
 
+fn receipt_to_ffi(r: st::ReceivedFileReceipt) -> ReceivedFile {
+    let mut token = r.token.message_id.to_vec();
+    token.extend_from_slice(&r.token.nonce);
+    ReceivedFile {
+        transfer_id_hex: hex::encode(r.token.message_id),
+        contact_id: hex::encode(r.peer),
+        name: r.name,
+        mime: r.mime,
+        size: r.size,
+        receipt_token_hex: hex::encode(token),
+        content_hash_hex: hex::encode(r.hash),
+        block_count: r.blocks,
+    }
+}
+fn parse_receipt_token(value: &str) -> Result<st::ReceivedFileToken, FfiError> {
+    let bytes = hex::decode(value).map_err(|_| invalid("receipt token"))?;
+    if bytes.len() != 48 {
+        return Err(invalid("receipt token"));
+    }
+    Ok(st::ReceivedFileToken {
+        message_id: bytes[..16]
+            .try_into()
+            .map_err(|_| invalid("receipt token"))?,
+        nonce: bytes[16..]
+            .try_into()
+            .map_err(|_| invalid("receipt token"))?,
+    })
+}
+fn pending_receipt(
+    node: &NodeState,
+    token: &st::ReceivedFileToken,
+) -> Result<st::ReceivedFileReceipt, FfiError> {
+    node.db
+        .pending_received_files()?
+        .into_iter()
+        .find(|r| r.token == *token)
+        .ok_or_else(|| invalid("stale or unknown receipt"))
+}
+
+struct ReceiveVerification {
+    hasher: Option<blake3::Hasher>,
+    hash: [u8; 32],
+    size: u64,
+    seen: u64,
+}
+/// A single-use, token-bound verifier for bounded native file readback.
+#[derive(uniffi::Object)]
+pub struct ReceivedFileVerifier {
+    node: Arc<NodeInner>,
+    token: st::ReceivedFileToken,
+    state: Mutex<ReceiveVerification>,
+}
+#[uniffi::export]
+impl ReceivedFileVerifier {
+    pub fn update(&self, bytes: Vec<u8>) -> Result<(), FfiError> {
+        let bytes = Zeroizing::new(bytes);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| invalid("verifier poisoned"))?;
+        let next = state.seen.checked_add(bytes.len() as u64);
+        if bytes.len() > FILE_CHUNK_BYTES || next.is_none_or(|n| n > state.size) {
+            state.hasher = None;
+            return Err(invalid("file verification length"));
+        }
+        state
+            .hasher
+            .as_mut()
+            .ok_or_else(|| invalid("verifier already finished"))?
+            .update(&bytes);
+        state.seen = next.expect("checked count");
+        Ok(())
+    }
+    pub fn finish(&self) -> Result<(), FfiError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| invalid("verifier poisoned"))?;
+        let hash = state
+            .hasher
+            .take()
+            .ok_or_else(|| invalid("verifier already finished"))?
+            .finalize();
+        let node = self.node.lock();
+        let receipt = pending_receipt(&node, &self.token)?;
+        if state.seen != state.size
+            || hash.as_bytes() != &state.hash
+            || receipt.hash != state.hash
+            || receipt.size != state.size
+        {
+            return Err(invalid("file verification hash or length"));
+        }
+        Ok(())
+    }
+}
+
 /// Max handshake bytes per PDU chunk.
 pub const HANDSHAKE_CHUNK: usize = 480;
 /// Full existing u8 chunk-count range, with no unbounded repeated appends.
@@ -1194,7 +1290,7 @@ impl OmcpNode {
         let tid = random_id16()?;
         let f = files::build_outgoing(tid, &name, &mime, &bytes)?;
         let mut st = self.inner.lock();
-        st.persist_out_file(&id, &f)?;
+        st.persist_out_file(&id, &f, None)?;
         let msg = MessageRec {
             id: tid,
             peer: id,
@@ -1231,21 +1327,98 @@ impl OmcpNode {
         Ok(offer)
     }
 
-    /// Cancel an outbound transfer (queued or in progress). Returns whether it existed.
-    pub fn cancel_file(&self, transfer_id_hex: String) -> bool {
-        let Ok(tid) = parse_msg_id(&transfer_id_hex) else {
-            return false;
-        };
-        let mut st = self.inner.lock();
-        let _ = st.db().delete_out_file(&tid);
-        let _ = st.db().delete_message(&tid);
-        for q in st.files.out.values_mut() {
-            if let Some(i) = q.iter().position(|f| f.id == tid) {
-                q.remove(i);
-                return true;
+    /// Cancel durable incomplete work first; database errors are never swallowed.
+    /// Completed history survives cancellation of a reciprocal outgoing resend.
+    pub fn cancel_file(&self, transfer_id_hex: String) -> Result<bool, FfiError> {
+        let id = parse_msg_id(&transfer_id_hex)?;
+        let mut node = self.inner.lock();
+        let volatile = node
+            .files
+            .incoming
+            .get(&id)
+            .map(|f| (f.peer, f.meta.clone()))
+            .or_else(|| {
+                node.files
+                    .verified
+                    .get(&id)
+                    .map(|f| (f.peer, f.meta.clone()))
+            });
+        let changed = node.db.transaction_with::<_, FfiError>(|db| {
+            let mut message = db.message(&id)?;
+            if message.is_none() {
+                if let Some((peer, meta)) = &volatile {
+                    message = Some(MessageRec {
+                        id,
+                        peer: *peer,
+                        mine: false,
+                        time_ms: now_ms(),
+                        status: st::STATUS_RECEIVED,
+                        text: String::new(),
+                        mime: None,
+                        burn: None,
+                        burn_state: st::BURN_NONE,
+                        burn_at_ms: None,
+                        file: Some(st::FileRec {
+                            name: meta.name.clone(),
+                            mime: meta.mime.clone(),
+                            size: meta.size,
+                            state: st::FILE_RECEIVING,
+                            done_bytes: 0,
+                            local_path: None,
+                            hash: Some(meta.content_hash.to_vec()),
+                            locator: Some(id.to_vec()),
+                        }),
+                    });
+                }
+            }
+            let Some(mut m) = message else {
+                return Ok(false);
+            };
+            if m.burn.is_some() || m.file.is_none() {
+                return Ok(false);
+            }
+            let outgoing = db.out_file_exists(&id)?;
+            if outgoing {
+                db.delete_out_file(&id)?;
+            }
+            let f = m.file.as_ref().expect("checked file");
+            if matches!(f.state, st::FILE_RECEIVED | st::FILE_SENT) {
+                return Ok(outgoing);
+            }
+            if db.cancel_received_file(&m.peer, &id)? {
+                return Ok(true);
+            }
+            if f.state == st::FILE_FAILED {
+                return Ok(outgoing);
+            }
+            if !outgoing
+                && volatile.is_none()
+                && !matches!(
+                    f.state,
+                    st::FILE_QUEUED
+                        | st::FILE_SENDING
+                        | st::FILE_RECEIVING
+                        | st::FILE_PAUSED
+                        | st::FILE_REQUESTED
+                )
+            {
+                return Ok(false);
+            }
+            let f = m.file.as_mut().expect("checked file");
+            f.state = st::FILE_FAILED;
+            f.done_bytes = 0;
+            f.local_path = None;
+            db.put_message(&m)?;
+            Ok(true)
+        })?;
+        if changed {
+            node.files.incoming.remove(&id);
+            node.files.verified.remove(&id);
+            for queue in node.files.out.values_mut() {
+                queue.retain(|f| f.id != id);
             }
         }
-        st.files.incoming.remove(&tid).is_some()
+        Ok(changed)
     }
 
     /// Outbound file transfers (active + queued) for a contact.
@@ -1326,23 +1499,114 @@ impl OmcpNode {
             .collect())
     }
 
-    /// Record where the app saved a verified received file (None = couldn't save).
+    pub fn cancelled_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .cancelled_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn acknowledge_received_file_cleanup(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<bool, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .acknowledge_received_file_cleanup(&token)?)
+    }
+    pub fn pending_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .pending_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn retry_received_files(&self) -> Result<Vec<ReceivedFile>, FfiError> {
+        let mut node = self.inner.lock();
+        node.stage_verified_files(now_ms(), true)?;
+        Ok(node
+            .db
+            .pending_received_files()?
+            .into_iter()
+            .map(receipt_to_ffi)
+            .collect())
+    }
+    pub fn read_received_file_block(
+        &self,
+        receipt_token_hex: String,
+        index: u32,
+    ) -> Result<Vec<u8>, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .read_received_block(&token, index)?
+            .to_vec())
+    }
+    pub fn commit_received_file(
+        &self,
+        receipt_token_hex: String,
+        local_path: String,
+    ) -> Result<(), FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        let mut node = self.inner.lock();
+        node.db.commit_received_file(&token, &local_path)?;
+        node.refresh_receive_budget()
+    }
+    pub fn received_file_verifier(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<Arc<ReceivedFileVerifier>, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        let receipt = pending_receipt(&self.inner.lock(), &token)?;
+        Ok(Arc::new(ReceivedFileVerifier {
+            node: self.inner.clone(),
+            token,
+            state: Mutex::new(ReceiveVerification {
+                hasher: Some(blake3::Hasher::new()),
+                hash: receipt.hash,
+                size: receipt.size,
+                seen: 0,
+            }),
+        }))
+    }
+    pub fn mark_received_file_missing(
+        &self,
+        transfer_id_hex: String,
+        expected_local_path: String,
+    ) -> Result<bool, FfiError> {
+        let id = parse_msg_id(&transfer_id_hex)?;
+        let mut node = self.inner.lock();
+        let changed = node
+            .db
+            .mark_received_file_missing(&id, &expected_local_path)?;
+        node.refresh_receive_budget()?;
+        Ok(changed)
+    }
+    /// Legacy backup attachment only. Nil is a failed save, not a state transition;
+    /// receipt-owned files require token commit and cannot use this bypass.
     pub fn set_received_file_path(
         &self,
         transfer_id_hex: String,
         local_path: Option<String>,
     ) -> Result<(), FfiError> {
         let id = parse_msg_id(&transfer_id_hex)?;
-        self.inner.lock().update_message(&id, |m| {
-            if let Some(f) = m.file.as_mut() {
-                f.state = if local_path.is_some() {
-                    st::FILE_RECEIVED
-                } else {
-                    st::FILE_FAILED
-                };
-                f.local_path = local_path;
-            }
-        })
+        let path = local_path.ok_or_else(|| invalid("no durable received file path"))?;
+        Ok(self
+            .inner
+            .lock()
+            .db
+            .set_legacy_received_file_path(&id, &path)?)
     }
 
     pub fn mark_chat_read(&self, contact_id: String, now_ms: u64) -> Result<(), FfiError> {
@@ -1773,8 +2037,7 @@ impl MeshLink {
                             out.file_failures.len(),
                         );
                         Self::deliver(&mut node, peer, &env, ct, &plain, &mut out)?;
-                        node.check_refetched(&mut out, from.1);
-                        node.persist_file_events(&out, from, now_ms())?;
+                        node.persist_file_events(&mut out, from, now_ms())?;
                         if !user_message {
                             node.seen.check_and_insert(seen_key, Instant::now());
                         }
@@ -1899,17 +2162,36 @@ impl MeshLink {
                 // owner before allocating a receiver or emitting a file result.
                 if let Some(id) = b.get(..16) {
                     let id: [u8; 16] = id.try_into().expect("16-byte transfer id");
+                    if node.db().message(&id)?.is_none() && node.db().received_before(&peer, &id)? {
+                        return Ok(());
+                    }
                     if let Some(m) = node.db().message(&id)? {
                         // A completed transfer ID is immutable. Replayed offers
                         // and chunks must not discard its saved path or emit a
                         // second file. Explicit missing-media states still admit
                         // the existing hash-verified re-fetch flow.
                         if m.peer == peer
-                            && m.file
-                                .as_ref()
-                                .is_some_and(|f| f.state == st::FILE_RECEIVED)
+                            && m.file.as_ref().is_some_and(|f| {
+                                matches!(f.state, st::FILE_RECEIVED | st::FILE_FINALIZING)
+                            })
                         {
                             return Ok(());
+                        }
+                        if m.peer == peer {
+                            if let (Some(f), Some(meta_bytes)) = (m.file.as_ref(), b.get(48..)) {
+                                if let Ok(meta) = omcp_core::files::FileMeta::decode(meta_bytes) {
+                                    if f.hash.as_deref().is_some_and(|h| h != meta.content_hash)
+                                        || (f.hash.is_some() && f.size != meta.size)
+                                    {
+                                        out.file_failures.push(FileFailure {
+                                            transfer_id_hex: hex::encode(id),
+                                            contact_id: hex::encode(peer),
+                                            reason: "integrity".into(),
+                                        });
+                                        return Ok(());
+                                    }
+                                }
+                            }
                         }
                         if !persist::accepts_incoming_file(&m, &peer) {
                             out.file_failures.push(FileFailure {
@@ -1921,6 +2203,7 @@ impl MeshLink {
                         }
                     }
                 }
+                node.refresh_receive_budget()?;
                 files::on_offer(&mut node.files, peer, &b, out)
             }
             (None, AppContent::FileChunk(b)) => files::on_chunk(&mut node.files, peer, &b, out),

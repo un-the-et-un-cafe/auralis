@@ -6,6 +6,9 @@ import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IOS = os.path.dirname(HERE)
 S = {
+ "file_storage_pending": ("Some file storage operations need attention.", "Certaines opérations de stockage nécessitent votre attention."),
+ "file_state_finalizing": ("Verified · waiting for durable storage", "Vérifié · en attente de stockage durable"),
+ "file_retry_finalizing": ("Retry saving", "Réessayer l’enregistrement"),
  "store_blocked_title": ("Local storage unavailable", "Stockage local indisponible"),
  "store_blocked_body": ("Auralis could not open your saved account. Your database has not been reset. Unlock this device or return to a compatible app version, then try again. If it still fails, restart Auralis.", "Auralis ne peut pas ouvrir votre compte enregistré. La base de données n’a pas été réinitialisée. Déverrouillez cet appareil ou utilisez une version compatible, puis réessayez. Si le problème persiste, redémarrez Auralis."),
  "store_retry": ("Try again", "Réessayer"),

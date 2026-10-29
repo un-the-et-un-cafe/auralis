@@ -24,6 +24,67 @@ public final class FakeOmcpCore: OmcpCore {
         return try load(phrase: phrase, displayName: displayName)
     }
 
+    /// Test-only receipt model; no cryptographic claim. Production uses Rust.
+    public var receiptCommitError: CoreError?
+    public var receiptCancelError: CoreError?
+    public var receiptRetryError: CoreError?
+    public var receiptCleanupAckError: CoreError?
+    private var cancelledReceipts: [String: ReceiveReceiptInfo] = [:]
+    public var cancelPreservingReceived = false
+    public var receiptEnumerationError: CoreError?
+    private var receiptPayloads: [String: (ReceiveReceiptInfo, Data)] = [:]
+    private var receiptRows: [String: StoredMessageInfo] = [:]
+    public func injectReceipt(_ receipt: ReceiveReceiptInfo, bytes: Data, mine: Bool = false) {
+        receiptPayloads[receipt.receiptToken] = (receipt, bytes)
+        receiptRows[receipt.transferId] = StoredMessageInfo(id: receipt.transferId, contactId: receipt.contactId, text: "", mine: mine,
+            timeMs: 1, status: .received, mime: nil, burn: nil, burnState: .none, burnAtMs: nil,
+            file: StoredFileInfo(name: receipt.name, mime: receipt.mime, size: receipt.size, state: .finalizing, doneBytes: receipt.size, localPath: nil))
+    }
+    public func storedMessages(_ contactId: String) -> [StoredMessageInfo] { receiptRows.values.filter { $0.contactId == contactId }.sorted { $0.id < $1.id } }
+    public func pendingReceivedFiles() throws -> [ReceiveReceiptInfo] {
+        if let error = receiptEnumerationError { throw error }
+        return receiptPayloads.values.map { $0.0 }.sorted { $0.transferId < $1.transferId }
+    }
+    public func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { Array(cancelledReceipts.values.prefix(32)) }
+    public func acknowledgeReceivedFileCleanup(_ receiptToken: String) throws -> Bool {
+        if let error = receiptCleanupAckError { throw error }
+        return cancelledReceipts.removeValue(forKey: receiptToken) != nil
+    }
+    public func retryReceivedFiles() throws -> [ReceiveReceiptInfo] {
+        if let error = receiptRetryError { throw error }
+        return try pendingReceivedFiles()
+    }
+    public func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data {
+        guard let (r, bytes) = receiptPayloads[receiptToken], index < r.blockCount else { throw CoreError.invalid("stale receipt") }
+        let start = Int(index) * 65_536
+        return bytes.subdata(in: start..<min(bytes.count, start + 65_536))
+    }
+    public func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier {
+        guard let (_, bytes) = receiptPayloads[receiptToken] else { throw CoreError.invalid("stale receipt") }
+        return FakeReceiptVerifier(bytes)
+    }
+    public func commitReceivedFile(_ receiptToken: String, path: String) throws {
+        if let error = receiptCommitError { throw error }
+        guard let (r, _) = receiptPayloads[receiptToken], var row = receiptRows[r.transferId] else { throw CoreError.invalid("stale receipt") }
+        row.file?.state = .received; row.file?.localPath = path
+        receiptRows[r.transferId] = row; receiptPayloads.removeValue(forKey: receiptToken)
+    }
+    public func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool {
+        guard var row = receiptRows[transferId], row.file?.state == .received, row.file?.localPath == expectedPath else { return false }
+        row.file?.state = .missing; row.file?.localPath = nil; row.file?.doneBytes = 0; receiptRows[transferId] = row
+        return true
+    }
+    private final class FakeReceiptVerifier: ReceiveFileVerifier {
+        private let expected: Data; private var position = 0
+        init(_ expected: Data) { self.expected = expected }
+        func update(_ bytes: Data) throws {
+            guard bytes.count <= expected.count - position,
+                  expected.subdata(in: position..<(position + bytes.count)) == bytes else { throw CoreError.invalid("readback mismatch") }
+            position += bytes.count
+        }
+        func finish() throws { guard position == expected.count else { throw CoreError.invalid("readback length") } }
+    }
+
     public init() {}
 
     private static let words = (0..<2048).map { "w\(String($0, radix: 36))x" }
@@ -136,7 +197,20 @@ public final class FakeOmcpCore: OmcpCore {
         return FileOfferInfo(transferId: id, contactId: contactId, name: name, mime: mime, size: UInt64(bytes.count),
                              chunks: max(1, (bytes.count + 65_535) / 65_536))
     }
-    public func cancelFile(_ transferId: String) -> Bool { files.remove(transferId) != nil }
+    public func cancelFile(_ transferId: String) throws -> Bool {
+        if let error = receiptCancelError { throw error }
+        if cancelPreservingReceived { return true }
+        if let token = receiptPayloads.first(where: { $0.value.0.transferId == transferId })?.key {
+            cancelledReceipts[token] = receiptPayloads[token]?.0
+            receiptPayloads.removeValue(forKey: token)
+            if var row = receiptRows[transferId], var file = row.file {
+                file.state = .failed; file.localPath = nil; file.doneBytes = 0
+                row.file = file; receiptRows[transferId] = row
+            }
+            return true
+        }
+        return files.remove(transferId) != nil
+    }
     public func queuedFor(_ contactId: String) -> Int { queued[contactId] ?? 0 }
     public func pathStatus() -> MeshStatus {
         let q = queued.values.reduce(0, +)

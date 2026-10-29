@@ -178,6 +178,13 @@ struct ChatThreadView: View {
                     }
                 }
             }
+            if !model.repo.receiveFinalizationErrors.isEmpty {
+                HStack {
+                    Text(L("file_storage_pending")).font(.caption)
+                    Spacer()
+                    Button(L("store_retry")) { model.repo.retryReceivedFiles() }
+                }.foregroundStyle(c.warn).padding(.horizontal)
+            }
             if let error { Text(error).font(.caption).foregroundStyle(c.danger).padding(.horizontal) }
             composer
         }
@@ -375,7 +382,12 @@ struct ChatThreadView: View {
                 else if let f = m.file {
                     FileBubble(file: f, mine: m.mine, peerName: model.repo.contact(contactId)?.displayName ?? "",
                                onCancel: { model.repo.cancelFile(contactId, transferId: m.id) },
-                               onOpen: { if let p = f.localPath { previewURL = URL(fileURLWithPath: p) } })
+                               onRetry: { model.repo.retryReceivedFiles() },
+                               onOpen: { if let p = f.localPath {
+                                   model.repo.prepareReceivedFileForOpening(m.id, path: p) { safe in
+                                       if let safe { previewURL = URL(fileURLWithPath: safe) }
+                                   }
+                               } })
                 }
                 else { Text(m.text) }
             }
@@ -417,6 +429,7 @@ struct FileBubble: View {
     let mine: Bool
     let peerName: String
     let onCancel: () -> Void
+    let onRetry: () -> Void
     let onOpen: () -> Void
     @Environment(\.omcpColors) private var c
 
@@ -431,6 +444,7 @@ struct FileBubble: View {
         case .receiving: return L("file_state_receiving", done, total)
         case .paused: return L("file_state_paused", done, total)
         case .received: return L("file_state_received", total)
+        case .finalizing: return L("file_state_finalizing")
         case .failed: return L("file_state_failed")
         case .integrityFailed: return L("file_state_integrity", peerName)
         case .missing, .requested, .unavailable: return L("media_waiting", peerName)
@@ -455,6 +469,10 @@ struct FileBubble: View {
                 case .queued, .sending, .paused, .receiving:
                     Button(action: onCancel) { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
                         .accessibilityLabel(L(mine ? "file_cancel_a11y" : "file_cancel_receive_a11y", file.name))
+                case .finalizing:
+                    Button(L("file_retry_finalizing"), action: onRetry)
+                    Button(action: onCancel) { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
+                        .accessibilityLabel(L("file_cancel_receive_a11y", file.name))
                 case .integrityFailed:
                     Button(L("file_delete"), role: .destructive, action: onCancel)
                 case .received where file.localPath != nil:

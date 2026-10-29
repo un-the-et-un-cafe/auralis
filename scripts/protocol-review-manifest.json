@@ -60,8 +60,8 @@
     {
       "path": "crates/omcp-core/src/store/mod.rs",
       "upstream_sha256": "0446a3a0b91a863966e46b2dc51fd1854cc79670dc5de34fe1e3a555f5f13b43",
-      "accepted_sha256": "77b979a1787a6561de304459ce45a842485345c8bef2b5fc98840c6adfbe33fa",
-      "rationale": "Append local schema v3 replay tombstones, atomic transport-acceptance persistence and owned nested transactions with sticky quarantine after failed rollback. No OMCP wire or history-backup format change; native downgrade/recovery limitations remain documented. Authenticate existing storage keys and accepted identity before migrations/journal configuration; reject missing authentication metadata and initialize fresh schema/key-check atomically. Append schema v4 sealed receipt tables and transactionally guard message/outgoing mutations, deletion, rekey and history import; no wire or native receive activation.",
+      "accepted_sha256": "c024ff85bc74e8bb5cee2116da70c9ffee22d8f7a733b8a6602c7880e3f0aefb",
+      "rationale": "Append authenticated atomic v5 cleanup-group migration, preserve target contact on rekey, durable replay protection and token-cleanup obligations on deletion.",
       "evidence": [
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
@@ -70,7 +70,11 @@
         "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending.",
         "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
-        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     },
     {
@@ -106,20 +110,24 @@
     {
       "path": "crates/omcp-ffi/src/files.rs",
       "upstream_sha256": "fc25e1317e98b091294fbff4adb327e9004f4e63d36ab9cd6110d955e91be9ed",
-      "accepted_sha256": "f6ce74634e067daccaa1732f8f151f944294bb5cd7ee2a95b3905f242f83ba29",
-      "rationale": "Apply per-peer/node receiver admission and authenticated duplicate/collision handling using incremental reassembly.",
+      "accepted_sha256": "bb1484a06520cb65c15ead25c582b3b3b9262f1f0c5e04254d2dde16a324cc05",
+      "rationale": "Retain bounded zeroizing verified candidates until durable stage succeeds, combine volatile/durable admission and preserve candidate ownership across conflicting offers; wire encoding unchanged.",
       "evidence": [
         "node_wide_file_budget_boundaries_do_not_require_large_allocations",
         "reconnect_offer_is_idempotent_but_conflicting_or_cross_peer_ids_cannot_overwrite",
         "invalid_layout_and_oversized_chunk_are_rejected_before_chunk_allocation",
-        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28"
+        "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     },
     {
       "path": "crates/omcp-ffi/src/lib.rs",
       "upstream_sha256": "007c6835f5da2c339446b50d01ba5451f5b111f25418d2289bcb8cb24a192c24",
-      "accepted_sha256": "31c1cb475c6ce6e74d0f3bf4abaf1295f4f0d76ad20ecd47b329afbf06b29e9d",
-      "rationale": "Retain prior admission/ownership bounds; add opaque local batch commit/abort, peer reservations, success-only authenticated replay handling and burn provenance checks. Preserve packet/crypto encoding. OS acceptance is not peer delivery; receive-file finalization remains a documented v1 gap. Parse recovery identity before touching the database and validate current/legacy store owner before migrations. Public API integration tests verify no database creation for invalid identity and no migration for another identity.",
+      "accepted_sha256": "ae76e1a5d609be40b608c8cee6e0543db608d1d3c610c589cd38a871e37f41e4",
+      "rationale": "Metadata-only durable receipts, bounded token-bound block reads and streaming verifier, authoritative cancellation/error propagation, explicit cleanup ACK and missing-path CAS; reject stale replay and legacy path bypass.",
       "evidence": [
         "handshake_rejects_malformed_order_counts_and_oversized_chunks_and_releases_buffers",
         "active_links_are_bounded_and_drop_shutdown_and_input_errors_release_slots",
@@ -129,28 +137,36 @@
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
         "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
         "2026-10-29: independent source review and explicit parent hash review; docs/LOCAL_STORAGE.md",
-        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending."
+        "Fresh cargo test --workspace --locked: 266 tests passed; fmt and Clippy all-targets with warnings denied passed. Two public store-opening tests subsequently moved unchanged to integration tests and rebuilt successfully. Native runtime validation remains pending.",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     },
     {
       "path": "crates/omcp-ffi/src/persist.rs",
       "upstream_sha256": "bc523bd154ca7213f28764cef17e774d45b63b44552c7922299ba83095ff6612",
-      "accepted_sha256": "1571586ebeafb5b423a3c78abedd0c5f331fd095401f5ea939a325a36e53e04c",
-      "rationale": "Retain prior durable file ownership/replay guards and immediately drop queued zeroizing plaintext when burn content is shredded; no wire change.",
+      "accepted_sha256": "7c0fb53dcdc30f2d1d6dbd48ea037eef962a0cf757a54288194a8a6563354a19",
+      "rationale": "Persist verified bytes before metadata events; isolate retry failures and avoid hot-loop retries, preserve partial reconnect and own-sent ownership, refuse deleted-candidate resurrection and normalize legacy unavailable paths.",
       "evidence": [
         "file_events_and_offers_cannot_overwrite_durable_transfer_ownership",
         "cargo test -p omcp-ffi --locked (50 tests passed, including completed replay and own-sent restore/refetch)",
         "docs/RESOURCE_LIMITS.md; independent parent source review on 2026-10-28",
         "cargo fmt --all -- --check; cargo clippy --locked --workspace --all-targets -- -D warnings",
         "cargo test --locked --workspace: 258 tests passed, including 14 unchanged golden-wire vectors; production host FFI build passed",
-        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate"
+        "docs/TRANSPORT_ACCEPTANCE.md; focused independent and parent source review of 9961ef8 on 2026-10-28; native/hosted gates remain separate",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     },
     {
       "path": "crates/omcp-ffi/src/tests.rs",
       "upstream_sha256": "3fc9835a54f7042f5d474bb539d2481d4d0ee2a2bb80bfbccb29daf5c2190880",
-      "accepted_sha256": "7759415a3dc19330a4063237adac1ec9c69796d3a363d7c74303a9727b81866f",
-      "rationale": "Retain baseline regressions and add transport failure/commit/replay/interleaving, ownership, burn provenance and unused outbound-cache coverage; golden-wire fixtures unchanged. Replace invalid individual-mnemonic-word backup plaintext scan with deterministic public-header collision regression and full secret representation checks; test-only, backup format and cryptography unchanged. Compare exposed schema version with core SCHEMA_VERSION instead of obsolete literal 3; wrong-key and identity refusal tests retained.",
+      "accepted_sha256": "98f828f0a7b6df452851d8ea373d25a3669abc4b6be704665ee6619eb07524cf",
+      "rationale": "Adapt receive assertions to metadata/token commit and add restart, failure retention/isolation, durable cleanup pagination/ACK, cancellation, stale-token, replay, own-sent refetch and peer-merge regressions.",
       "evidence": [
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
@@ -162,21 +178,41 @@
         "2026-10-29 independent parent review of exact test-only delta; synthetic device fixture reproduces old assertion failure against real encrypted export; dedicated-target 258 Rust tests, Clippy warnings denied and formatting passed",
         "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
-        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate"
+        "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
+      ]
+    },
+    {
+      "path": "crates/omcp-ffi/src/chatbackup.rs",
+      "upstream_sha256": "f2836bbc8acbe44184c272cf031bb5d51c0b646081152f2b18e3a72cba8fabad",
+      "accepted_sha256": "e9c76d3b56c21e3905b83fd322d04c75a309ccf2b80c5e5c9dedd2ccf06515f8",
+      "rationale": "Authorize reciprocal resend against authenticated content while preserving received history; atomic combined-budget legacy-peer rekey without destructive contact pre-deletion.",
+      "evidence": [
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     }
   ],
   "additions": [
     {
       "path": "crates/omcp-core/src/store/receipts.rs",
-      "accepted_sha256": "0513c7e115d58f0f6654db18fac3535f6e415fc631744512625cc5a72e6c96af",
-      "rationale": "Explicit new protected local-store module: unused core receipt APIs, sealed 64 KiB blocks, atomic staging/finalization/cancellation, ownership and token checks, 128 MiB ciphertext/row/reservation admission budget, deletion/rekey/backup safeguards. No native/FFI flow enabled and no scope exclusion.",
+      "accepted_sha256": "bf780057a90826a67cc437eadda6ce4d6ca5790b1b469caaf97a17387c017d04",
+      "rationale": "Explicit protected receipt module: token-bound finalization/refetch/resend authorization, retained cancellation tombstones and deleted-message cleanup, bounded durable pagination, authenticated v4 regroup, transactional live-budget checks. No wire change or power-loss guarantee.",
       "evidence": [
         "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
         "docs/DURABLE_RECEIVE_STORE.md; independent source review and explicit parent hash approval on 2026-10-29; hosted gates separate",
         "13 receipt regressions cover size boundaries through 50 MB, admission/accounting, corruption, wrong ownership/token, disk full/busy/read-only/commit failure, abrupt subprocess exits and cross-connection guard race",
-        "receipt_restart_cancel_and_deleted_token_never_recreate_message: actual disk-backed Store journal DELETE and synchronous FULL=2 verified; no power-loss guarantee"
+        "receipt_restart_cancel_and_deleted_token_never_recreate_message: actual disk-backed Store journal DELETE and synchronous FULL=2 verified; no power-loss guarantee",
+        "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
+        "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
+        "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
       ]
     }
   ]

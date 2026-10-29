@@ -306,4 +306,7 @@
     <string name="message_transport_accepted">Remis au Bluetooth · Non confirmé</string>
     <string name="store_blocked_title">Stockage local indisponible</string>
     <string name="store_blocked_body">Auralis ne peut pas ouvrir votre compte enregistré. La base de données n’a pas été réinitialisée. Déverrouillez cet appareil ou utilisez une version compatible, puis réessayez. Si le problème persiste, redémarrez Auralis.</string>
+    <string name="file_state_finalizing">Enregistrement sécurisé…</string>
+    <string name="file_retry_finalizing">Réessayer l’enregistrement</string>
+    <string name="file_receive_retry_notice">Certains fichiers reçus attendent leur enregistrement. Touchez pour réessayer.</string>
 </resources>

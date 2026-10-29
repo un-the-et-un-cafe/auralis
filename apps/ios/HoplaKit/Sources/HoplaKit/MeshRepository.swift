@@ -5,7 +5,7 @@ public struct FileAttachment: Equatable, Sendable {
     public enum State: Sendable {
         case queued, sending, receiving, paused, sent, received, failed, integrityFailed
         /// Restored from the chat backup without bytes (§5.92), re-requested, or gone at the partner.
-        case missing, requested, unavailable
+        case missing, requested, unavailable, finalizing
     }
     public var isPlaceholder: Bool { state == .missing || state == .requested || state == .unavailable }
     public var name: String
@@ -29,7 +29,7 @@ public struct FileAttachment: Equatable, Sendable {
     public var fraction: Double {
         switch state {
         case .queued: return 0
-        case .sent, .received, .integrityFailed: return 1
+        case .sent, .received, .integrityFailed, .finalizing: return 1
         default: return sizeBytes == 0 ? 0 : min(1, Double(doneBytes) / Double(sizeBytes))
         }
     }
@@ -38,6 +38,21 @@ public struct FileAttachment: Equatable, Sendable {
 /// Stores a verified received file; returns its local path (nil = couldn't save).
 public protocol FileSink: AnyObject {
     func save(_ file: ReceivedFileInfo) -> String?
+    func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data,
+                  verifier: ReceiveFileVerifier) throws -> String
+    func discardCancelled(_ receipt: ReceiveReceiptInfo) throws
+    func readForResend(_ path: String) throws -> Data?
+    /// True only for an absent leaf below verified no-follow ancestors.
+    func isDefinitelyMissing(_ path: String) throws -> Bool
+}
+public extension FileSink {
+    func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { throw CoreError.storageUnavailable("receipt cleanup unavailable") }
+    func readForResend(_ path: String) throws -> Data? { throw CoreError.storageUnavailable("safe file reader unavailable") }
+    func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data,
+                  verifier: ReceiveFileVerifier) throws -> String {
+        throw CoreError.storageUnavailable("durable file sink unavailable")
+    }
+    func isDefinitelyMissing(_ path: String) throws -> Bool { false }
 }
 
 public struct ChatMessage: Equatable, Identifiable, Sendable {
@@ -80,13 +95,27 @@ public protocol MeshKick: AnyObject {
 }
 
 /// App state + core glue, the iOS twin of Android `MeshRepository`. Not thread-safe:
-/// call from the main actor.
+/// call UI methods from the main actor. Receipt I/O uses the injected serial executor;
+/// destructive lifecycle changes fail busy rather than wait on long file I/O.
 public final class MeshRepository {
     public let core: OmcpCore
     public let store: AppStore
     public weak var kick: MeshKick?
     public var notifier: Notifier?
     public var fileSink: FileSink?
+    private let receiptLock = NSRecursiveLock()
+    private let receiveExecutor: (@escaping () -> Void) -> Void
+    private let receivePublisher: (@escaping () -> Void) -> Void
+    public private(set) var receiveFinalizationErrors: [String: String] = [:]
+    private func serializeReceipts<T>(_ work: () throws -> T) rethrows -> T {
+        receiptLock.lock(); defer { receiptLock.unlock() }
+        return try work()
+    }
+    private func lifecycle<T>(_ work: () throws -> T) throws -> T {
+        guard receiptLock.try() else { throw CoreError.storageUnavailable("Received-file storage is busy; retry this operation.") }
+        defer { receiptLock.unlock() }
+        return try work()
+    }
     /// Encrypted chat backup (iCloud / Drive app-private space); nil when not configured.
     public var chatBackup: ChatBackupSync?
     /// Partners asking us to resend media we no longer have.
@@ -105,9 +134,13 @@ public final class MeshRepository {
 
     public init(core: OmcpCore, store: AppStore, dbPath: String? = nil, persistentStoreRequired: Bool = false,
                 dbPathProvider: (() -> String?)? = nil,
+                receiveExecutor: @escaping (@escaping () -> Void) -> Void = { $0() },
+                receivePublisher: @escaping (@escaping () -> Void) -> Void = { $0() },
                 clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
         self.core = core
         self.store = store
+        self.receiveExecutor = receiveExecutor
+        self.receivePublisher = receivePublisher
         self.dbPath = dbPath
         self.dbPathProvider = dbPathProvider
         self.persistentStoreRequired = persistentStoreRequired
@@ -118,6 +151,11 @@ public final class MeshRepository {
 
     /// Load identity + contacts from the store on launch. Returns false if there is no identity yet.
     @discardableResult public func restore() -> Bool {
+        guard receiptLock.try() else { return false }
+        defer { receiptLock.unlock() }
+        return restoreSerialized()
+    }
+    private func restoreSerialized() -> Bool {
         resolveStorePathIfNeeded()
         guard let phrase = store.recoveryPhrase else {
             storageBlocked = hasStoreArtifacts() || store.hasSavedIdentity || (persistentStoreRequired && dbPath == nil)
@@ -136,6 +174,7 @@ public final class MeshRepository {
         // Contacts used to live in plain UserDefaults: once in the encrypted store, drop them.
         if dbPath != nil, !store.contacts.isEmpty { store.contacts = [] }
         loadMessages()
+        retryReceivedFiles()
         restoredAtMs = core.deviceInfo()?.restoredAtMs
         onChange?()
         return true
@@ -199,29 +238,35 @@ public final class MeshRepository {
     }
 
     public func saveIdentity(phrase: String, name: String) throws {
-        try loadCore(phrase: phrase, name: name)
-        store.recoveryPhrase = phrase
-        guard store.recoveryPhrase == phrase else { throw CoreError.storageUnavailable("keychain write failed") }
-        store.displayName = name
+        try lifecycle {
+            try loadCore(phrase: phrase, name: name)
+            store.recoveryPhrase = phrase
+            guard store.recoveryPhrase == phrase else { throw CoreError.storageUnavailable("keychain write failed") }
+            store.displayName = name
+        }
     }
 
     public func restoreFromBackup(_ r: RestoredBackup, name: String, method: String) throws {
-        try saveIdentity(phrase: r.phrase, name: name)
-        for c in r.contacts { try core.restoreContact(c) }
-        // Legacy blobs only: history now lives in the separate chat backup.
-        if let h = r.history { try core.restoreHistory(h) }
-        markRestored()
-        store.backupMethods.insert(method)
-        persistContacts()
-        loadMessages()
-        changed()
+        try lifecycle {
+            try saveIdentity(phrase: r.phrase, name: name)
+            for c in r.contacts { try core.restoreContact(c) }
+            // Legacy blobs only: history now lives in the separate chat backup.
+            if let h = r.history { try core.restoreHistory(h) }
+            markRestored()
+            store.backupMethods.insert(method)
+            persistContacts()
+            loadMessages()
+            changed()
+        }
     }
 
     /// 24-word restore with no cloud blob: identity + new device key (RS1).
     public func restoreFromPhrase(_ phrase: String, name: String) throws {
-        try saveIdentity(phrase: phrase, name: name)
-        markRestored()
-        changed()
+        try lifecycle {
+            try saveIdentity(phrase: phrase, name: name)
+            markRestored()
+            changed()
+        }
     }
 
     private func markRestored() {
@@ -230,14 +275,16 @@ public final class MeshRepository {
 
     /// Restore chat text (+ backed-up media) from the chat backup. Blocking (network).
     @discardableResult public func restoreChats() throws -> ChatRestoreResult? {
-        guard let sync = chatBackup else { return nil }
-        let sink = fileSink
-        let r = try sync.restore { msgId, mime, bytes in
-            sink?.save(ReceivedFileInfo(transferId: msgId, contactId: "", name: "media", mime: mime, bytes: bytes))
+        return try lifecycle {
+            guard let sync = chatBackup else { return nil }
+            let sink = fileSink
+            let r = try sync.restore { msgId, mime, bytes in
+                sink?.save(ReceivedFileInfo(transferId: msgId, contactId: "", name: "media", mime: mime, bytes: bytes))
+            }
+            loadMessages()
+            changed()
+            return r
         }
-        loadMessages()
-        changed()
-        return r
     }
 
     // MARK: missing media (CB3) + restore notices (RS1)
@@ -248,9 +295,20 @@ public final class MeshRepository {
     }
 
     public func onMediaRequest(_ r: MediaRequestInfo) {
-        let bytes = r.localPath.flatMap { FileManager.default.contents(atPath: $0) }
-        try? core.answerMediaRequest(contactId: r.contactId, msgId: r.msgId, bytes: bytes)
-        kick?.kick(r.contactId)
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                do {
+                    let bytes: Data?
+                    if let path = r.localPath {
+                        guard let sink = self.fileSink else { throw CoreError.storageUnavailable("file reader unavailable") }
+                        bytes = try sink.readForResend(path)
+                    } else { bytes = nil }
+                    try self.core.answerMediaRequest(contactId: r.contactId, msgId: r.msgId, bytes: bytes)
+                    self.receivePublisher { [weak self] in self?.kick?.kick(r.contactId) }
+                } catch { self.publishReceiveState(r.msgId, error: "Media storage is unavailable; retry later.") }
+            }
+        }
     }
 
     public func onResendAsk(_ r: MediaRequestInfo) {
@@ -274,7 +332,7 @@ public final class MeshRepository {
     /// Tap on a placeholder: request again now.
     public func requestMedia(_ contactId: String, msgId: String) {
         guard var m = find(contactId, msgId), var f = m.file, f.state == .missing else { return }
-        try? core.requestMedia(msgId)
+        do { try core.requestMedia(msgId) } catch { return }
         f.state = .requested
         m.file = f
         replace(m)
@@ -389,11 +447,21 @@ public final class MeshRepository {
         return o.transferId
     }
 
-    /// Cancel an outgoing (queued/sending) or incoming transfer and drop its bubble.
+    /// Persist cancellation first; then reload authoritative history and clean only a cancelled receipt generation.
     public func cancelFile(_ contactId: String, transferId: String) {
-        core.cancelFile(transferId)
-        messages[contactId]?.removeAll { $0.id == transferId }
-        changed()
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                do {
+                    let pending = try self.core.pendingReceivedFiles().first { $0.transferId == transferId }
+                    guard try self.core.cancelFile(transferId) else { return }
+                    if let pending { self.cleanupCancelledReceipt(pending) }
+                    else { self.publishReceiveState(transferId, error: nil) }
+                } catch {
+                    self.publishReceiveState(transferId, error: "Cancellation could not be saved. Retry when storage is available.")
+                }
+            }
+        }
     }
 
     /// From the link: chunks sealed (outgoing) or received (incoming).
@@ -404,7 +472,7 @@ public final class MeshRepository {
                                file: FileAttachment(name: p.name, sizeBytes: p.size, mime: "", state: .receiving, doneBytes: p.doneBytes)))
             return
         }
-        guard var f = m.file, f.state != .received, f.state != .integrityFailed else { return }
+        guard var f = m.file, f.state != .received, f.state != .integrityFailed, f.state != .finalizing, f.state != .failed else { return }
         let done = p.doneChunks >= p.totalChunks
         f.state = p.incoming ? .receiving : (done ? .sent : .sending)
         f.doneBytes = p.doneBytes
@@ -414,23 +482,107 @@ public final class MeshRepository {
         replace(n)
     }
 
-    /// From the link: a file arrived and its BLAKE3 hash matched (checked in Rust).
-    public func onFileReceived(_ r: ReceivedFileInfo) {
-        let path = fileSink?.save(r)
-        if fileSink != nil { try? core.setReceivedFilePath(r.transferId, path: path) }
-        let ok = path != nil || fileSink == nil
-        let f = FileAttachment(name: r.name, sizeBytes: UInt64(r.bytes.count), mime: r.mime, state: ok ? .received : .failed,
-                               doneBytes: UInt64(r.bytes.count), localPath: path)
-        if var m = find(r.contactId, r.transferId) {
-            m.file = f
-            replace(m)
-        } else {
-            append(ChatMessage(id: r.transferId, contactId: r.contactId, text: "", mine: false, timeMs: clock(), status: .received, file: f))
+    /// Apply only a committed durable receipt; never fabricate a received bubble.
+    public func onFileReceived(_ receipt: ReceiveReceiptInfo) {
+        receiveExecutor { [weak self] in self?.serializeReceipts { self?.finalizeReceipt(receipt) } }
+    }
+
+    /// Startup and explicit retry share the same serialization boundary as cancel.
+    public func retryReceivedFiles() {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                do { _ = try self.core.retryReceivedFiles(); self.publishReceiveState("storage", error: nil) }
+                catch { self.publishReceiveState("storage", error: "Some verified files are waiting for storage.") }
+                // One volatile retry failure must not block unrelated durable receipts.
+                do {
+                    for receipt in try self.core.pendingReceivedFiles() { self.finalizeReceipt(receipt) }
+                } catch { self.publishReceiveState("storage", error: "Verified files are waiting for storage.") }
+                // One fair bounded pass, even when staging/finalization failed.
+                do {
+                    for receipt in try self.core.cancelledReceivedFiles() { self.cleanupCancelledReceipt(receipt) }
+                    self.publishReceiveState("cleanup", error: nil)
+                }
+                catch { self.publishReceiveState("cleanup", error: "Private file cleanup is waiting for storage.") }
+            }
+        }
+    }
+
+    private func cleanupCancelledReceipt(_ receipt: ReceiveReceiptInfo) {
+        do {
+            guard let sink = fileSink else { throw CoreError.storageUnavailable("cleanup sink unavailable") }
+            try sink.discardCancelled(receipt)
+            guard try core.acknowledgeReceivedFileCleanup(receipt.receiptToken) else {
+                throw CoreError.storageUnavailable("cleanup acknowledgement changed")
+            }
+            publishReceiveState(receipt.transferId, error: nil)
+        } catch { publishReceiveState(receipt.transferId, error: "Transfer cancelled; private file cleanup is waiting for storage.") }
+    }
+
+    private func publishReceiveState(_ id: String, error: String?) {
+        receivePublisher { [weak self] in
+            guard let self else { return }
+            self.receiveFinalizationErrors[id] = error
+            // Re-read authoritative current state, never publish a cached receipt
+            // snapshot after cancellation or a newer generation.
+            self.loadMessages()
+            self.changed()
+        }
+    }
+
+    private func finalizeReceipt(_ receipt: ReceiveReceiptInfo) {
+        do {
+            // Stale events cannot save bytes after cancel/delete or another generation.
+            guard try core.pendingReceivedFiles().contains(where: { $0 == receipt }) else { return }
+            guard let sink = fileSink else { throw CoreError.storageUnavailable("file sink unavailable") }
+            let verifier = try core.receivedFileVerifier(receipt.receiptToken)
+            let path = try sink.finalize(receipt, readBlock: {
+                try self.core.readReceivedFileBlock(receipt.receiptToken, index: $0)
+            }, verifier: verifier)
+            try core.commitReceivedFile(receipt.receiptToken, path: path)
+            publishReceiveState(receipt.transferId, error: nil)
+        } catch {
+            // Keep sealed bytes and Finalizing, including when filesystem work
+            // completed but the DB commit failed. Startup can verify and retry.
+            publishReceiveState(receipt.transferId, error: "Verified file is waiting to be saved.")
+        }
+    }
+
+    /// Never equate protected storage, unknown errors or symlinks with missing.
+    @discardableResult public func reconcileReceivedFile(_ transferId: String, path: String) -> Bool {
+        serializeReceipts {
+            do {
+                guard let sink = fileSink, try sink.isDefinitelyMissing(path) else { return false }
+                let changedState = try core.markReceivedFileMissing(transferId, expectedPath: path)
+                if changedState { publishReceiveState(transferId, error: nil) }
+                return changedState
+            } catch { return false }
+        }
+    }
+
+    public func prepareReceivedFileForOpening(_ transferId: String, path: String, completion: @escaping (String?) -> Void) {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            let result = self.receivedFileForOpening(transferId, path: path)
+            self.receivePublisher { completion(result) }
+        }
+    }
+
+    public func receivedFileForOpening(_ transferId: String, path: String) -> String? {
+        serializeReceipts {
+            do {
+                guard let sink = fileSink else { return nil }
+                if try sink.isDefinitelyMissing(path) {
+                    if try core.markReceivedFileMissing(transferId, expectedPath: path) { publishReceiveState(transferId, error: nil) }
+                    return nil
+                }
+                return path
+            } catch { return nil } // Protection errors and symlinks are not Missing or safe to open.
         }
     }
 
     public func onFileFailed(_ e: FileFailureInfo) {
-        guard var m = find(e.contactId, e.transferId), var f = m.file else { return }
+        guard var m = find(e.contactId, e.transferId), var f = m.file, f.state != .finalizing, f.state != .received else { return }
         f.state = e.reason == "integrity" ? .integrityFailed : .failed
         m.file = f
         replace(m)

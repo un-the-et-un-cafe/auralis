@@ -8,15 +8,36 @@ import chat.omcp.app.data.FileSink
 import java.io.File
 
 /**
- * Saves verified received files under app-private `files/received/<transfer>/<name>` and opens
+ * Saves verified received files under app-private capability-specific paths and opens
  * them through a FileProvider (no storage permission, nothing shared until the user taps).
  */
-class ReceivedFiles(private val context: Context) : FileSink {
+class ReceivedFiles(private val context: Context) : FileSink, DurableReceiptSink {
+    private val receipts = AndroidReceiptFiles(context.filesDir)
+    override fun finalize(receipt: chat.omcp.app.core.ReceiveReceiptInfo, source: ReceiptSource): String = receipts.finalize(receipt, source)
+    override fun discard(receipt: chat.omcp.app.core.ReceiveReceiptInfo) = receipts.discard(receipt)
+    override fun isDefinitelyMissing(path: String) = receipts.isDefinitelyMissing(path)
+
+    /** Backup-media writes use the same no-follow/sync pipeline, without claiming a core receipt. */
     override fun save(file: ReceivedFileInfo): String? = runCatching {
-        val dir = File(context.filesDir, "received/${safe(file.transferId)}").apply { mkdirs() }
-        val out = File(dir, safe(file.name).ifEmpty { "file" })
-        out.writeBytes(file.bytes)
-        out.absolutePath
+        require(file.bytes.size <= 50_000_000)
+        fun digest(bytes: ByteArray) = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it.toInt() and 255) }
+        val id = file.transferId.takeIf { it.matches(Regex("[0-9a-f]{32}")) }
+            ?: hex(digest(file.transferId.toByteArray()).copyOf(16))
+        val expected = digest(file.bytes)
+        val receipt = chat.omcp.app.core.ReceiveReceiptInfo(
+            id, file.contactId, file.name, file.mime, file.bytes.size.toLong(),
+            id + hex(expected), hex(expected), (file.bytes.size + 65_535) / 65_536,
+        )
+        receipts.finalize(receipt, object : ReceiptSource {
+            override fun readBlock(index: Int) = file.bytes.copyOfRange(index * 65_536, minOf(file.bytes.size, (index + 1) * 65_536))
+            override fun verifier() = object : chat.omcp.app.core.ReceiptVerifier {
+                private val hash = java.security.MessageDigest.getInstance("SHA-256")
+                private var size = 0L
+                override fun update(bytes: ByteArray) { hash.update(bytes); size += bytes.size }
+                override fun finish() { check(size == file.bytes.size.toLong() && hash.digest().contentEquals(expected)) }
+            }
+        })
     }.getOrNull()
 
     fun openIntent(path: String, mime: String): Intent {

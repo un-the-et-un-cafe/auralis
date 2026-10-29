@@ -284,6 +284,7 @@ fun ChatThreadScreen(
             }
         }
     }
+    val receiveFailure by vm.repo.receiveFailure.collectAsState()
     val fileError by vm.fileError.collectAsState()
     if (fileError) {
         AlertDialog(
@@ -412,6 +413,10 @@ fun ChatThreadScreen(
             if (composer.sendFailed) {
                 Callout(stringResource(R.string.auralis_send_failed), CalloutKind.Danger, Modifier.padding(12.dp))
             }
+            if (receiveFailure) {
+                Callout(stringResource(R.string.file_receive_retry_notice), CalloutKind.Danger,
+                    Modifier.padding(12.dp).clickable(role = Role.Button, onClick = vm::retryFileFinalization))
+            }
             // Path banner: mesh / gateway / mixed / queued only.
             PathBanner(
                 kind = path,
@@ -471,6 +476,7 @@ fun ChatThreadScreen(
                             f = f,
                             peerName = contact?.displayName ?: "",
                             onCancel = { vm.cancelTransfer(m.id) },
+                            onRetry = vm::retryFileFinalization,
                             onOpen = {
                                 val path = f.localPath ?: return@FileBubble
                                 val app = ctx.applicationContext as chat.omcp.app.OmcpApplication
@@ -503,6 +509,7 @@ private fun FileBubble(
     peerName: String,
     onCancel: () -> Unit,
     onOpen: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     val c = LocalOmcpColors.current
     val done = mb(f.doneBytes)
@@ -512,6 +519,7 @@ private fun FileBubble(
         S.Sending -> stringResource(R.string.file_state_sending, done, total)
         S.Sent -> stringResource(R.string.file_state_sent, total)
         S.Receiving -> stringResource(R.string.file_state_receiving, done, total)
+        S.Finalizing -> stringResource(R.string.file_state_finalizing)
         S.Paused -> stringResource(R.string.file_state_paused, done, total)
         S.Received -> stringResource(R.string.file_state_received, total)
         S.Failed -> stringResource(R.string.file_state_failed)
@@ -548,7 +556,7 @@ private fun FileBubble(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(f.name, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 when (f.state) {
-                    S.Queued, S.Sending, S.Paused, S.Receiving -> {
+                    S.Queued, S.Sending, S.Paused, S.Receiving, S.Finalizing -> {
                         val a11y = if (mine) stringResource(R.string.file_cancel_a11y, f.name) else stringResource(R.string.file_cancel_receive_a11y, f.name)
                         IconButton(onClick = onCancel) { Icon(Icons.Default.Close, contentDescription = a11y) }
                     }
@@ -570,6 +578,7 @@ private fun FileBubble(
                     .semantics { contentDescription = progressLabel },
                 color = barColor,
             )
+            if (f.state == S.Finalizing) TextButton(onClick = onRetry) { Text(stringResource(R.string.file_retry_finalizing)) }
             meta?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.ink2, modifier = Modifier.padding(top = 4.dp)) }
         }
     }

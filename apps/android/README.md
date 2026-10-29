@@ -207,3 +207,44 @@ this is not an exactly-once delivery guarantee.
 
 ## Roadmap
 - **v0.3 Auralis Nearby** (not started): dating, plus a Nearby session (Android foreground service with an ongoing notification, 30/60/120 min) and area mode over the gateway geohash. Acceptance NX1–NX3: first card < 1 s from cache, an iOS session lasting 60 min while locked, and an area-mode match notified within 5 min.
+
+## Durable receive finalization (integration work in progress)
+
+Ordinary non-burn file events carry a sealed-store receipt capability and metadata, not a
+whole plaintext file. A single background executor serializes recovery and file writers;
+UI cancel/retry dispatch runs off main. Store/identity startup returns before receipt I/O.
+The repository monitor also orders cancellation and identity changes with writers. BLE
+callbacks may wait for that monitor; progress is not queued into an unbounded work list.
+
+The private sink streams 64 KiB blocks, verifies length and Rust BLAKE3 on readback, syncs
+the file, atomically publishes a generation-specific final name, syncs the directory,
+and only then commits the receipt in Rust. Android's public `Os` API lacks no-replace
+rename, so same-filesystem `link(temp, final)` plus unlink of the owned temp implements
+no-overwrite publication. EEXIST requires full verification, never replacement. A crash
+between link and unlink is recoverable only when the exact generation's two regular
+names have matching device/inode and exactly two links; foreign links fail closed.
+Unsupported filesystem operations leave the sealed receipt available for retry.
+
+All file operations use pinned private directory descriptors and no-follow regular-file
+opens. Missing-file transitions require a positively observed ENOENT with checked,
+unchanged non-symlink ancestors; permissions/protected storage and uncertain paths do
+not imply missing. Cancellation discards only the matching receipt generation, after
+core cancellation succeeds. Each recovery pass also processes one bounded fair page of
+up to 32 durable cancelled-generation cleanup obligations. Only successful exact-path
+discard plus directory sync permits cleanup acknowledgement; disk/ACK failures leave
+the obligation for a later pass, including after restart. Broad orphan collection is deferred until the core exposes
+a complete authoritative inventory, including histories of deleted contacts.
+
+Recovery retries retained candidates once, then separately processes already-durable
+receipts even if candidate staging failed. Startup, explicit retry, and a bounded
+per-link establishment/storage-error gate trigger recovery; there is no per-chunk retry
+loop. Failures remain observable with a retry banner and Finalizing state. Core limits
+remain 50,000,000 bytes per file, 8 node/2 peer pending and 128 MiB live sealed ciphertext;
+this is not a physical SQLite-size or power-loss guarantee, nor a peer delivery ACK.
+
+Local focused JVM checks cover repository ordering/retry/cancellation and recovery-gate
+coalescing. `ReceiptFilesystemTest` exercises real Android syscalls and injected
+write/sync/publication errors; `RustBridgeTest` exercises generated bindings and the real
+Rust verifier. These new Android SDK/emulator tests are **not yet run** at this private
+WIP checkpoint. Real-device crash/protected-storage and Hopla interoperability checks
+remain separate release gates; source review or JVM fakes do not establish them.

@@ -94,6 +94,17 @@ data class FileProgressInfo(
 /** A fully received file whose BLAKE3 hash was verified in Rust. */
 class ReceivedFileInfo(val transferId: String, val contactId: String, val name: String, val mime: String, val bytes: ByteArray)
 
+/** Metadata capability for bytes already committed to the encrypted receive spool. */
+data class ReceiveReceiptInfo(
+    val transferId: String, val contactId: String, val name: String, val mime: String,
+    val size: Long, val receiptToken: String, val contentHash: String, val blockCount: Int,
+)
+interface ReceiptVerifier : AutoCloseable {
+    fun update(bytes: ByteArray)
+    fun finish()
+    override fun close() {}
+}
+
 /** `integrity` (hash/AEAD failed), `invalid` or `busy`. */
 data class FileFailureInfo(val transferId: String, val contactId: String, val reason: String)
 
@@ -106,7 +117,7 @@ data class LinkResult(
     val flushed: Int,
     val opened: List<chat.omcp.app.burn.OpenedInfo> = emptyList(),
     val fileProgress: List<FileProgressInfo> = emptyList(),
-    val files: List<ReceivedFileInfo> = emptyList(),
+    val files: List<ReceiveReceiptInfo> = emptyList(),
     val fileFailures: List<FileFailureInfo> = emptyList(),
     /** Queued work remains; flush only after the outstanding batch has been committed. */
     val morePending: Boolean = false,
@@ -212,6 +223,16 @@ interface OmcpCore {
 
     /** Record where a verified received file was saved (null = couldn't save). */
     fun setReceivedFilePath(transferId: String, path: String?) {}
+
+    fun markReceivedFileMissing(transferId: String, expectedLocalPath: String): Boolean = false
+    fun pendingReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun cancelledReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun acknowledgeReceivedFileCleanup(receiptToken: String): Boolean = error("receipt cleanup unavailable")
+    fun retryReceivedFiles(): List<ReceiveReceiptInfo> = pendingReceivedFiles()
+    fun readReceivedFileBlock(receiptToken: String, index: Int): ByteArray = error("receipt reads unavailable")
+    fun receivedFileVerifier(receiptToken: String): ReceiptVerifier = error("receipt verifier unavailable")
+    fun commitReceivedFile(receiptToken: String, localPath: String): Unit = error("receipt commit unavailable")
+
 
     /** Import [RestoredBackup.history] into the local store. */
     fun restoreHistory(history: ByteArray) {}

@@ -24,8 +24,8 @@ use omcp_core::store::{self as st, MessageRec, Store};
 use zeroize::Zeroizing;
 
 use crate::{
-    files, invalid, now_ms, parse_id, parse_msg_id, random_id16, FfiError, FileFailure, LinkOutput,
-    NodeState, OmcpNode, Queued, StoredFileState,
+    files, invalid, now_ms, parse_id, parse_msg_id, random_id16, FfiError, LinkOutput, NodeState,
+    OmcpNode, Queued, StoredFileState,
 };
 
 const META_DEVICE: &[u8] = b"own_device";
@@ -278,19 +278,39 @@ impl NodeState {
                 msg: "device certificate for another identity".into(),
             });
         }
-        if self.contacts.contains_key(&cert.peer_id) {
-            // Added twice (old and new QR): keep the PeerID entry.
-            self.contacts.remove(&expected);
-            self.db.delete_contact(&expected)?;
-        }
         self.rekey(&expected, &cert.peer_id)?;
         Ok(cert.peer_id)
     }
 
     fn rekey(&mut self, old: &[u8; 32], new: &[u8; 32]) -> Result<(), FfiError> {
+        if old == new {
+            return Ok(());
+        }
+        let pending = self.db.pending_received_files()?;
+        let mut ids = std::collections::HashSet::new();
+        for (id, f) in &self.files.incoming {
+            if f.peer == *old || f.peer == *new {
+                ids.insert(*id);
+            }
+        }
+        for (id, f) in &self.files.verified {
+            if f.peer == *old || f.peer == *new {
+                ids.insert(*id);
+            }
+        }
+        for r in &pending {
+            if r.peer == *old || r.peer == *new {
+                ids.insert(r.token.message_id);
+            }
+        }
+        if ids.len() > st::MAX_PENDING_RECEIPTS_PER_PEER {
+            return Err(FfiError::State {
+                msg: "received-file peer admission during rekey".into(),
+            });
+        }
         self.db.rekey_peer(old, new)?;
         if let Some(c) = self.contacts.remove(old) {
-            self.contacts.insert(*new, c);
+            self.contacts.entry(*new).or_insert(c);
         }
         if let Some(q) = self.queues.remove(old) {
             self.queues.entry(*new).or_default().extend(q);
@@ -306,7 +326,7 @@ impl NodeState {
             }
         }
         self.files.rekey(old, new);
-        self.persist_contact(new)
+        Ok(())
     }
 
     /// CB3: queue `MEDIA_REQUEST` for every placeholder in the chat with `peer`.
@@ -464,32 +484,9 @@ impl NodeState {
             return Ok(false);
         }
         let out = files::build_outgoing(m.id, &f.name, &f.mime, &bytes)?;
-        self.persist_out_file(peer, &out)?;
+        self.persist_out_file(peer, &out, Some(&bytes))?;
         self.files.out.entry(*peer).or_default().push_back(out);
         Ok(true)
-    }
-
-    /// A re-fetched file must match the placeholder's hash before it replaces it.
-    pub(crate) fn check_refetched(&self, out: &mut LinkOutput, from: usize) {
-        let mut i = from;
-        while i < out.files.len() {
-            let r = &out.files[i];
-            let expected = parse_msg_id(&r.transfer_id_hex)
-                .ok()
-                .and_then(|id| self.db.message(&id).ok().flatten())
-                .and_then(|m| file_hash(&m));
-            match expected {
-                Some(h) if blake3::hash(&r.bytes).as_bytes() != &h => {
-                    let r = out.files.remove(i);
-                    out.file_failures.push(FileFailure {
-                        transfer_id_hex: r.transfer_id_hex,
-                        contact_id: r.contact_id,
-                        reason: "integrity".into(),
-                    });
-                }
-                _ => i += 1,
-            }
-        }
     }
 }
 
@@ -877,7 +874,7 @@ impl OmcpNode {
         match bytes.filter(|b| blake3::hash(b).as_bytes() == &hash) {
             Some(b) => {
                 let out = files::build_outgoing(id, &f.name, &f.mime, &b)?;
-                st.persist_out_file(&peer, &out)?;
+                st.persist_out_file(&peer, &out, Some(&b))?;
                 st.files.out.entry(peer).or_default().push_back(out);
                 Ok(())
             }

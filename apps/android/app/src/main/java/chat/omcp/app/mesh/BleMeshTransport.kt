@@ -70,6 +70,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     private val subscribed = ConcurrentHashMap<String, BluetoothDevice>()
     private val serverMore = ConcurrentHashMap<String, Boolean>()
     private val serverPeer = ConcurrentHashMap<String, String>()
+    private val serverReceiptRecovery = ConcurrentHashMap<String, ReceiptRecoveryGate>()
     /** IO-confined. After abort, late PDUs cannot silently create a responder on the old session. */
     private val serverConnections = mutableSetOf<String>()
 
@@ -81,6 +82,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         val key: String get() = contactId ?: address
         val writes = PduSendQueue()
         var closed = false
+        val receiptRecovery = ReceiptRecoveryGate()
         /** Rust has more file chunks for this link: flush again when [writes] drains. */
         var more = false
     }
@@ -119,6 +121,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
             serverLinks.clear()
             serverPeer.values.forEach(repo::pauseTransfers)
             serverPeer.clear()
+            serverReceiptRecovery.clear()
             serverConnections.clear()
             serverMore.clear()
             notifyQueues.values.forEach(PduSendQueue::cancel)
@@ -215,6 +218,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                 }.getOrElse { closeServer(d); return@dispatch }
                 val r = runCatching { link.onPdu(value) }.getOrElse {
                     Log.w(tag, "responder pdu rejected: ${it.message}")
+                    if (isStorageError(it) && serverReceiptRecovery.getOrPut(d.address) { ReceiptRecoveryGate() }.observe(false, true)) repo.retryFileFinalization()
                     closeServer(d)
                     return@dispatch
                 }
@@ -250,12 +254,15 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
         subscribed.remove(d.address)
         serverMore.remove(d.address)
         serverPeer.remove(d.address)?.let(repo::pauseTransfers)
+        serverReceiptRecovery.remove(d.address)
         if (disconnect) runCatching { server?.cancelConnection(d) }
         repo.refresh()
     }
 
     private fun onServerResult(d: BluetoothDevice, r: LinkResult) {
         if (!serverLinks.containsKey(d.address)) return
+        if (serverReceiptRecovery.getOrPut(d.address) { ReceiptRecoveryGate() }
+                .observe(r.established, r.fileFailures.any { it.reason == "storage" })) repo.retryFileFinalization()
         r.peerContactId?.let { serverPeer[d.address] = it }
         serverMore[d.address] = r.morePending
         val queue = notifyQueues.getOrPut(d.address) { PduSendQueue() }
@@ -508,6 +515,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
                 val link = c.link ?: return@dispatch
                 val r = runCatching { link.onPdu(value) }.getOrElse {
                     Log.w(tag, "initiator pdu rejected: ${it.message}")
+                    if (isStorageError(it) && c.receiptRecovery.observe(false, true)) repo.retryFileFinalization()
                     closeClient(c)
                     return@dispatch
                 }
@@ -518,6 +526,7 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
 
     private fun onClientResult(c: Client, r: LinkResult) {
         if (c.closed) return
+        if (c.receiptRecovery.observe(r.established, r.fileFailures.any { it.reason == "storage" })) repo.retryFileFinalization()
         c.more = r.morePending
         if (runCatching { c.writes.addBatch(r.batchToken, r.outgoing) }.isFailure) { closeClient(c); return }
         handle(r)
@@ -577,6 +586,9 @@ class BleMeshTransport(private val context: Context, private val repo: MeshRepos
     }
 
     // ---------------- shared ----------------
+
+    private fun isStorageError(error: Throwable) = error is chat.omcp.ffi.FfiException.Storage ||
+        error is chat.omcp.app.core.StorageUnavailableException
 
     private fun handle(r: LinkResult) {
         r.received.forEach { repo.onReceived(it); MeshNotifications.onMessage(context, repo, it) }

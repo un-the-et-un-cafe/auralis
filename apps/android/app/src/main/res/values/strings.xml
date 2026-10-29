@@ -305,4 +305,7 @@
     <string name="message_transport_accepted">Sent to Bluetooth · Not confirmed</string>
     <string name="store_blocked_title">Local storage unavailable</string>
     <string name="store_blocked_body">Auralis could not open your saved account. Your database has not been reset. Unlock this device or return to a compatible app version, then try again. If it still fails, restart Auralis.</string>
+    <string name="file_state_finalizing">Saving securely…</string>
+    <string name="file_retry_finalizing">Retry saving</string>
+    <string name="file_receive_retry_notice">Some received files are waiting to be saved. Tap to retry.</string>
 </resources>

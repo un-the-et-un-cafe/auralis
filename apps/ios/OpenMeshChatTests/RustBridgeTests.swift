@@ -10,6 +10,14 @@ import HoplaRust // Linux: scripts/verify-linux.sh
 /// Real Rust core through the Swift bindings: two nodes, QR add with safety numbers, a Noise
 /// link over in-memory "BLE", burn after read with OPENED, and iCloud/Drive backups (O2–O4).
 final class RustBridgeTests: XCTestCase {
+    private func durableSink(root: URL) -> FileSink {
+        #if canImport(HoplaRust)
+        return DurableReceivedFiles(root: root)
+        #else
+        return ReceivedFiles(root: root) // Exercise Apple's backup-exclusion wrapper too.
+        #endif
+    }
+
     func node(_ name: String) throws -> (RustOmcpCore, MeshRepository) {
         let core = RustOmcpCore()
         let repo = MeshRepository(core: core, store: InMemoryAppStore())
@@ -142,6 +150,46 @@ final class RustBridgeTests: XCTestCase {
     final class MemSink: FileSink {
         var bytes: Data?
         func save(_ file: ReceivedFileInfo) -> String? { bytes = file.bytes; return "mem:\(file.name)" }
+        func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data, verifier: ReceiveFileVerifier) throws -> String {
+            var all = Data()
+            for i in 0..<receipt.blockCount { let block = try readBlock(i); try verifier.update(block); all.append(block) }
+            try verifier.finish(); bytes = all; return "mem:\(receipt.name)"
+        }
+    }
+
+    func testDurableReceiptRestoresFromStoreAndFinalizesWithRealVerifier() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let canonical = root.resolvingSymlinksInPath()
+        let db = canonical.appendingPathComponent("store.sqlite").path
+        let store = InMemoryAppStore()
+        let receiver = RustOmcpCore()
+        let before = MeshRepository(core: receiver, store: store, dbPath: db)
+        try before.saveIdentity(phrase: try receiver.generateRecoveryPhrase(), name: "Receiver")
+        let (sender, sent) = try node("Sender")
+        let peer = try sent.addContact(qr: try receiver.qrPayload(), action: .chatWithoutVerifying)
+        _ = try before.addContact(qr: try sender.qrPayload(), action: .chatWithoutVerifying)
+        let a = try sender.openInitiatorLink(peer.id), b = try receiver.openResponderLink()
+        try pump(a, b, try a.start(), into: sent, before)
+        let bytes = Data((0..<65_537).map { UInt8($0 % 239) })
+        let id = try sent.sendFile(peer.id, name: "../photo.bin", mime: "application/octet-stream", bytes: bytes)
+        try pump(a, b, try a.flush(), into: sent, before)
+        let receipt = try XCTUnwrap(receiver.pendingReceivedFiles().first)
+        XCTAssertEqual(receipt.transferId, id)
+        XCTAssertEqual(before.messages.values.flatMap { $0 }.first?.file?.state, .finalizing)
+        a.close(); b.close()
+        let reopened = RustOmcpCore()
+        let after = MeshRepository(core: reopened, store: store, dbPath: db)
+        after.fileSink = durableSink(root: canonical.appendingPathComponent("received"))
+        XCTAssertTrue(after.restore())
+        XCTAssertTrue(try reopened.pendingReceivedFiles().isEmpty)
+        let received = try XCTUnwrap(after.messages.values.flatMap { $0 }.first { $0.id == id })
+        XCTAssertEqual(received.file?.state, .received)
+        let path = try XCTUnwrap(received.file?.localPath)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
+        after.onFileReceived(receipt) // Stale event cannot create another generation.
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
     }
 
     /// File transfer through the real core: 64 KiB chunks drained over several flushes.
@@ -154,8 +202,10 @@ final class RustBridgeTests: XCTestCase {
         let lb = try cb.openResponderLink()
         try pump(la, lb, try la.start(), into: ra, rb)
         let data = Data((0..<200_000).map { UInt8($0 % 251) })
-        let sink = MemSink()
-        rb.fileSink = sink
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        rb.fileSink = durableSink(root: root.resolvingSymlinksInPath())
         let id = try ra.sendFile(bOnA.id, name: "flyer.jpg", mime: "image/jpeg", bytes: data)
         var flushes = 0
         var more = true
@@ -172,7 +222,14 @@ final class RustBridgeTests: XCTestCase {
             more = committed.morePending
         }
         XCTAssertGreaterThanOrEqual(flushes, 2)
-        XCTAssertEqual(sink.bytes, data)
+        let receivedPath = try XCTUnwrap(rb.messages.values.flatMap { $0 }.first?.file?.localPath)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: receivedPath)), data)
+        #if !canImport(HoplaRust)
+        let values = try URL(fileURLWithPath: receivedPath).deletingLastPathComponent()
+            .resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true)
+        #endif
+        XCTAssertTrue(try cb.pendingReceivedFiles().isEmpty)
         XCTAssertEqual(rb.messages.values.flatMap { $0 }.first?.file?.state, .received)
         XCTAssertEqual(ra.messages[bOnA.id]?.first { $0.id == id }?.file?.state, .sent)
         XCTAssertThrowsError(try ra.sendFile(bOnA.id, name: "big", mime: "", bytes: Data(count: 50_000_001)))

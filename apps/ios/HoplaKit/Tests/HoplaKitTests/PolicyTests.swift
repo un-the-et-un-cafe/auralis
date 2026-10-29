@@ -44,6 +44,10 @@ final class PolicyTests: XCTestCase {
     final class MemSink: FileSink {
         var saved: [String] = []
         func save(_ file: ReceivedFileInfo) -> String? { saved.append(file.name); return "/tmp/\(file.name)" }
+        func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data, verifier: ReceiveFileVerifier) throws -> String {
+            for i in 0..<receipt.blockCount { try verifier.update(readBlock(i)) }
+            try verifier.finish(); saved.append(receipt.name); return "/tmp/\(receipt.name)"
+        }
     }
 
     func testFileTransferStatesFollowLinkEvents() throws {
@@ -64,7 +68,10 @@ final class PolicyTests: XCTestCase {
         r.fileSink = sink
         r.onFileProgress(FileProgressInfo(transferId: "in1", contactId: c.id, incoming: true, name: "b.jpg", size: 10, doneChunks: 0, totalChunks: 1))
         XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .receiving)
-        r.onFileReceived(ReceivedFileInfo(transferId: "in1", contactId: c.id, name: "b.jpg", mime: "image/jpeg", bytes: Data(count: 10)))
+        let receipt = ReceiveReceiptInfo(transferId: "in1", contactId: c.id, name: "b.jpg", mime: "image/jpeg", size: 10,
+            receiptToken: "test-receipt", contentHash: "test-hash", blockCount: 1)
+        core.injectReceipt(receipt, bytes: Data(count: 10))
+        r.onFileReceived(receipt)
         XCTAssertEqual(r.messages[c.id]?.last?.file?.state, .received)
         XCTAssertEqual(r.messages[c.id]?.last?.file?.localPath, "/tmp/b.jpg")
         XCTAssertEqual(sink.saved, ["b.jpg"])

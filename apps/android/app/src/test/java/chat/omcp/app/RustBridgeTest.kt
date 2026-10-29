@@ -71,9 +71,21 @@ class RustBridgeTest {
         val data = ByteArray(200_000) { (it % 251).toByte() }
         val offer = alice.queueFile(b.id, "flyer.jpg", "image/jpeg", data)
         assertEquals(4, offer.chunks)
-        val repo = MeshRepository(bob, InMemoryAppStore())
+        val repo = MeshRepository(bob, InMemoryAppStore(), receiptExecutor = java.util.concurrent.Executor { it.run() })
         var got: ByteArray? = null
-        repo.fileSink = chat.omcp.app.data.FileSink { got = it.bytes; "mem:${it.name}" }
+        repo.receiptSink = chat.omcp.app.files.DurableReceiptSink { receipt, source ->
+            val bytes = java.io.ByteArrayOutputStream()
+            source.verifier().use { verifier ->
+                for (index in 0 until receipt.blockCount) {
+                    val block = source.readBlock(index)
+                    verifier.update(block)
+                    bytes.write(block)
+                }
+                verifier.finish()
+            }
+            got = bytes.toByteArray()
+            "mem:${receipt.name}"
+        }
         var flushes = 0
         do {
             val out = la.flush()
@@ -97,6 +109,29 @@ class RustBridgeTest {
         } catch (_: IllegalArgumentException) {
         }
         la.close(); lb.close()
+    }
+
+    @Test
+    fun cancelledReceiptCleanupCapabilityRoundTripsThroughBindings() {
+        val alice = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Alice") }
+        val bob = RustOmcpCore().apply { load(generateRecoveryPhrase(), "Bob") }
+        val b = alice.addContactFromQr(bob.qrPayload())
+        bob.addContactFromQr(alice.qrPayload())
+        val la = alice.openInitiatorLink(b.id); val lb = bob.openResponderLink()
+        try {
+            pump(la, lb, la.start())
+            alice.queueFile(b.id, "cleanup.bin", "application/octet-stream", byteArrayOf(1, 2, 3))
+            drainBatches(la, lb, la.flush())
+            val receipt = bob.pendingReceivedFiles().single()
+            assertEquals(receipt, bob.retryReceivedFiles().single())
+            assertTrue(bob.cancelFile(receipt.transferId))
+            assertTrue(bob.pendingReceivedFiles().isEmpty())
+            assertEquals(receipt, bob.cancelledReceivedFiles().single())
+            // This bridge test has no native files: exercise the DB capability ACK only.
+            assertTrue(bob.acknowledgeReceivedFileCleanup(receipt.receiptToken))
+            assertFalse(bob.acknowledgeReceivedFileCleanup(receipt.receiptToken))
+            assertTrue(bob.cancelledReceivedFiles().isEmpty())
+        } finally { la.close(); lb.close() }
     }
 
     @Test

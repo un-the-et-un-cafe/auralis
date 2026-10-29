@@ -57,6 +57,7 @@ class OmcpApplication : Application() {
         // Encrypted local store (Rust core); its key is sealed with the Android Keystore.
         repository = MeshRepository(RustOmcpCore(), PrefsAppStore(this), getDatabasePath("omcp-store.db").apply { parentFile?.mkdirs() }.path)
         repository.fileSink = receivedFiles
+        repository.receiptSink = receivedFiles
         repository.chatBackup = chat.omcp.app.backup.ChatBackupSync(
             repository.core, chatBlobs, { p -> runCatching { java.io.File(p).readBytes() }.getOrNull() },
         )

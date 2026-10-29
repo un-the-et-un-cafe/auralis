@@ -47,6 +47,25 @@ class RustOmcpCore : OmcpCore {
 
     override fun setReceivedFilePath(transferId: String, path: String?) = n().setReceivedFilePath(transferId, path)
 
+    override fun markReceivedFileMissing(transferId: String, expectedLocalPath: String) = n().markReceivedFileMissing(transferId, expectedLocalPath)
+    override fun pendingReceivedFiles() = n().pendingReceivedFiles().map { it.toReceipt() }
+    override fun cancelledReceivedFiles() = n().cancelledReceivedFiles().map { it.toReceipt() }
+    override fun acknowledgeReceivedFileCleanup(receiptToken: String) = n().acknowledgeReceivedFileCleanup(receiptToken)
+    override fun retryReceivedFiles() = n().retryReceivedFiles().map { it.toReceipt() }
+    override fun readReceivedFileBlock(receiptToken: String, index: Int): ByteArray {
+        require(index >= 0)
+        return n().readReceivedFileBlock(receiptToken, index.toUInt())
+    }
+    override fun commitReceivedFile(receiptToken: String, localPath: String) = n().commitReceivedFile(receiptToken, localPath)
+    override fun receivedFileVerifier(receiptToken: String): ReceiptVerifier {
+        val verifier = n().receivedFileVerifier(receiptToken)
+        return object : ReceiptVerifier {
+            override fun update(bytes: ByteArray) = verifier.update(bytes)
+            override fun finish() = verifier.finish()
+            override fun close() = verifier.destroy()
+        }
+    }
+
     override fun restoreHistory(history: ByteArray) = n().restoreHistory(history)
 
     override fun identity(): Identity? = node?.identity()?.let { Identity(it.peerIdHex, it.displayName) }
@@ -235,6 +254,7 @@ private fun chat.omcp.ffi.StoredMessage.toApp() = StoredMessageInfo(
                 chat.omcp.ffi.StoredFileState.QUEUED -> "Queued"
                 chat.omcp.ffi.StoredFileState.SENDING -> "Sending"
                 chat.omcp.ffi.StoredFileState.RECEIVING -> "Receiving"
+    chat.omcp.ffi.StoredFileState.FINALIZING -> "Finalizing"
                 chat.omcp.ffi.StoredFileState.PAUSED -> "Paused"
                 chat.omcp.ffi.StoredFileState.SENT -> "Sent"
                 chat.omcp.ffi.StoredFileState.RECEIVED -> "Received"
@@ -267,6 +287,7 @@ private fun chat.omcp.ffi.StoredFileState.label() = when (this) {
     chat.omcp.ffi.StoredFileState.UNAVAILABLE -> "Unavailable"
     chat.omcp.ffi.StoredFileState.RECEIVED -> "Received"
     chat.omcp.ffi.StoredFileState.RECEIVING -> "Receiving"
+    chat.omcp.ffi.StoredFileState.FINALIZING -> "Finalizing"
     else -> "Failed"
 }
 
@@ -283,7 +304,7 @@ private fun LinkOutput.toResult() = LinkResult(
     fileProgress = fileProgress.map {
         FileProgressInfo(it.transferIdHex, it.contactId, it.incoming, it.name, it.size.toLong(), it.doneChunks.toInt(), it.totalChunks.toInt())
     },
-    files = files.map { ReceivedFileInfo(it.transferIdHex, it.contactId, it.name, it.mime, it.bytes) },
+    files = files.map { it.toReceipt() },
     fileFailures = fileFailures.map { FileFailureInfo(it.transferIdHex, it.contactId, it.reason) },
     morePending = morePending,
     restoreNotices = restoreNotices.map { RestoreNoticeInfo(it.contactId, it.restoredAtMs?.toLong(), it.msgIdHex) },
@@ -305,3 +326,7 @@ private class RustLink(private val link: MeshLink) : CoreLink {
         link.destroy()
     }
 }
+
+private fun chat.omcp.ffi.ReceivedFile.toReceipt() = ReceiveReceiptInfo(
+    transferIdHex, contactId, name, mime, size.toLong(), receiptTokenHex, contentHashHex, blockCount.toInt(),
+)

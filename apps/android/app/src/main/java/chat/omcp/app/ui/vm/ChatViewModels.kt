@@ -168,7 +168,8 @@ class ChatThreadViewModel(
     fun dismissFileError() { _fileError.value = false }
 
     /** Cancel an in-flight transfer (Sending / Receiving / Queued bubble). */
-    fun cancelTransfer(transferId: String) = repo.cancelFile(contactId, transferId)
+    fun cancelTransfer(transferId: String) { ioScope.launch { try { repo.cancelFile(contactId, transferId) } catch (_: Exception) { _fileError.value = true } } }
+    fun retryFileFinalization() { ioScope.launch { try { if (!repo.retryFileFinalization().get()) _fileError.value = true } catch (_: Exception) { _fileError.value = true } } }
 
     override fun onCleared() { ioScope.cancel() }
 

@@ -21,7 +21,14 @@ pub(crate) fn accepts_incoming_file(m: &MessageRec, peer: &[u8; 32]) -> bool {
     };
     m.peer == *peer
         && m.burn.is_none()
-        && f.state != st::FILE_RECEIVED
+        && matches!(
+            f.state,
+            st::FILE_RECEIVING
+                | st::FILE_PAUSED
+                | st::FILE_MISSING
+                | st::FILE_REQUESTED
+                | st::FILE_UNAVAILABLE
+        )
         && (!m.mine
             || (f.hash.as_ref().is_some_and(|h| h.len() == 32)
                 && matches!(
@@ -30,6 +37,7 @@ pub(crate) fn accepts_incoming_file(m: &MessageRec, peer: &[u8; 32]) -> bool {
                         | st::FILE_REQUESTED
                         | st::FILE_UNAVAILABLE
                         | st::FILE_RECEIVING
+                        | st::FILE_PAUSED
                 )))
 }
 
@@ -67,6 +75,8 @@ pub enum StoredFileState {
     Requested,
     /// The partner no longer has it ("Ask to resend").
     Unavailable,
+    /// Verified sealed bytes await durable native file finalization.
+    Finalizing,
 }
 
 /// File-transfer metadata; `local_path` = where the app saved a received file.
@@ -116,6 +126,7 @@ pub(crate) fn file_state(s: u8) -> StoredFileState {
         st::FILE_MISSING => StoredFileState::Missing,
         st::FILE_REQUESTED => StoredFileState::Requested,
         st::FILE_UNAVAILABLE => StoredFileState::Unavailable,
+        st::FILE_FINALIZING => StoredFileState::Finalizing,
         _ => StoredFileState::Failed,
     }
 }
@@ -247,24 +258,36 @@ impl NodeState {
         &self,
         peer: &[u8; 32],
         f: &OutgoingFile,
+        verified_bytes: Option<&[u8]>,
     ) -> Result<(), FfiError> {
-        Ok(self.db.put_out_file(
-            &OutFileRec {
-                id: f.id,
-                peer: *peer,
-                name: f.name.clone(),
-                size: f.size,
-                total: f.total,
-                offer: f.offer.to_vec(),
-            },
-            &f.chunks,
-        )?)
+        let record = OutFileRec {
+            id: f.id,
+            peer: *peer,
+            name: f.name.clone(),
+            size: f.size,
+            total: f.total,
+            offer: f.offer.to_vec(),
+        };
+        if let Some(bytes) = verified_bytes {
+            self.db
+                .put_received_file_resend(&record, &f.chunks, bytes)?;
+        } else {
+            self.db.put_out_file(&record, &f.chunks)?;
+        }
+        Ok(())
     }
 
-    /// Persist file events produced by one `deliver`/`flush` step.
+    pub(crate) fn refresh_receive_budget(&mut self) -> Result<(), FfiError> {
+        self.files.durable_pending = self.db.pending_received_files()?;
+        self.files.durable_bytes = usize::try_from(self.db.received_spool_bytes()?)
+            .map_err(|_| crate::invalid("receipt budget overflow"))?;
+        Ok(())
+    }
+    /// Persist offer/progress before staging. Existing hash-bound placeholders
+    /// cannot be replaced by same-ID/same-peer but different file content.
     pub(crate) fn persist_file_events(
-        &self,
-        out: &LinkOutput,
+        &mut self,
+        out: &mut LinkOutput,
         from: (usize, usize, usize),
         now: u64,
     ) -> Result<(), FfiError> {
@@ -276,89 +299,92 @@ impl NodeState {
             } else {
                 p.size * u64::from(p.done_chunks) / u64::from(p.total_chunks)
             };
-            let finished = p.done_chunks >= p.total_chunks;
-            match self.db.message(&id)? {
-                None if p.incoming => self.db.put_message(&MessageRec {
-                    id,
-                    peer,
-                    mine: false,
-                    time_ms: now,
-                    status: st::STATUS_RECEIVED,
-                    text: String::new(),
-                    mime: None,
-                    burn: None,
-                    burn_state: st::BURN_NONE,
-                    burn_at_ms: None,
-                    file: Some(FileRec {
-                        name: p.name.clone(),
-                        mime: String::new(),
-                        size: p.size,
+            if p.incoming {
+                let meta = self
+                    .files
+                    .incoming
+                    .get(&id)
+                    .map(|f| &f.meta)
+                    .or_else(|| self.files.verified.get(&id).map(|f| &f.meta));
+                let Some(meta) = meta else {
+                    continue;
+                };
+                self.db.transaction_with::<_, FfiError>(|db| {
+                    let mut m = match db.message(&id)? {
+                        Some(m) if !accepts_incoming_file(&m, &peer) => return Ok(()),
+                        Some(m) => m,
+                        None => MessageRec {
+                            id,
+                            peer,
+                            mine: false,
+                            time_ms: now,
+                            status: st::STATUS_RECEIVED,
+                            text: String::new(),
+                            mime: None,
+                            burn: None,
+                            burn_state: st::BURN_NONE,
+                            burn_at_ms: None,
+                            file: None,
+                        },
+                    };
+                    if m.file
+                        .as_ref()
+                        .and_then(|f| f.hash.as_deref())
+                        .is_some_and(|h| h != meta.content_hash)
+                    {
+                        return Err(crate::invalid("refetched file hash"));
+                    }
+                    let old = m.file.as_ref().filter(|f| f.hash.is_some());
+                    if old.is_some_and(|f| f.size != meta.size) {
+                        return Err(crate::invalid("refetched file size"));
+                    }
+                    m.file = Some(FileRec {
+                        name: old.map_or_else(|| meta.name.clone(), |f| f.name.clone()),
+                        mime: old.map_or_else(|| meta.mime.clone(), |f| f.mime.clone()),
+                        size: meta.size,
                         state: st::FILE_RECEIVING,
                         done_bytes: done,
                         local_path: None,
-                        hash: None,
-                        locator: None,
-                    }),
-                })?,
-                None => {}
-                Some(m)
-                    if (p.incoming && !accepts_incoming_file(&m, &peer))
-                        || (!p.incoming && (m.peer != peer || !m.mine || m.file.is_none())) => {}
-                Some(_) => self.update_message(&id, |m| {
-                    let Some(f) = m.file.as_mut() else { return };
-                    if matches!(f.state, st::FILE_RECEIVED | st::FILE_INTEGRITY_FAILED) {
+                        hash: Some(meta.content_hash.to_vec()),
+                        locator: old.and_then(|f| f.locator.clone()).or(Some(id.to_vec())),
+                    });
+                    db.put_message(&m)?;
+                    Ok(())
+                })?;
+            } else {
+                self.update_message(&id, |m| {
+                    if m.peer != peer || !m.mine {
+                        return;
+                    }
+                    let Some(f) = m.file.as_mut() else {
+                        return;
+                    };
+                    if matches!(
+                        f.state,
+                        st::FILE_RECEIVED
+                            | st::FILE_FINALIZING
+                            | st::FILE_INTEGRITY_FAILED
+                            | st::FILE_FAILED
+                    ) {
                         return;
                     }
                     f.done_bytes = done;
-                    f.state = if p.incoming {
-                        st::FILE_RECEIVING
-                    } else if finished {
+                    f.state = if p.done_chunks >= p.total_chunks {
                         m.status = st::STATUS_SENT;
                         st::FILE_SENT
                     } else {
                         st::FILE_SENDING
                     };
-                })?,
-            }
-        }
-        for r in &out.files[from.1..] {
-            let id = crate::parse_msg_id(&r.transfer_id_hex)?;
-            let peer = crate::parse_id(&r.contact_id)?;
-            let file = FileRec {
-                name: r.name.clone(),
-                mime: r.mime.clone(),
-                size: r.size,
-                state: st::FILE_RECEIVED,
-                done_bytes: r.size,
-                local_path: None,
-                hash: Some(blake3::hash(&r.bytes).as_bytes().to_vec()),
-                locator: Some(id.to_vec()),
-            };
-            match self.db.message(&id)? {
-                Some(m) if !accepts_incoming_file(&m, &peer) => {}
-                Some(_) => self.update_message(&id, |m| m.file = Some(file))?,
-                None => self.db.put_message(&MessageRec {
-                    id,
-                    peer,
-                    mine: false,
-                    time_ms: now,
-                    status: st::STATUS_RECEIVED,
-                    text: String::new(),
-                    mime: None,
-                    burn: None,
-                    burn_state: st::BURN_NONE,
-                    burn_at_ms: None,
-                    file: Some(file),
-                })?,
+                })?;
             }
         }
         for e in &out.file_failures[from.2..] {
             let id = crate::parse_msg_id(&e.transfer_id_hex)?;
+            if self.files.verified.contains_key(&id) {
+                continue;
+            }
             let peer = crate::parse_id(&e.contact_id)?;
             self.update_message(&id, |m| {
-                // File failures currently originate only from incoming data.
-                // An attacker-chosen ID must not mutate another peer's record
-                // or collide with an outgoing transfer to the same peer.
                 if !accepts_incoming_file(m, &peer) {
                     return;
                 }
@@ -371,7 +397,92 @@ impl NodeState {
                 }
             })?;
         }
+        out.files.extend(self.stage_verified_files(now, false)?);
         Ok(())
+    }
+    /// A storage failure leaves the bounded zeroizing candidate in NodeState.
+    /// Remove it only after the whole metadata+spool transaction commits.
+    pub(crate) fn stage_verified_files(
+        &mut self,
+        _now: u64,
+        retry: bool,
+    ) -> Result<Vec<crate::ReceivedFile>, FfiError> {
+        let ids: Vec<_> = self.files.verified.keys().copied().collect();
+        let mut results = Vec::new();
+        let mut first_error = None;
+        for id in ids {
+            let candidate = self
+                .files
+                .verified
+                .get_mut(&id)
+                .expect("candidate snapshot");
+            if !retry && !candidate.needs_attempt {
+                continue;
+            }
+            candidate.needs_attempt = false;
+            let candidate = &self.files.verified[&id];
+            let meta = &candidate.meta;
+            let receipt = self.db.transaction_with::<_, FfiError>(|db| {
+                let mut m = match db.message(&id)? {
+                    Some(m) if !accepts_incoming_file(&m, &candidate.peer) => {
+                        return Err(crate::invalid("receive candidate no longer owns message"))
+                    }
+                    Some(m) => m,
+                    None => return Err(crate::invalid("receive candidate message deleted")),
+                };
+                if m.file
+                    .as_ref()
+                    .and_then(|f| f.hash.as_deref())
+                    .is_some_and(|h| h != meta.content_hash)
+                {
+                    return Err(crate::invalid("refetched file hash"));
+                }
+                let old = m.file.as_ref().filter(|f| f.hash.is_some());
+                if old.is_some_and(|f| f.size != meta.size) {
+                    return Err(crate::invalid("refetched file size"));
+                }
+                m.file = Some(FileRec {
+                    name: old.map_or_else(|| meta.name.clone(), |f| f.name.clone()),
+                    mime: old.map_or_else(|| meta.mime.clone(), |f| f.mime.clone()),
+                    size: meta.size,
+                    state: st::FILE_RECEIVING,
+                    done_bytes: meta.size,
+                    local_path: None,
+                    hash: Some(meta.content_hash.to_vec()),
+                    locator: old.and_then(|f| f.locator.clone()).or(Some(id.to_vec())),
+                });
+                db.put_message(&m)?;
+                Ok(db.stage_received_file(&candidate.peer, &id, &candidate.bytes)?)
+            });
+            let receipt = match receipt {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    // Continue the bounded pass so one failed candidate cannot
+                    // starve unrelated durable receipts. Confirmed deletion or
+                    // explicit terminal state revokes this volatile generation.
+                    if self.db.message(&id).ok().is_some_and(|m| {
+                        m.is_none_or(|m| {
+                            m.file.as_ref().is_none_or(|f| {
+                                matches!(f.state, st::FILE_FAILED | st::FILE_INTEGRITY_FAILED)
+                            })
+                        })
+                    }) {
+                        self.files.verified.remove(&id);
+                    }
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    continue;
+                }
+            };
+            self.files.verified.remove(&id);
+            results.push(crate::receipt_to_ffi(receipt));
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        self.refresh_receive_budget()?;
+        Ok(results)
     }
 
     /// Link to `peer` dropped: running transfers wait for the next link.
@@ -384,7 +495,11 @@ impl NodeState {
                 self.update_message(&m.id, |m| {
                     if let Some(f) = m.file.as_mut() {
                         // A re-fetch that didn't finish goes back to the placeholder.
-                        f.state = if f.state == st::FILE_RECEIVING && f.hash.is_some() {
+                        f.state = if f.state == st::FILE_RECEIVING
+                            && f.hash.is_some()
+                            && !self.files.incoming.contains_key(&m.id)
+                            && !self.files.verified.contains_key(&m.id)
+                        {
                             st::FILE_MISSING
                         } else {
                             st::FILE_PAUSED
@@ -486,6 +601,16 @@ impl NodeState {
                 self.pause_transfers(&m.peer)?;
             }
         }
+        for mut m in self.db.all_messages()? {
+            if let Some(f) = m.file.as_mut() {
+                if f.state == st::FILE_RECEIVED && f.local_path.is_none() {
+                    f.state = st::FILE_MISSING;
+                    f.done_bytes = 0;
+                    self.db.put_message(&m)?;
+                }
+            }
+        }
+        self.refresh_receive_budget()?;
         Ok(())
     }
 }

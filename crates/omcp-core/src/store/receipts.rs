@@ -1,12 +1,16 @@
-//! Durable verified receive candidates. Not wired to transport or native sinks yet.
+//! Durable verified receive candidates and token-bound finalization/cleanup.
 //!
-//! The 128 MiB budget counts all live sealed index/block bytes plus a conservative
-//! 128-byte per-row key/group/sequence allowance and pending completion reservations. It is not a bound on SQLite's
-//! allocated file, rollback journal, or the caller's already verified input buffer.
-//! A completed index remains attached to its message for exact-token retry; it is
-//! counted in the budget and removed with that message. No sole copy is evicted.
-//! New receives may eventually be refused until history is deleted. Transitioning
-//! a completed receipt to a new Missing/refetch generation is intentionally deferred.
+//! The 128 MiB budget counts live sealed index/block bytes plus a conservative
+//! 128-byte per-row allowance and pending completion reservations. It does not
+//! bound SQLite allocation, rollback journals, or transient caller buffers.
+//! Completed indices remain message-bound for exact-token retry. Cancellation
+//! drops blocks but retains a bounded-budget tombstone and a native cleanup
+//! obligation; ACK marks cleanup done while the Failed message exists. Deletion
+//! retains cleanup-only metadata until exact-generation cleanup is acknowledged.
+//! New receives may be refused until history and cleanup obligations are cleared.
+//! A positively missing completed generation can be retired through a path CAS.
+//! SQLite uses DELETE journal and default FULL synchronous mode, not EXTRA; this
+//! is not a claim of hardware power-loss durability or peer delivery ACK.
 use super::*;
 
 pub const RECEIVED_BLOCK_BYTES: usize = 65_536;
@@ -20,6 +24,9 @@ const SEALED_OVERHEAD: u64 = 40;
 const PENDING: u8 = 0;
 const COMPLETE: u8 = 1;
 const CANCELLED: u8 = 2;
+const CLEANUP_GROUP: &[u8] = b"received-cancelled-cleanup-v1";
+const CLEANUP_CURSOR: &[u8] = b"received-cleanup-cursor-v1";
+const CLEANUP_PAGE: usize = 32;
 
 /// Random 256-bit capability bound to one existing local message. Never backed up.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +58,10 @@ struct ReceiptRec {
     locator: Option<Vec<u8>>,
     state: u8,
     path: Option<String>,
+    #[serde(default)]
+    cleanup_done: bool,
+    #[serde(default)]
+    message_deleted: bool,
 }
 
 fn block_id(token: &ReceivedFileToken, index: u32) -> [u8; 36] {
@@ -64,6 +75,24 @@ fn refused() -> OmcpError {
 }
 
 impl Store {
+    // Called only inside authenticated append-only v5 migration transaction.
+    pub(super) fn migrate_receipt_cleanup_groups(&self) -> Result<()> {
+        self.each_receipt(|rec| {
+            if rec.state == CANCELLED {
+                self.conn
+                    .execute(
+                        "UPDATE receive_index SET grp=?1 WHERE id=?2",
+                        params![
+                            self.gid(CLEANUP_GROUP).as_slice(),
+                            self.rid(Table::ReceiveIndex, &rec.receipt.token.message_id)
+                                .as_slice()
+                        ],
+                    )
+                    .map_err(db)?;
+            }
+            Ok(())
+        })
+    }
     pub(super) fn has_receipt(&self, id: &[u8; 16]) -> Result<bool> {
         Ok(self.receipt(id)?.is_some())
     }
@@ -73,6 +102,7 @@ impl Store {
             || rec.receipt.name.len() > 65_535
             || rec.receipt.mime.len() > 65_535
             || rec.state > CANCELLED
+            || (rec.state != CANCELLED && (rec.cleanup_done || rec.message_deleted))
         {
             return Err(refused());
         }
@@ -114,7 +144,11 @@ impl Store {
         self.put(
             Table::ReceiveIndex,
             &rec.receipt.token.message_id,
-            Some(&rec.receipt.peer),
+            Some(if rec.state == CANCELLED && !rec.cleanup_done {
+                CLEANUP_GROUP
+            } else {
+                &rec.receipt.peer
+            }),
             rec,
         )
     }
@@ -161,6 +195,9 @@ impl Store {
     }
     pub(super) fn guard_receipt_message(&self, m: &MessageRec) -> Result<()> {
         if let Some(rec) = self.receipt(&m.id)? {
+            if rec.message_deleted {
+                return Err(refused());
+            }
             let f = m.file.as_ref().ok_or_else(refused)?;
             let state = match rec.state {
                 PENDING => FILE_FINALIZING,
@@ -272,6 +309,8 @@ impl Store {
                 locator: f.locator.clone(),
                 state: PENDING,
                 path: None,
+                cleanup_done: false,
+                message_deleted: false,
             };
             let required = COMPLETION_RESERVATION
                 + cbor(&rec)?.len() as u64
@@ -416,6 +455,180 @@ impl Store {
             Ok(true)
         })
     }
+    /// Retire a completed generation only after the platform positively proved
+    /// its exact private path absent. The path comparison is a generation CAS;
+    /// permissions/protection failures are not authority to call this method.
+    pub fn mark_received_file_missing(&self, id: &[u8; 16], expected_path: &str) -> Result<bool> {
+        self.transaction(|s| {
+            let Some(mut m) = s.message(id)? else {
+                return Ok(false);
+            };
+            let Some(f) = m.file.as_ref() else {
+                return Ok(false);
+            };
+            if m.burn.is_some()
+                || f.state != FILE_RECEIVED
+                || f.local_path.as_deref() != Some(expected_path)
+            {
+                return Ok(false);
+            }
+            if s.get::<OutFileRec>(Table::OutFiles, id)?.is_some() {
+                return Err(OmcpError::Store("outgoing resend still owns file"));
+            }
+            if let Some(rec) = s.receipt(id)? {
+                s.receipt_message(&rec)?;
+                if rec.state != COMPLETE {
+                    return Err(refused());
+                }
+                s.delete_receipt(id)?;
+            }
+            let f = m.file.as_mut().ok_or_else(refused)?;
+            f.state = FILE_MISSING;
+            f.local_path = None;
+            f.done_bytes = 0;
+            s.put_message(&m)?;
+            Ok(true)
+        })
+    }
+    /// Explicit reciprocal resend authorization. Re-hash the supplied plaintext
+    /// against the existing receipt/message before retaining encrypted send work.
+    /// It never changes received history or retires its receipt capability.
+    pub fn put_received_file_resend<C: AsRef<[u8]>>(
+        &self,
+        f: &OutFileRec,
+        chunks: &[C],
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.transaction(|s| {
+            let m = s.message(&f.id)?.ok_or_else(refused)?;
+            let file = m.file.as_ref().ok_or_else(refused)?;
+            if m.peer != f.peer
+                || m.burn.is_some()
+                || m.burn_state != BURN_NONE
+                || file.size != f.size
+                || f.size != bytes.len() as u64
+                || file.hash.as_deref() != Some(blake3::hash(bytes).as_bytes().as_slice())
+            {
+                return Err(refused());
+            }
+            if let Some(rec) = s.receipt(&f.id)? {
+                s.receipt_message(&rec)?;
+                if rec.state != COMPLETE {
+                    return Err(refused());
+                }
+            }
+            if !matches!(file.state, FILE_RECEIVED | FILE_SENT) {
+                return Err(refused());
+            }
+            s.put_out_file_rows(f, chunks)
+        })
+    }
+    /// Legacy backup path attachment is never a bypass around receipt commit.
+    pub fn set_legacy_received_file_path(&self, id: &[u8; 16], path: &str) -> Result<()> {
+        if path.is_empty() || path.len() > 4096 || path.contains('\0') {
+            return Err(refused());
+        }
+        self.transaction(|s| {
+            if s.has_receipt(id)? {
+                return Err(refused());
+            }
+            let mut m = s.message(id)?.ok_or_else(refused)?;
+            if m.burn.is_some() || m.burn_state != BURN_NONE {
+                return Err(refused());
+            }
+            let f = m.file.as_mut().ok_or_else(refused)?;
+            if !matches!(
+                f.state,
+                FILE_MISSING | FILE_REQUESTED | FILE_UNAVAILABLE | FILE_RECEIVED
+            ) {
+                return Err(refused());
+            }
+            f.state = FILE_RECEIVED;
+            f.local_path = Some(path.to_owned());
+            f.done_bytes = f.size;
+            s.put_message(&m)
+        })
+    }
+    /// Return at most 32 outstanding cleanup generations. A sealed durable
+    /// cursor advances even when a platform cannot delete an individual file,
+    /// so repeated bounded passes fairly reach later obligations after restart.
+    pub fn cancelled_received_files(&self) -> Result<Vec<ReceivedFileReceipt>> {
+        self.transaction(|s| {
+            let cursor = s.get_meta::<Vec<u8>>(CLEANUP_CURSOR)?.filter(|v| !v.is_empty());
+            if cursor.as_ref().is_some_and(|c| c.len() != 32) { return Err(refused()); }
+            let mut stmt = s.conn.prepare("SELECT id, ct FROM receive_index WHERE grp=?1 AND (?2 IS NULL OR id>?2) ORDER BY id LIMIT 32").map_err(db)?;
+            let mut rows = stmt.query(params![s.gid(CLEANUP_GROUP).as_slice(), cursor]).map_err(db)?;
+            let mut results = Vec::new(); let mut last = None;
+            while let Some(row) = rows.next().map_err(db)? {
+                let id: Vec<u8> = row.get(0).map_err(db)?;
+                let rid: [u8;32] = id.as_slice().try_into().map_err(|_| refused())?;
+                let ct: Vec<u8> = row.get(1).map_err(db)?;
+                let rec: ReceiptRec = uncbor(&xopen(&s.row_key, &Self::aad(Table::ReceiveIndex, &rid), &ct)?)?;
+                Self::validate_receipt(&rec)?;
+                if s.rid(Table::ReceiveIndex, &rec.receipt.token.message_id) != rid || rec.state != CANCELLED || rec.cleanup_done { return Err(refused()); }
+                s.validate_cleanup_owner(&rec)?;
+                last = Some(id); results.push(rec.receipt);
+            }
+            drop(rows); drop(stmt);
+            let next = if results.len() == CLEANUP_PAGE { last.unwrap_or_default() } else { Vec::new() };
+            s.put_meta(CLEANUP_CURSOR, &next)?;
+            Ok(results)
+        })
+    }
+    fn validate_cleanup_owner(&self, rec: &ReceiptRec) -> Result<()> {
+        if rec.message_deleted {
+            if self.message(&rec.receipt.token.message_id)?.is_some() {
+                return Err(refused());
+            }
+        } else {
+            self.receipt_message(rec)?;
+        }
+        Ok(())
+    }
+    /// Native caller has removed only this generation's owned files and synced
+    /// the directory. Keep the cancellation tombstone while its Failed message
+    /// exists; deleted-message obligations can be retired without resurrection.
+    pub fn acknowledge_received_file_cleanup(&self, token: &ReceivedFileToken) -> Result<bool> {
+        self.transaction(|s| {
+            let Some(mut rec) = s.receipt(&token.message_id)? else {
+                return Ok(false);
+            };
+            if rec.receipt.token != *token || rec.state != CANCELLED {
+                return Err(refused());
+            }
+            s.validate_cleanup_owner(&rec)?;
+            if rec.cleanup_done {
+                return Ok(false);
+            }
+            if rec.message_deleted {
+                s.del_raw(Table::ReceiveIndex, &token.message_id)?;
+            } else {
+                rec.cleanup_done = true;
+                s.put_receipt(&rec)?;
+                if s.received_spool_bytes()? > MAX_RECEIVED_SPOOL_BYTES {
+                    return Err(OmcpError::Store("received-file spool budget"));
+                }
+            }
+            Ok(true)
+        })
+    }
+    pub(super) fn retain_deleted_receipt_cleanup(&self, id: &[u8; 16]) -> Result<()> {
+        if let Some(mut rec) = self.receipt(id)? {
+            self.delete_received_blocks(&rec)?;
+            if rec.cleanup_done {
+                self.del_raw(Table::ReceiveIndex, id)?;
+            } else {
+                rec.state = CANCELLED;
+                rec.path = None;
+                rec.message_deleted = true;
+                self.put_receipt(&rec)?;
+                if self.received_spool_bytes()? > MAX_RECEIVED_SPOOL_BYTES {
+                    return Err(OmcpError::Store("received-file spool budget"));
+                }
+            }
+        }
+        Ok(())
+    }
     pub(super) fn delete_receipt(&self, id: &[u8; 16]) -> Result<()> {
         if let Some(rec) = self.receipt(id)? {
             self.delete_received_blocks(&rec)?;
@@ -431,6 +644,9 @@ impl Store {
             }
             Ok(())
         })?;
+        if self.received_spool_bytes()? > MAX_RECEIVED_SPOOL_BYTES {
+            return Err(OmcpError::Store("received-file spool budget"));
+        }
         let pending = self.pending_received_files()?;
         if pending.iter().filter(|r| r.peer == *new).count() > MAX_PENDING_RECEIPTS_PER_PEER {
             return Err(OmcpError::Store("received-file admission limit"));
@@ -554,9 +770,226 @@ mod tests {
         let s = Store::open(&path, &KEY).unwrap();
         assert!(s.commit_received_file(&r.token, "/private/file").is_err());
         s.delete_message(&[1; 16]).unwrap();
+        assert_eq!(s.cancelled_received_files().unwrap()[0].token, r.token);
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
         assert_eq!(s.received_spool_bytes().unwrap(), 0);
         assert!(s.commit_received_file(&r.token, "/private/file").is_err());
         assert!(s.message(&[1; 16]).unwrap().is_none());
+    }
+    #[test]
+    fn cancelled_cleanup_retains_import_protection_and_rejects_stale_ack() {
+        let s = Store::open_in_memory(&KEY).unwrap();
+        let r = stage(&s, 1, PEER, b"payload");
+        let history = s.export_history().unwrap();
+        s.cancel_received_file(&PEER, &[1; 16]).unwrap();
+        let mut wrong = r.token.clone();
+        wrong.nonce[0] ^= 1;
+        assert!(s.acknowledge_received_file_cleanup(&wrong).is_err());
+        assert_eq!(s.cancelled_received_files().unwrap(), vec![r.clone()]);
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert!(!s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert!(s.cancelled_received_files().unwrap().is_empty());
+        s.import_history(&history).unwrap();
+        assert_eq!(
+            s.message(&[1; 16]).unwrap().unwrap().file.unwrap().state,
+            FILE_FAILED
+        );
+        assert!(s.stage_received_file(&PEER, &[1; 16], b"payload").is_err());
+        s.delete_message(&[1; 16]).unwrap();
+        assert!(!s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert_eq!(s.received_spool_bytes().unwrap(), 0);
+        s.import_history(&history).unwrap();
+        let mut requested = s.message(&[1; 16]).unwrap().unwrap();
+        requested.file.as_mut().unwrap().state = FILE_REQUESTED;
+        s.put_message(&requested).unwrap();
+        let replacement = s.stage_received_file(&PEER, &[1; 16], b"payload").unwrap();
+        assert_ne!(replacement.token, r.token);
+        assert!(s.acknowledge_received_file_cleanup(&r.token).is_err());
+        assert_eq!(s.pending_received_files().unwrap(), vec![replacement]);
+    }
+    #[test]
+    fn deleted_cleanup_requires_absence_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("deleted.db");
+        let s = Store::open(&path, &KEY).unwrap();
+        let r = stage(&s, 1, PEER, b"payload");
+        s.commit_received_file(&r.token, "/generation-one").unwrap();
+        s.delete_message(&[1; 16]).unwrap();
+        assert!(s.put_message(&message(1, PEER, b"payload")).is_err());
+        drop(s);
+        let s = Store::open(&path, &KEY).unwrap();
+        assert_eq!(s.cancelled_received_files().unwrap(), vec![r.clone()]);
+        // Simulate incompatible writer/corruption through test-only raw storage.
+        s.put(
+            Table::Messages,
+            &[1; 16],
+            Some(&PEER),
+            &message(1, PEER, b"payload"),
+        )
+        .unwrap();
+        assert!(s.acknowledge_received_file_cleanup(&r.token).is_err());
+        s.del_raw(Table::Messages, &[1; 16]).unwrap();
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert!(!s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        assert!(s.message(&[1; 16]).unwrap().is_none());
+        assert!(s.commit_received_file(&r.token, "/generation-one").is_err());
+    }
+    #[test]
+    fn cleanup_cursor_is_bounded_fair_durable_and_tolerates_ack_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.db");
+        let s = Store::open(&path, &KEY).unwrap();
+        for id in 1..=40 {
+            stage(&s, id, PEER, b"x");
+            s.delete_message(&[id; 16]).unwrap();
+        }
+        let first = s.cancelled_received_files().unwrap();
+        assert_eq!(first.len(), 32);
+        // Leave the first undeletable obligation; successful later ACKs cannot starve the tail.
+        for r in first.iter().skip(1) {
+            assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
+        }
+        drop(s);
+        let s = Store::open(&path, &KEY).unwrap();
+        let second = s.cancelled_received_files().unwrap();
+        assert_eq!(second.len(), 8);
+        assert!(second.iter().all(|r| !first.contains(r)));
+        for r in second {
+            s.acknowledge_received_file_cleanup(&r.token).unwrap();
+        }
+        assert_eq!(
+            s.cancelled_received_files().unwrap(),
+            vec![first[0].clone()]
+        );
+        s.acknowledge_received_file_cleanup(&first[0].token)
+            .unwrap();
+        assert!(s.cancelled_received_files().unwrap().is_empty());
+    }
+    #[test]
+    fn v4_cancelled_groups_migrate_atomically_after_authentication() {
+        for commit_failure in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("v4.db");
+            let s = Store::open(&path, &KEY).unwrap();
+            s.bind_owner(&PEER).unwrap();
+            let cancelled = stage(&s, 1, PEER, b"cancel");
+            s.cancel_received_file(&PEER, &[1; 16]).unwrap();
+            let complete = stage(&s, 2, PEER, b"complete");
+            s.commit_received_file(&complete.token, "/complete")
+                .unwrap();
+            let pending = stage(&s, 3, PEER, b"pending");
+            // Old v4 serialization omitted both flags and used peer group.
+            #[derive(Serialize)]
+            struct OldReceipt {
+                receipt: ReceivedFileReceipt,
+                mine: bool,
+                locator: Option<Vec<u8>>,
+                state: u8,
+                path: Option<String>,
+            }
+            let rec = s.receipt(&[1; 16]).unwrap().unwrap();
+            s.put(
+                Table::ReceiveIndex,
+                &[1; 16],
+                Some(&PEER),
+                &OldReceipt {
+                    receipt: rec.receipt,
+                    mine: rec.mine,
+                    locator: rec.locator,
+                    state: rec.state,
+                    path: rec.path,
+                },
+            )
+            .unwrap();
+            s.conn
+                .execute_batch("DROP INDEX receive_index_cleanup; PRAGMA user_version=4;")
+                .unwrap();
+            drop(s);
+            assert!(Store::open(&path, &[8; 32]).is_err());
+            assert!(Store::open_for_owner(&path, &KEY, &[7; 32], &[6; 32]).is_err());
+            let unchanged = Connection::open(&path).unwrap();
+            assert_eq!(
+                unchanged
+                    .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                    .unwrap(),
+                4
+            );
+            drop(unchanged);
+            if commit_failure {
+                let conn = Connection::open(&path).unwrap();
+                conn.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+                    AuthAction::Transaction {
+                        operation: TransactionOperation::Unknown,
+                    } => Authorization::Deny,
+                    _ => Authorization::Allow,
+                }));
+                assert!(Store::init(conn, &KEY, None).is_err());
+                let check = Connection::open(&path).unwrap();
+                assert_eq!(
+                    check
+                        .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                        .unwrap(),
+                    4
+                );
+            }
+            let s = Store::open(&path, &KEY).unwrap();
+            assert_eq!(s.schema_version().unwrap(), 5);
+            assert_eq!(s.cancelled_received_files().unwrap(), vec![cancelled]);
+            assert_eq!(s.pending_received_files().unwrap(), vec![pending]);
+            s.commit_received_file(&complete.token, "/complete")
+                .unwrap();
+        }
+    }
+    #[test]
+    fn legacy_metadata_rekey_growth_refuses_budget_overflow_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("budget.db");
+        let s = Store::open(&path, &KEY).unwrap();
+        let r = stage(&s, 1, PEER, b"a");
+        s.commit_received_file(&r.token, "/private").unwrap();
+        #[derive(Serialize)]
+        struct OldReceipt {
+            receipt: ReceivedFileReceipt,
+            mine: bool,
+            locator: Option<Vec<u8>>,
+            state: u8,
+            path: Option<String>,
+        }
+        let rec = s.receipt(&[1; 16]).unwrap().unwrap();
+        s.put(
+            Table::ReceiveIndex,
+            &[1; 16],
+            Some(&PEER),
+            &OldReceipt {
+                receipt: rec.receipt,
+                mine: rec.mine,
+                locator: rec.locator,
+                state: rec.state,
+                path: rec.path,
+            },
+        )
+        .unwrap();
+        let before: Vec<u8> = s
+            .conn
+            .query_row("SELECT ct FROM receive_index", [], |r| r.get(0))
+            .unwrap();
+        // An unrelated opaque block occupies remaining quota; no plaintext allocation.
+        let filler = MAX_RECEIVED_SPOOL_BYTES - s.received_spool_bytes().unwrap() - ROW_ALLOWANCE;
+        s.conn
+            .execute(
+                "INSERT INTO receive_blocks(id,grp,seq,ct) VALUES(?1,NULL,1,zeroblob(?2))",
+                params![[7u8; 32].as_slice(), filler],
+            )
+            .unwrap();
+        assert_eq!(s.received_spool_bytes().unwrap(), MAX_RECEIVED_SPOOL_BYTES);
+        assert!(s.rekey_peer(&PEER, &[3; 32]).is_err());
+        assert_eq!(s.message(&[1; 16]).unwrap().unwrap().peer, PEER);
+        let after: Vec<u8> = s
+            .conn
+            .query_row("SELECT ct FROM receive_index", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(s.received_spool_bytes().unwrap(), MAX_RECEIVED_SPOOL_BYTES);
     }
     #[test]
     fn receipt_rejects_burn_hash_owner_and_forged_token_and_mutation() {
@@ -689,6 +1122,8 @@ mod tests {
         s.import_history(&completed).unwrap();
         s.commit_received_file(&r.token, "/file").unwrap();
         s.delete_message(&[1; 16]).unwrap();
+        assert_eq!(s.cancelled_received_files().unwrap()[0].token, r.token);
+        assert!(s.acknowledge_received_file_cleanup(&r.token).unwrap());
         assert_eq!(s.received_spool_bytes().unwrap(), 0);
     }
     #[test]

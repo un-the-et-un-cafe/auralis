@@ -98,6 +98,8 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX receive_index_grp ON receive_index(grp, seq);
      CREATE TABLE receive_blocks(id BLOB PRIMARY KEY, grp BLOB, seq INTEGER NOT NULL, ct BLOB NOT NULL);
      CREATE INDEX receive_blocks_grp ON receive_blocks(grp, seq);",
+    // v5: bounded cleanup pagination; sealed cancelled rows regrouped in init.
+    "CREATE INDEX receive_index_cleanup ON receive_index(grp, id);",
 ];
 
 const KEPT_INDEX_GRP: &[u8] = b"kept-index";
@@ -259,6 +261,9 @@ impl Store {
             let v = s.validate_open(owners)?;
             for (i, sql) in MIGRATIONS.iter().enumerate().skip(v as usize) {
                 s.conn.execute_batch(sql).map_err(db)?;
+                if i + 1 == 5 {
+                    s.migrate_receipt_cleanup_groups()?;
+                }
                 s.conn
                     .execute_batch(&format!("PRAGMA user_version = {}", i + 1))
                     .map_err(db)?;
@@ -361,10 +366,15 @@ impl Store {
     /// (their X25519 key) to their PeerID: contact, chat, messages, queue,
     /// outgoing files and burn entries. All-or-nothing.
     pub fn rekey_peer(&self, old: &[u8; 32], new: &[u8; 32]) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
         self.transaction(|s| {
             if let Some(mut c) = s.get::<ContactRec>(Table::Contacts, old)? {
                 c.peer = *new;
-                s.put(Table::Contacts, new, None, &c)?;
+                if s.get::<ContactRec>(Table::Contacts, new)?.is_none() {
+                    s.put(Table::Contacts, new, None, &c)?;
+                }
                 s.del_raw(Table::Contacts, old)?;
             }
             if let Some(mut c) = s.get::<ChatRec>(Table::Chats, old)? {
@@ -699,7 +709,12 @@ impl Store {
     }
     pub fn delete_message(&self, id: &[u8; 16]) -> Result<()> {
         self.transaction(|s| {
-            s.delete_receipt(id)?;
+            if let Some(m) = s.message(id)? {
+                if m.file.is_some() {
+                    s.record_received(&m.peer, id)?;
+                }
+            }
+            s.retain_deleted_receipt_cleanup(id)?;
             s.del_raw(Table::Messages, id)
         })
     }
@@ -765,17 +780,24 @@ impl Store {
             if s.has_receipt(&f.id)? {
                 return Err(OmcpError::Store("receipt owns outgoing ID"));
             }
-            s.put(Table::OutFiles, &f.id, Some(&f.peer), f)?;
-            for (i, c) in chunks.iter().enumerate() {
-                s.put_raw(
-                    Table::FileChunks,
-                    &chunk_id(&f.id, i as u32),
-                    Some(&f.id),
-                    c.as_ref(),
-                )?;
-            }
-            Ok(())
+            s.put_out_file_rows(f, chunks)
         })
+    }
+    fn put_out_file_rows<C: AsRef<[u8]>>(&self, f: &OutFileRec, chunks: &[C]) -> Result<()> {
+        self.put(Table::OutFiles, &f.id, Some(&f.peer), f)?;
+        for (i, c) in chunks.iter().enumerate() {
+            self.put_raw(
+                Table::FileChunks,
+                &chunk_id(&f.id, i as u32),
+                Some(&f.id),
+                c.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+    /// Metadata-only lookup; cancellation must not load sealed outgoing payloads.
+    pub fn out_file_exists(&self, id: &[u8; 16]) -> Result<bool> {
+        Ok(self.get::<OutFileRec>(Table::OutFiles, id)?.is_some())
     }
     pub fn delete_out_file(&self, id: &[u8; 16]) -> Result<()> {
         self.transaction(|s| {

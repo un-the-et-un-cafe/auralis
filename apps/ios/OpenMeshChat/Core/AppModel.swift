@@ -20,7 +20,11 @@ final class AppModel: ObservableObject {
     init(core: OmcpCore = RustOmcpCore(), store: AppStore = DefaultsAppStore(),
          persistentStore: Bool = true,
          clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }) {
-        repo = MeshRepository(core: core, store: store, dbPath: persistentStore ? Self.localStorePath() : nil, persistentStoreRequired: persistentStore, dbPathProvider: persistentStore ? { Self.localStorePath() } : nil, clock: clock)
+        let receiptQueue = DispatchQueue(label: "chat.auralis.received-files", qos: .utility)
+        repo = MeshRepository(core: core, store: store, dbPath: persistentStore ? Self.localStorePath() : nil,
+            persistentStoreRequired: persistentStore, dbPathProvider: persistentStore ? { Self.localStorePath() } : nil,
+            receiveExecutor: { work in receiptQueue.async(execute: work) },
+            receivePublisher: { work in DispatchQueue.main.async(execute: work) }, clock: clock)
         onboarded = false
         backupGate = repo.backupGate()
         repo.notifier = LocalNotifier()
