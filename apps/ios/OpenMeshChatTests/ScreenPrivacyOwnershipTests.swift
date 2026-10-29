@@ -127,16 +127,22 @@ final class ScreenPrivacyOwnershipTests: XCTestCase {
     @MainActor
     func testAbandonedFinalLeaseEventuallyRestoresFlagsAndReleasesController() async throws {
         let (scene, window, notifications, registry) = try fixture()
-        var lease: WindowPrivacyLease? = registry.acquire(for: window) { _ in }
-        notifications.post(name: UIScene.didActivateNotification, object: scene)
-        weak var controller = lease?.controller
-        weak var shield = controller?.coverWindow
-        XCTAssertNotNil(shield)
-        lease = nil
-        // Deinit fallback must hop to main; bounded wait tests eventual cleanup, not timing.
-        for _ in 0..<100 {
-            if controller == nil { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
+        weak var controller: ScenePrivacyController?
+        weak var shield: UIWindow?
+        autoreleasepool {
+            var lease: WindowPrivacyLease? = registry.acquire(for: window) { _ in }
+            notifications.post(name: UIScene.didActivateNotification, object: scene)
+            controller = lease?.controller
+            shield = controller?.coverWindow
+            XCTAssertNotNil(shield)
+            lease = nil
+        }
+        // Lease deinit deliberately hops to main. Once its controller is gone, any
+        // UIKit-retained shell must already be detached; wait for BOTH weak references.
+        try await drainPrivacyWindowLifetime {
+            guard controller == nil else { return false }
+            assertPrivacyWindowDetached(shield, from: scene)
+            return shield == nil
         }
         XCTAssertNil(controller)
         XCTAssertNil(shield)
@@ -195,16 +201,23 @@ final class ScreenPrivacyOwnershipTests: XCTestCase {
         window.updateTraitsIfNeeded()
         var firstValues: [Bool] = []
         var secondValues: [Bool] = []
-        let first = registry.acquire(for: window) { firstValues.append($0) }
-        let second = registry.acquire(for: window) { secondValues.append($0) }
+        weak var oldShield: UIWindow?
+        let (first, second) = autoreleasepool {
+            let first = registry.acquire(for: window) { firstValues.append($0) }
+            let second = registry.acquire(for: window) { secondValues.append($0) }
+            notifications.post(name: UIScene.didActivateNotification, object: scene)
+            oldShield = first.controller.coverWindow
+            notifications.post(name: UIScene.didDisconnectNotification, object: scene)
+            XCTAssertNil(first.controller.coverWindow)
+            assertPrivacyWindowDetached(oldShield, from: scene)
+            return (first, second)
+        }
         defer { first.release(); second.release() }
-        notifications.post(name: UIScene.didActivateNotification, object: scene)
-        weak var oldShield = first.controller.coverWindow
-        notifications.post(name: UIScene.didDisconnectNotification, object: scene)
         await flushVisibility()
         XCTAssertEqual(firstValues, [false])
         XCTAssertEqual(secondValues, [false])
         XCTAssertNil(first.controller.coverWindow)
+        try await drainPrivacyWindowLifetime { oldShield == nil }
         XCTAssertNil(oldShield)
         // The synthetic event doesn't really disconnect UIKit. Re-subscription must still
         // reuse the Entry. Actual unattached/reconnected scene behavior remains device QA.

@@ -110,19 +110,49 @@ old owners. Actual disconnected/reconnected UIKit scenes still need native accep
 - `git diff --check`.
 - Zero diff from PR 20 under Android, Rust crates, protocol/extensions, and the invariant manifest.
 
-**Added, not run locally:** complete nine-combination Swift policy matrix; seventeen native
+**Added, not run locally:** complete nine-combination Swift policy matrix; eighteen native
 XCTest fixtures covering already-active capture, lifecycle transitions, distinct controller state,
 unrelated notifications, repeated attach, cleanup/rebind/disconnect, queued reveal invalidation,
 opaque/full-frame/non-key cover, full-screen modal ordering, fictional keyboard draft preservation,
 and shared-owner removal orders, deallocation, rebind, late cleanup and listener suppression.
 Fixture notifications/trait overrides test controller wiring, not real recording hardware.
 
-**Blocked / not run:** Swift compilation/parsing, SwiftPM, native XCTest and UI smoke,
-Xcode SDK 26 build, actual iOS 17/18.5/26.2 execution. Neither `swift` nor `xcodebuild` is
-installed on this Linux executor. No native test pass is inferred from Python checks or PR 20 CI.
+**Local limit:** neither `swift` nor `xcodebuild` is installed on this Linux executor.
+No native test pass is inferred from Python checks or PR 20 CI.
+
+### First exact-candidate hosted run — not green
+
+[CI 41, attempt 1](https://github.com/un-the-et-un-cafe/auralis/actions/runs/40926376710)
+ran the published commit `250f6ba536aae902abdaa87be94e0276d69027b8`
+(tree `de2f191586bae143d36e0f7f17d440ac9da6c026`) using the unchanged normal CI workflow.
+Both iOS 18.5 and 26.2 jobs passed SwiftPM, SDK 26.2 compilation, simulator signing/Keychain
+entitlement checks and app UI smoke. Each native unit suite ran 40 tests with 3 failures:
+
+- `testAbandonedFinalLeaseEventuallyRestoresFlagsAndReleasesController`
+- `testDisconnectInvalidatesRevealsAndReusesSingleControllerForSurvivingLeases`
+- `testDetachRestoresExistingFlagsAndRemovesObservers`
+
+All three failed weak-window deallocation assertions. Logs showed an already-hidden window;
+controller/cover-reference cleanup assertions passed. That suggests a UIKit lifetime/fixture
+timing issue, **not yet proof that retention is harmless**. The next test-only candidate adds
+an independent plain-UIWindow control, explicit autorelease scopes, synchronous hidden/non-key/
+content-free/disconnected/no-scene-membership assertions, and a bounded main-run-loop drain.
+The final weak-nil leak assertions remain mandatory. Abandoned-lease cleanup must release both
+controller and window, not stop waiting as soon as only the controller disappears. Production
+privacy behavior is unchanged. The control and corrected fixtures still require native execution.
+
+Rust, workflow lint, Android build/lint/unit tests and API 35 instrumentation passed. API 31
+failed before test startup when its emulator download encountered an HTTP/2 error; one normal
+failed-job retry is running. API 36-16k ran 33 tests with one existing app-smoke timeout; that
+failure is not treated as a pass or excused by unchanged Android source. No gates are disabled.
+
+Actual iOS 17 execution and real recording/app-switcher/multiscene/VoiceOver/device acceptance
+remain pending. Hosted simulator fixtures do not establish these physical/runtime guarantees.
 
 Independent source review found and prompted fixes for detach visibility, stale notification
 ownership and synchronous delivery. It is not an independent security audit or native runtime pass.
+The final shared-ownership source was also read by the parent reviewer without an immediate
+source blocker; this was not an independent native audit.
 
 ## Required acceptance before adoption
 

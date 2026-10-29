@@ -86,27 +86,55 @@ final class ScreenPrivacyTests: XCTestCase {
     }
 
     @MainActor
-    func testDetachRestoresExistingFlagsAndRemovesObservers() throws {
+    func testDetachRestoresExistingFlagsAndRemovesObservers() async throws {
         let (scene, window, notifications, controller) = try fixture()
         window.isUserInteractionEnabled = false
         window.accessibilityElementsHidden = true
-        controller.attach(to: window)
-        notifications.post(name: UIScene.didActivateNotification, object: scene)
-        XCTAssertFalse(window.isUserInteractionEnabled)
-        XCTAssertTrue(window.accessibilityElementsHidden)
-        setCapture(.active, on: window)
-        controller.refreshCapture()
-        weak var oldShield = controller.coverWindow
-        controller.detach()
-        XCTAssertNil(controller.coverWindow)
+        weak var oldShield: UIWindow?
+        autoreleasepool {
+            controller.attach(to: window)
+            notifications.post(name: UIScene.didActivateNotification, object: scene)
+            XCTAssertFalse(window.isUserInteractionEnabled)
+            XCTAssertTrue(window.accessibilityElementsHidden)
+            setCapture(.active, on: window)
+            controller.refreshCapture()
+            oldShield = controller.coverWindow
+            controller.detach()
+            XCTAssertNil(controller.coverWindow)
+            assertPrivacyWindowDetached(oldShield, from: scene)
+            XCTAssertFalse(window.isUserInteractionEnabled)
+            XCTAssertTrue(window.accessibilityElementsHidden)
+            notifications.post(name: UIScene.didActivateNotification, object: scene)
+            setCapture(.inactive, on: window)
+            window.layoutIfNeeded()
+            XCTAssertEqual(controller.cover, .unavailable)
+            XCTAssertNil(controller.coverWindow)
+        }
+        // UIKit can retain a hidden window until the current autorelease/appearance work
+        // drains. Teardown above is synchronous; final deallocation remains mandatory.
+        try await drainPrivacyWindowLifetime { oldShield == nil }
         XCTAssertNil(oldShield)
-        XCTAssertFalse(window.isUserInteractionEnabled)
-        XCTAssertTrue(window.accessibilityElementsHidden)
-        notifications.post(name: UIScene.didActivateNotification, object: scene)
-        setCapture(.inactive, on: window)
-        window.layoutIfNeeded()
-        XCTAssertEqual(controller.cover, .unavailable)
-        XCTAssertNil(controller.coverWindow)
+    }
+
+    @MainActor
+    func testDetachedPlainUIKitWindowLifetimeBaseline() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        weak var oldWindow: UIWindow?
+        autoreleasepool {
+            // No privacy controller/registry: control for UIKit's own window lifetime.
+            let window = UIWindow(windowScene: scene)
+            window.rootViewController = UIViewController()
+            window.windowLevel = .init(rawValue: UIWindow.Level.alert.rawValue + 1)
+            window.isHidden = false
+            window.layoutIfNeeded()
+            oldWindow = window
+            window.isHidden = true
+            window.rootViewController = nil
+            window.windowScene = nil
+            assertPrivacyWindowDetached(window, from: scene)
+        }
+        try await drainPrivacyWindowLifetime { oldWindow == nil }
+        XCTAssertNil(oldWindow, "Plain UIKit control also retained a detached window after draining")
     }
 
     @MainActor
