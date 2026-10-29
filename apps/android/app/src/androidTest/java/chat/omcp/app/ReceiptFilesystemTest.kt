@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import chat.omcp.app.core.ReceiveReceiptInfo
 import chat.omcp.app.core.ReceiptVerifier
+import chat.omcp.app.core.ReceiveContentMismatch
 import chat.omcp.app.files.AndroidReceiptFiles
 import chat.omcp.app.files.ReceiptSource
 import chat.omcp.app.files.TrustedReceivedPaths
@@ -21,7 +22,9 @@ class ReceiptFilesystemTest {
     private fun root() = File(context.cacheDir.canonicalFile, "receipt-test-${System.nanoTime()}").apply { check(mkdir()) }
     private fun receipt(size: Int) = ReceiveReceiptInfo("11".repeat(16), "22".repeat(32), "../../peer-name", "application/octet-stream", size.toLong(), "11".repeat(16) + "33".repeat(32), "44".repeat(32), (size + 65535) / 65536)
     private fun source(bytes: ByteArray, reads: (() -> Unit)? = null,
-        authorization: (Boolean) -> Boolean = { true }, verifierFailure: Boolean = false) = object : ReceiptSource {
+        authorization: (Boolean) -> Boolean = { true }, verifierFailure: Boolean = false,
+        repairAuthorization: () -> Boolean = { false }) = object : ReceiptSource {
+        override fun authorizeRepair() = repairAuthorization()
         override fun authorizeWrite(replacingIncomplete: Boolean) = authorization(replacingIncomplete)
         override fun readBlock(index: Int): ByteArray {
             reads?.invoke()
@@ -35,7 +38,7 @@ class ReceiptFilesystemTest {
             override fun finish() {
                 if (verifierFailure) throw java.io.IOException("verifier unavailable")
                 check(count == bytes.size)
-                check(hash.digest().contentEquals(MessageDigest.getInstance("SHA-256").digest(bytes)))
+                if (!hash.digest().contentEquals(MessageDigest.getInstance("SHA-256").digest(bytes))) throw ReceiveContentMismatch()
             }
         }
     }
@@ -93,7 +96,7 @@ class ReceiptFilesystemTest {
             val r = receipt(3); val sink = AndroidReceiptFiles(dir); val bytes = byteArrayOf(1, 2, 3)
             val path = sink.finalize(r, source(bytes))
             File(path).writeBytes(byteArrayOf(9, 9, 9))
-            assertThrows(IllegalStateException::class.java) { sink.finalize(r, source(bytes)) }
+            assertThrows(ReceiveContentMismatch::class.java) { sink.finalize(r, source(bytes)) }
             assertArrayEquals(byteArrayOf(9, 9, 9), File(path).readBytes())
             sink.discard(r); assertFalse(File(path).exists())
         } finally { dir.deleteRecursively() }
@@ -239,6 +242,60 @@ class ReceiptFilesystemTest {
             assertFalse(sink.isDefinitelyMissing(requireNotNull(paths.map(File(lexical, "received/missing-parent/absent").path))))
             assertNull(paths.map(File(lexical.parentFile, lexical.name + "-foreign/received/absent").path))
         } finally { dir.deleteRecursively(); outside.deleteRecursively() }
+    }
+
+    @Test fun explicitRepairRequiresTypedMismatchAndValidatedSpoolWhileRetryNeverDeletes() {
+        val dir = root()
+        try {
+            val bytes = byteArrayOf(1, 2, 3); val r = receipt(3); val sink = AndroidReceiptFiles(dir)
+            val file = File(sink.finalize(r, source(bytes)))
+            file.writeBytes(byteArrayOf(9, 9, 9))
+            val before = file.readBytes(); val inode = Os.lstat(file.path).st_ino
+            assertThrows(ReceiveContentMismatch::class.java) { sink.finalize(r, source(bytes)) }
+            assertEquals(inode, Os.lstat(file.path).st_ino); assertArrayEquals(before, file.readBytes())
+            var validated = 0
+            assertEquals(file.path, sink.repair(r, source(bytes, repairAuthorization = { validated++; true })))
+            assertEquals(1, validated); assertArrayEquals(bytes, file.readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun repairReadVerifierSpoolAndStaleErrorsPreserveCandidate() {
+        val dir = root()
+        try {
+            val bytes = byteArrayOf(1, 2, 3); val r = receipt(3); val sink = AndroidReceiptFiles(dir)
+            val file = File(sink.finalize(r, source(bytes))).apply { writeBytes(byteArrayOf(9, 9, 9)) }
+            val before = file.readBytes(); val inode = Os.lstat(file.path).st_ino
+            assertThrows(java.io.IOException::class.java) {
+                AndroidReceiptFiles(dir) { if (it == "read") throw java.io.IOException("protected") }
+                    .repair(r, source(bytes, repairAuthorization = { true }))
+            }
+            assertThrows(java.io.IOException::class.java) { sink.repair(r, source(bytes, verifierFailure = true, repairAuthorization = { true })) }
+            assertThrows(IllegalStateException::class.java) { sink.repair(r, source(bytes)) } // No sealed validation.
+            assertThrows(java.io.IOException::class.java) { sink.repair(r, source(bytes, repairAuthorization = { throw java.io.IOException("bad sealed block") })) }
+            var pending = true
+            val cancelled = AndroidReceiptFiles(dir) { if (it == "repair-remove") pending = false }
+            assertThrows(IllegalStateException::class.java) { cancelled.repair(r, source(bytes, authorization = { pending }, repairAuthorization = { pending })) }
+            assertEquals(inode, Os.lstat(file.path).st_ino); assertArrayEquals(before, file.readBytes())
+            assertThrows(IllegalStateException::class.java) {
+                AndroidReceiptFiles(dir, AndroidReceiptFiles.Namespace.Backup).repair(r, source(bytes, repairAuthorization = { true }))
+            }
+            assertArrayEquals(before, file.readBytes())
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun repairRefusesCandidateInodeReplacementDuringValidation() {
+        val dir = root()
+        try {
+            val bytes = byteArrayOf(1, 2, 3); val r = receipt(3); val sink = AndroidReceiptFiles(dir)
+            val file = File(sink.finalize(r, source(bytes))).apply { writeBytes(byteArrayOf(9, 9, 9)) }
+            val changed = AndroidReceiptFiles(dir) { if (it == "repair-remove") {
+                Os.rename(file.path, file.path + ".saved")
+                file.writeBytes(byteArrayOf(8, 8, 8))
+            } }
+            assertThrows(IllegalStateException::class.java) { changed.repair(r, source(bytes, repairAuthorization = { true })) }
+            assertArrayEquals(byteArrayOf(8, 8, 8), file.readBytes())
+            assertArrayEquals(byteArrayOf(9, 9, 9), File(file.path + ".saved").readBytes())
+        } finally { dir.deleteRecursively() }
     }
 
 }

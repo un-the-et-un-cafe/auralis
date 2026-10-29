@@ -49,6 +49,7 @@ class RustOmcpCore : OmcpCore {
 
     override fun markReceivedFileMissing(transferId: String, expectedLocalPath: String) = n().markReceivedFileMissing(transferId, expectedLocalPath)
     override fun pendingReceivedFiles() = n().pendingReceivedFiles().map { it.toReceipt() }
+    override fun validateReceivedFileForRepair(receiptToken: String) = n().validateReceivedFileForRepair(receiptToken).toReceipt()
     override fun cancelledReceivedFiles() = n().cancelledReceivedFiles().map { it.toReceipt() }
     override fun acknowledgeReceivedFileCleanup(receiptToken: String) = n().acknowledgeReceivedFileCleanup(receiptToken)
     override fun retryReceivedFiles() = n().retryReceivedFiles().map { it.toReceipt() }
@@ -61,7 +62,8 @@ class RustOmcpCore : OmcpCore {
         val verifier = n().receivedFileVerifier(receiptToken)
         return object : ReceiptVerifier {
             override fun update(bytes: ByteArray) = verifier.update(bytes)
-            override fun finish() = verifier.finish()
+            override fun finish() = try { verifier.finish() }
+                catch (e: FfiException.FileContentMismatch) { throw ReceiveContentMismatch(e) }
             override fun close() = verifier.destroy()
         }
     }

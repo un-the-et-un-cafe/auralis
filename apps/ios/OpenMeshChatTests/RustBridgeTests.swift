@@ -231,6 +231,37 @@ final class RustBridgeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), bytes)
     }
 
+    func testExplicitRepairUsesRealTypedVerifierAndSealedSpoolWithoutNetworkRequest() throws {
+        let root = try DurableReceivedFiles.physicalTrustedDirectory(FileManager.default.temporaryDirectory)
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (sender, sent) = try node("Sender")
+        let (receiver, received) = try node("Receiver")
+        let peer = try sent.addContact(qr: try receiver.qrPayload(), action: .chatWithoutVerifying)
+        _ = try received.addContact(qr: try sender.qrPayload(), action: .chatWithoutVerifying)
+        let a = try sender.openInitiatorLink(peer.id), b = try receiver.openResponderLink()
+        try pump(a, b, try a.start(), into: sent, received)
+        let bytes = Data([1, 2, 3, 4])
+        let id = try sent.sendFile(peer.id, name: "photo", mime: "application/octet-stream", bytes: bytes)
+        try pump(a, b, try a.flush(), into: sent, received)
+        a.close(); b.close()
+        let receipt = try XCTUnwrap(receiver.pendingReceivedFiles().first)
+        let path = root.appendingPathComponent(receipt.receiptToken + ".bin")
+        try Data([9, 9, 9, 9]).write(to: path)
+        received.fileSink = durableSink(root: root)
+        received.retryReceivedFiles()
+        XCTAssertEqual(try Data(contentsOf: path), Data([9, 9, 9, 9]))
+        XCTAssertNil(received.messages.values.flatMap { $0 }.first { $0.id == id }?.file?.localPath)
+        let action = try XCTUnwrap(received.localReceiptRepairs[id])
+        let queued = receiver.queuedFor(receipt.contactId)
+        received.repairLocalReceivedFile(action)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        XCTAssertTrue(try receiver.pendingReceivedFiles().isEmpty)
+        XCTAssertEqual(receiver.queuedFor(receipt.contactId), queued)
+        XCTAssertEqual(received.messages.values.flatMap { $0 }.first { $0.id == id }?.file?.state, .received)
+    }
+
     /// File transfer through the real core: 64 KiB chunks drained over several flushes.
     func testFileTransferIn64kChunks() throws {
         let (ca, ra) = try node("Ana")

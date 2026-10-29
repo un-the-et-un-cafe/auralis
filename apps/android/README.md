@@ -230,11 +230,18 @@ and metadata authorization plus device/inode checks under the serialized reposit
 lifecycle boundary. Legacy backup imports cannot authorize this repair and use a fixed, disjoint `backup-`
 filename namespace rather than transport `receipt-` paths. Unknown read,
 verification, storage or capability errors preserve the candidate and sealed spool.
-Full-sized corrupt or oversized candidates refuse automatic repair. **This remains a
-v1 recovery/UI blocker:** retry cannot repair a torn full-size candidate, and cancellation
-does not reopen the same transfer ID because its tombstone remains protective. The
-available remedy is explicit cancellation and a partner sending a new transfer ID; a
-dedicated user-authorized repair API must be designed separately after this checkpoint. Random generation names
+Full-sized corrupt or oversized candidates still refuse automatic repair. A distinct
+**Repair local copy** action is offered only after a typed full-length content mismatch;
+confirmation captures a one-time eligibility action containing the full receipt metadata
+and identity epoch. Rekey, identity reload or a fresh retry invalidates old confirmations. It re-verifies the mismatch, validates
+the entire encrypted spool, rechecks exact Pending metadata and the same regular,
+single-link inode, then removes only that damaged candidate and runs the existing durable
+finalizer. Generic read/verifier/store errors, length mismatches, stale capabilities and
+backup paths never authorize deletion. No database transaction spans filesystem I/O.
+Cancellation tombstones remain protective; this action never requests a cancelled transfer
+again. Restart/normal retry discovers eligible damage but never repairs it automatically.
+This checkpoint's new UI/runtime tests still require exact-head hosted validation.
+Random generation names
 and exclusive private app mutation are the ownership boundary, not a guarantee against
 malicious code running with the same application UID. Any failed commit retains the
 sealed receipt, allowing a complete valid candidate to be verified and committed later.

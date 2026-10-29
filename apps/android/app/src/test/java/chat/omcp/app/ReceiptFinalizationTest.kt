@@ -11,7 +11,7 @@ import kotlin.concurrent.thread
 
 class ReceiptFinalizationTest {
     private class Core : OmcpCore by FakeOmcpCore() {
-        val receipt = ReceiveReceiptInfo("11".repeat(16), "22".repeat(32), "file", "application/octet-stream", 3, "11".repeat(16) + "33".repeat(32), "44".repeat(32), 1)
+        var receipt = ReceiveReceiptInfo("11".repeat(16), "22".repeat(32), "file", "application/octet-stream", 3, "11".repeat(16) + "33".repeat(32), "44".repeat(32), 1)
         var conflictingCompleted = false
         var cleanup = false
         var cleanupAckFails = false
@@ -22,6 +22,8 @@ class ReceiptFinalizationTest {
         var path: String? = null
         var beforeCommit: (() -> Unit)? = null
         var commits = 0
+        var repairValidationFails = false
+        var repairValidations = 0
         var retryFails = false
         var commitFails = false
         var cancelFails = false
@@ -35,6 +37,12 @@ class ReceiptFinalizationTest {
             if (conflictingCompleted) listOf(StoredMessageInfo("other", receipt.contactId, "", true, 1, "Sent", null, null, "None", null,
                 StoredFileInfo("resend", "text/plain", 3, "Received", 3, "/private/absent"))) else emptyList()
         override fun pendingReceivedFiles() = if (pending) listOf(receipt) else emptyList()
+        override fun validateReceivedFileForRepair(receiptToken: String): ReceiveReceiptInfo {
+            check(pending && receiptToken == receipt.receiptToken)
+            repairValidations++
+            if (repairValidationFails) error("sealed spool unavailable")
+            return receipt
+        }
         override fun cancelledReceivedFiles(): List<ReceiveReceiptInfo> { cleanupLists++; return if (cleanup) listOf(receipt) else emptyList() }
         override fun acknowledgeReceivedFileCleanup(receiptToken: String): Boolean {
             check(receiptToken == receipt.receiptToken)
@@ -225,6 +233,87 @@ class ReceiptFinalizationTest {
         assertTrue(r.retryFileFinalization().get())
         assertEquals(FileAttachment.State.Received, message(r).file!!.state)
         assertEquals("/private/candidate", message(r).file!!.localPath)
+    }
+
+    @Test fun onlyExplicitConfirmedActionRepairsAndUnknownErrorsNeverGrantEligibility() {
+        val c = Core(); val r = repo(c); var repairs = 0
+        r.receiptSink = object : DurableReceiptSink {
+            override fun finalize(receipt: ReceiveReceiptInfo, source: ReceiptSource): String = throw ReceiveContentMismatch()
+            override fun repair(receipt: ReceiveReceiptInfo, source: ReceiptSource): String {
+                check(source.authorizeRepair()); repairs++
+                assertEquals(FileAttachment.State.Finalizing, message(r).file!!.state)
+                assertNull(message(r).file!!.localPath)
+                return "/private/repaired"
+            }
+        }
+        assertFalse(r.retryFileFinalization().get()) // Restart discovery, still non-destructive.
+        assertFalse(r.retryFileFinalization().get())
+        assertEquals(0, repairs); assertEquals(0, c.repairValidations)
+        val oldToken = r.repairableReceipts.value.getValue(c.receipt.transferId).actionId
+        c.receipt = c.receipt.copy(receiptToken = c.receipt.transferId + "55".repeat(32))
+        r.onFileReceived(c.receipt)
+        assertFalse(r.repairLocalFile(c.receipt.transferId, oldToken).get())
+        assertEquals(0, repairs)
+        c.repairValidationFails = true
+        assertFalse(r.repairLocalFile(c.receipt.transferId, r.repairableReceipts.value[c.receipt.transferId]?.actionId ?: "no-action").get())
+        assertTrue(c.pending); assertEquals(0, c.commits); assertEquals(0, repairs)
+        assertTrue(r.repairableReceipts.value.isEmpty())
+        c.repairValidationFails = false
+        r.retryFileFinalization().get()
+        c.beforeCommit = { assertNull(message(r).file!!.localPath) }
+        c.commitFails = true
+        assertFalse(r.repairLocalFile(c.receipt.transferId, r.repairableReceipts.value[c.receipt.transferId]?.actionId ?: "no-action").get())
+        assertTrue(c.pending); assertNull(message(r).file!!.localPath)
+        c.commitFails = false
+        r.retryFileFinalization().get()
+        assertTrue(r.repairLocalFile(c.receipt.transferId, r.repairableReceipts.value[c.receipt.transferId]?.actionId ?: "no-action").get())
+        assertEquals(1, c.commits); assertFalse(c.pending)
+        assertEquals("/private/repaired", message(r).file!!.localPath)
+        assertTrue(r.repairableReceipts.value.isEmpty())
+    }
+
+    @Test fun cancelledOrUnreadableCandidateCannotBeRepairedFromStaleEligibility() {
+        val c = Core(); val r = repo(c)
+        r.receiptSink = DurableReceiptSink { _, _ -> throw java.io.IOException("protected file") }
+        r.onFileReceived(c.receipt)
+        assertTrue(r.repairableReceipts.value.isEmpty())
+        assertFalse(r.repairLocalFile(c.receipt.transferId, r.repairableReceipts.value[c.receipt.transferId]?.actionId ?: "no-action").get())
+        r.receiptSink = DurableReceiptSink { _, _ -> throw ReceiveContentMismatch() }
+        r.onFileReceived(c.receipt)
+        assertEquals(c.receipt, r.repairableReceipts.value.getValue(c.receipt.transferId).receipt)
+        val cancelledAction = r.repairableReceipts.value.getValue(c.receipt.transferId).actionId
+        r.cancelFile(c.receipt.contactId, c.receipt.transferId)
+        assertTrue(r.repairableReceipts.value.isEmpty())
+        assertFalse(r.repairLocalFile(c.receipt.transferId, cancelledAction).get())
+        assertEquals(0, c.repairValidations); assertEquals(0, c.commits)
+    }
+
+    @Test fun rekeyAndIdentityReloadCannotReviveOldConfirmationWithSameToken() {
+        val c = Core(); val r = repo(c); var repairs = 0
+        r.receiptSink = object : DurableReceiptSink {
+            override fun finalize(receipt: ReceiveReceiptInfo, source: ReceiptSource): String = throw ReceiveContentMismatch()
+            override fun repair(receipt: ReceiveReceiptInfo, source: ReceiptSource): String {
+                check(source.authorizeRepair()); repairs++; return "/private/repaired"
+            }
+        }
+        r.onFileReceived(c.receipt)
+        val beforeRekey = r.repairableReceipts.value.getValue(c.receipt.transferId).actionId
+        val unchangedToken = c.receipt.receiptToken
+        c.receipt = c.receipt.copy(contactId = "66".repeat(32))
+        assertFalse(r.repairLocalFile(c.receipt.transferId, beforeRekey).get())
+        assertEquals(0, repairs)
+        r.retryFileFinalization().get()
+        val beforeReload = r.repairableReceipts.value.getValue(c.receipt.transferId).actionId
+        assertEquals(unchangedToken, c.receipt.receiptToken)
+        r.saveIdentity((1..24).joinToString(" ") { "word$it" }, "Reloaded identity")
+        assertTrue(r.repairableReceipts.value.isEmpty())
+        r.retryFileFinalization().get()
+        val afterReload = r.repairableReceipts.value.getValue(c.receipt.transferId).actionId
+        assertNotEquals(beforeReload, afterReload)
+        assertFalse(r.repairLocalFile(c.receipt.transferId, beforeReload).get())
+        assertEquals(0, repairs)
+        assertTrue(r.repairLocalFile(c.receipt.transferId, afterReload).get())
+        assertEquals(1, repairs)
     }
 
 }

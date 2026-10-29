@@ -40,6 +40,8 @@ public protocol FileSink: AnyObject {
     func save(_ file: ReceivedFileInfo) -> String?
     func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data,
                   verifier: ReceiveFileVerifier) throws -> String
+    func removeCorruptLocalCopy(_ receipt: ReceiveReceiptInfo, verifier: ReceiveFileVerifier,
+                                authorize: () throws -> Void) throws
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws
     func readForResend(_ path: String) throws -> Data?
     func validatedPathForOpening(_ path: String) throws -> String?
@@ -47,6 +49,8 @@ public protocol FileSink: AnyObject {
     func isDefinitelyMissing(_ path: String) throws -> Bool
 }
 public extension FileSink {
+    func removeCorruptLocalCopy(_ receipt: ReceiveReceiptInfo, verifier: ReceiveFileVerifier,
+                                authorize: () throws -> Void) throws { throw CoreError.storageUnavailable("safe repair unavailable") }
     func validatedPathForOpening(_ path: String) throws -> String? { throw CoreError.storageUnavailable("safe file opening unavailable") }
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { throw CoreError.storageUnavailable("receipt cleanup unavailable") }
     func readForResend(_ path: String) throws -> Data? { throw CoreError.storageUnavailable("safe file reader unavailable") }
@@ -109,6 +113,19 @@ public final class MeshRepository {
     private let receiveExecutor: (@escaping () -> Void) -> Void
     private let receivePublisher: (@escaping () -> Void) -> Void
     public private(set) var receiveFinalizationErrors: [String: String] = [:]
+    public private(set) var localReceiptRepairs: [String: LocalReceiptRepairAction] = [:]
+    private let repairEpochLock = NSLock()
+    private var repairEpoch: UInt64 = 0
+    private func currentRepairEpoch() -> UInt64 {
+        repairEpochLock.lock(); defer { repairEpochLock.unlock() }; return repairEpoch
+    }
+    private func invalidateRepairActions() {
+        repairEpochLock.lock(); repairEpoch &+= 1; let epoch = repairEpoch; repairEpochLock.unlock()
+        receivePublisher { [weak self] in
+            guard let self, self.currentRepairEpoch() == epoch else { return }
+            self.localReceiptRepairs.removeAll()
+        }
+    }
     private func serializeReceipts<T>(_ work: () throws -> T) rethrows -> T {
         receiptLock.lock(); defer { receiptLock.unlock() }
         return try work()
@@ -202,6 +219,7 @@ public final class MeshRepository {
     }
 
     private func loadCore(phrase: String, name: String) throws {
+        invalidateRepairActions()
         resolveStorePathIfNeeded()
         guard let path = dbPath else {
             guard !persistentStoreRequired else { throw CoreError.storageUnavailable("store directory unavailable") }
@@ -521,10 +539,11 @@ public final class MeshRepository {
         } catch { publishReceiveState(receipt.transferId, error: "Transfer cancelled; private file cleanup is waiting for storage.") }
     }
 
-    private func publishReceiveState(_ id: String, error: String?) {
+    private func publishReceiveState(_ id: String, error: String?, repair: LocalReceiptRepairAction? = nil) {
         receivePublisher { [weak self] in
             guard let self else { return }
             self.receiveFinalizationErrors[id] = error
+            self.localReceiptRepairs[id] = repair.flatMap { $0.identityEpoch == self.currentRepairEpoch() ? $0 : nil }
             // Re-read authoritative current state, never publish a cached receipt
             // snapshot after cancellation or a newer generation.
             self.loadMessages()
@@ -543,10 +562,40 @@ public final class MeshRepository {
             }, verifier: verifier)
             try core.commitReceivedFile(receipt.receiptToken, path: path)
             publishReceiveState(receipt.transferId, error: nil)
+        } catch CoreError.localReceiveContentMismatch {
+            let fresh = (try? core.pendingReceivedFiles().contains(receipt)) == true
+            let action = fresh ? LocalReceiptRepairAction(receipt: receipt, identityEpoch: currentRepairEpoch()) : nil
+            publishReceiveState(receipt.transferId, error: "Local copy differs from verified data. Explicit repair is available.", repair: action)
         } catch {
             // Keep sealed bytes and Finalizing, including when filesystem work
             // completed but the DB commit failed. Startup can verify and retry.
             publishReceiveState(receipt.transferId, error: "Verified file is waiting to be saved.")
+        }
+    }
+
+    /// Never invoked by startup/retry: callers must confirm this exact UI snapshot.
+    public func repairLocalReceivedFile(_ action: LocalReceiptRepairAction) {
+        receiveExecutor { [weak self] in
+            guard let self else { return }
+            self.serializeReceipts {
+                let receipt = action.receipt
+                do {
+                    guard action.identityEpoch == self.currentRepairEpoch(),
+                          try self.core.pendingReceivedFiles().contains(receipt) else { throw CoreError.invalid("stale repair action") }
+                    guard try self.core.validateReceivedFileForRepair(receipt.receiptToken) == receipt else {
+                        throw CoreError.invalid("repair metadata changed")
+                    }
+                    guard let sink = self.fileSink else { throw CoreError.storageUnavailable("repair sink unavailable") }
+                    let verifier = try self.core.receivedFileVerifier(receipt.receiptToken)
+                    try sink.removeCorruptLocalCopy(receipt, verifier: verifier, authorize: {
+                        guard action.identityEpoch == self.currentRepairEpoch(),
+                              try self.core.pendingReceivedFiles().contains(receipt) else { throw CoreError.invalid("repair no longer pending") }
+                    })
+                    self.finalizeReceipt(receipt)
+                } catch {
+                    self.publishReceiveState(receipt.transferId, error: "Repair could not safely proceed. Copies were not exposed; retry saving to inspect again.")
+                }
+            }
         }
     }
 

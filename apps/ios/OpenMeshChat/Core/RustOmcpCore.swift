@@ -25,6 +25,7 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     private static func map(_ e: Error) -> Error {
         guard let f = e as? FfiError else { return e }
         switch f {
+        case .FileContentMismatch: return CoreError.localReceiveContentMismatch
         case .WrongBackupPassword: return CoreError.wrongBackupPassword
         case .Invalid(let msg): return CoreError.invalid(msg)
         case .FileTooLarge(let size, let max): return CoreError.fileTooLarge(size: size, max: max)
@@ -122,8 +123,11 @@ public final class RustOmcpCore: HoplaKit.OmcpCore {
     private final class ReceiptVerifier: ReceiveFileVerifier {
         private let inner: OmcpFFI.ReceivedFileVerifier
         init(_ inner: OmcpFFI.ReceivedFileVerifier) { self.inner = inner }
-        func update(_ bytes: Data) throws { try inner.update(bytes: bytes) }
-        func finish() throws { try inner.finish() }
+        func update(_ bytes: Data) throws { do { try inner.update(bytes: bytes) } catch { throw RustOmcpCore.map(error) } }
+        func finish() throws { do { try inner.finish() } catch { throw RustOmcpCore.map(error) } }
+    }
+    public func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo {
+        try call { Self.receipt(try n().validateReceivedFileForRepair(receiptTokenHex: receiptToken)) }
     }
     public func pendingReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().pendingReceivedFiles().map(Self.receipt) } }
     public func cancelledReceivedFiles() throws -> [ReceiveReceiptInfo] { try call { try n().cancelledReceivedFiles().map(Self.receipt) } }

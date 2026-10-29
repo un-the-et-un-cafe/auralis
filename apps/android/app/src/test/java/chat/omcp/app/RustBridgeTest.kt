@@ -123,6 +123,17 @@ class RustBridgeTest {
             alice.queueFile(b.id, "cleanup.bin", "application/octet-stream", byteArrayOf(1, 2, 3))
             drainBatches(la, lb, la.flush())
             val receipt = bob.pendingReceivedFiles().single()
+            assertEquals(receipt, bob.validateReceivedFileForRepair(receipt.receiptToken))
+            bob.receivedFileVerifier(receipt.receiptToken).use { verifier ->
+                verifier.update(byteArrayOf(3, 2, 1))
+                org.junit.Assert.assertThrows(chat.omcp.app.core.ReceiveContentMismatch::class.java) { verifier.finish() }
+            }
+            bob.receivedFileVerifier(receipt.receiptToken).use { verifier ->
+                verifier.update(byteArrayOf(1, 2))
+                val error = org.junit.Assert.assertThrows(Exception::class.java) { verifier.finish() }
+                assertFalse(error is chat.omcp.app.core.ReceiveContentMismatch)
+            }
+            assertEquals(receipt, bob.validateReceivedFileForRepair(receipt.receiptToken))
             assertEquals(receipt, bob.retryReceivedFiles().single())
             assertTrue(bob.cancelFile(receipt.transferId))
             assertTrue(bob.pendingReceivedFiles().isEmpty())

@@ -376,6 +376,25 @@ impl Store {
         let rec = self.checked_receipt(token)?;
         self.received_block(&rec, index)
     }
+    /// Validate the retained sole copy before an explicit local-file repair.
+    /// Returns a Pending metadata snapshot, not a transferable mutation permit:
+    /// native callers must serialize lifecycle operations and recheck Pending
+    /// immediately before touching the owned private file. No filesystem work
+    /// occurs while this short store transaction is held.
+    pub fn validate_received_file_for_repair(
+        &self,
+        token: &ReceivedFileToken,
+    ) -> Result<ReceivedFileReceipt> {
+        self.transaction(|s| {
+            let rec = s.checked_receipt(token)?;
+            if rec.state != PENDING {
+                return Err(refused());
+            }
+            s.verify_received_blocks(&rec)?;
+            Ok(rec.receipt)
+        })
+    }
+
     fn verify_received_blocks(&self, rec: &ReceiptRec) -> Result<()> {
         let mut hash = blake3::Hasher::new();
         for i in 0..rec.receipt.blocks {
@@ -990,6 +1009,61 @@ mod tests {
             .unwrap();
         assert_eq!(before, after);
         assert_eq!(s.received_spool_bytes().unwrap(), MAX_RECEIVED_SPOOL_BYTES);
+    }
+    #[test]
+    fn repair_validation_is_pending_only_and_never_publishes_or_changes_spool() {
+        let s = Store::open_in_memory(&KEY).unwrap();
+        let r = stage(&s, 1, PEER, &vec![7; 65_537]);
+        let before = s.export_history().unwrap();
+        let used = s.received_spool_bytes().unwrap();
+        assert_eq!(s.validate_received_file_for_repair(&r.token).unwrap(), r);
+        assert_eq!(s.export_history().unwrap(), before);
+        assert_eq!(s.received_spool_bytes().unwrap(), used);
+        let mut wrong = r.token.clone();
+        wrong.nonce[0] ^= 1;
+        assert!(s.validate_received_file_for_repair(&wrong).is_err());
+        s.commit_received_file(&r.token, "/private/verified")
+            .unwrap();
+        assert!(s.validate_received_file_for_repair(&r.token).is_err());
+        let cancelled = stage(&s, 2, PEER, b"x");
+        s.cancel_received_file(&PEER, &[2; 16]).unwrap();
+        assert!(s
+            .validate_received_file_for_repair(&cancelled.token)
+            .is_err());
+        s.delete_message(&[2; 16]).unwrap();
+        assert!(s
+            .validate_received_file_for_repair(&cancelled.token)
+            .is_err());
+    }
+    #[test]
+    fn repair_validation_refuses_authentic_but_wrong_spool_content_and_missing_blocks() {
+        for missing in [false, true] {
+            let s = Store::open_in_memory(&KEY).unwrap();
+            let r = stage(&s, 1, PEER, b"good");
+            if missing {
+                s.del_raw(Table::ReceiveBlocks, &block_id(&r.token, 0))
+                    .unwrap();
+            } else {
+                s.put_raw(
+                    Table::ReceiveBlocks,
+                    &block_id(&r.token, 0),
+                    Some(&r.token.nonce),
+                    b"evil",
+                )
+                .unwrap();
+            }
+            assert!(s.validate_received_file_for_repair(&r.token).is_err());
+            assert_eq!(s.pending_received_files().unwrap(), vec![r]);
+            assert_eq!(
+                s.message(&[1; 16])
+                    .unwrap()
+                    .unwrap()
+                    .file
+                    .unwrap()
+                    .local_path,
+                None
+            );
+        }
     }
     #[test]
     fn receipt_rejects_burn_hash_owner_and_forged_token_and_mutation() {

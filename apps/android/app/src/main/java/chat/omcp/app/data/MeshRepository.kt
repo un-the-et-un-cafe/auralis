@@ -85,6 +85,13 @@ fun interface MeshKick {
     fun kick(contactId: String)
 }
 
+/** Immutable, per-discovery authorization snapshot; never persisted or exported. */
+data class ReceiptRepairAction(
+    val actionId: String,
+    val receipt: chat.omcp.app.core.ReceiveReceiptInfo,
+    val identityEpoch: Long,
+)
+
 /**
  * Single source of truth for identity, contacts, messages and path status.
  *
@@ -136,6 +143,9 @@ class MeshRepository(
     @Volatile var receiptSink: chat.omcp.app.files.DurableReceiptSink? = null
     private val _receiveFailure = MutableStateFlow(false)
     val receiveFailure: StateFlow<Boolean> = _receiveFailure.asStateFlow()
+    private var identityEpoch = 0L
+    private val _repairableReceipts = MutableStateFlow<Map<String, ReceiptRepairAction>>(emptyMap())
+    val repairableReceipts: StateFlow<Map<String, ReceiptRepairAction>> = _repairableReceipts.asStateFlow()
     /** Encrypted chat backup (Drive appDataFolder); null when not configured. */
     @Volatile var chatBackup: chat.omcp.app.backup.ChatBackupSync? = null
 
@@ -271,6 +281,8 @@ class MeshRepository(
         _messages.value[contactId].orEmpty().count { it.file?.isPlaceholder == true }
 
     private fun loadCore(phrase: String, name: String) {
+        identityEpoch++
+        _repairableReceipts.value = emptyMap()
         val path = dbPath ?: run {
             core.load(phrase, name)
             return
@@ -296,6 +308,10 @@ class MeshRepository(
         _messages.value = core.contacts()
             .associate { c -> c.id to core.storedMessages(c.id).map(::toChatMessage) }
             .filterValues { it.isNotEmpty() }
+        val pending = core.pendingReceivedFiles().associateBy { it.transferId }
+        _repairableReceipts.update { known -> known.filter { (id, action) ->
+            action.identityEpoch == identityEpoch && pending[id] == action.receipt
+        } }
     }
 
     private fun toChatMessage(m: chat.omcp.app.core.StoredMessageInfo): ChatMessage {
@@ -403,6 +419,7 @@ class MeshRepository(
         val pending = core.pendingReceivedFiles().firstOrNull { it.transferId == transferId && it.contactId == contactId }
         // Throwing/false cancellation must never remove the UI bubble or authorize file deletion.
         if (!core.cancelFile(transferId)) return
+        _repairableReceipts.update { it - transferId }
         if (pending != null) {
             try { cleanupReceipt(pending) } catch (_: Exception) { _receiveFailure.value = true }
         }
@@ -516,7 +533,19 @@ class MeshRepository(
         return !failed
     }
 
-    private fun finalizeReceipt(receipt: chat.omcp.app.core.ReceiveReceiptInfo): Boolean {
+    /** Only an explicit UI request may enter repair; eligibility alone never mutates a file. */
+    fun repairLocalFile(transferId: String, expectedAction: String): java.util.concurrent.CompletableFuture<Boolean> = receiptTask {
+        val action = _repairableReceipts.value[transferId] ?: return@receiptTask false
+        if (action.actionId != expectedAction || action.identityEpoch != identityEpoch) return@receiptTask false
+        if (core.pendingReceivedFiles().none { it == action.receipt }) {
+            _repairableReceipts.update { it - transferId }
+            return@receiptTask false
+        }
+        finalizeReceipt(action.receipt, repair = true)
+    }
+
+    private fun finalizeReceipt(receipt: chat.omcp.app.core.ReceiveReceiptInfo, repair: Boolean = false): Boolean {
+        _repairableReceipts.update { it - receipt.transferId }
         return try {
             // Stale/duplicate events cannot create a message or restart a cancelled writer.
             val current = core.pendingReceivedFiles().firstOrNull { it.receiptToken == receipt.receiptToken }
@@ -527,16 +556,21 @@ class MeshRepository(
             val source = object : chat.omcp.app.files.ReceiptSource {
                 override fun readBlock(index: Int) = core.readReceivedFileBlock(receipt.receiptToken, index)
                 override fun verifier() = core.receivedFileVerifier(receipt.receiptToken)
+                override fun authorizeRepair() = core.validateReceivedFileForRepair(receipt.receiptToken) == receipt
                 override fun authorizeWrite(replacingIncomplete: Boolean) =
                     core.pendingReceivedFiles().any { it == receipt }
             }
-            val path = sink.finalize(receipt, source)
+            val path = if (repair) sink.repair(receipt, source) else sink.finalize(receipt, source)
             check(core.pendingReceivedFiles().any { it == receipt }) { "receipt no longer pending" }
             core.commitReceivedFile(receipt.receiptToken, path)
             loadMessages()
             _receiveFailure.value = false
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is chat.omcp.app.core.ReceiveContentMismatch &&
+                runCatching { core.pendingReceivedFiles().any { it == receipt } }.getOrDefault(false)) {
+                _repairableReceipts.update { it + (receipt.transferId to ReceiptRepairAction(java.util.UUID.randomUUID().toString(), receipt, identityEpoch)) }
+            }
             // Disk/verifier/commit failure retains core Finalizing and its sole sealed copy.
             _receiveFailure.value = true
             // Preserve the prior snapshot if the database itself is temporarily unavailable.

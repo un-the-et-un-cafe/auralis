@@ -99,6 +99,9 @@ data class ReceiveReceiptInfo(
     val transferId: String, val contactId: String, val name: String, val mime: String,
     val size: Long, val receiptToken: String, val contentHash: String, val blockCount: Int,
 )
+/** Positive full-length content mismatch only; never an I/O or stale-capability error. */
+class ReceiveContentMismatch(cause: Throwable? = null) : Exception("local received content mismatch", cause)
+
 interface ReceiptVerifier : AutoCloseable {
     fun update(bytes: ByteArray)
     fun finish()
@@ -226,6 +229,7 @@ interface OmcpCore {
 
     fun markReceivedFileMissing(transferId: String, expectedLocalPath: String): Boolean = false
     fun pendingReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
+    fun validateReceivedFileForRepair(receiptToken: String): ReceiveReceiptInfo = error("receipt repair validation unavailable")
     fun cancelledReceivedFiles(): List<ReceiveReceiptInfo> = emptyList()
     fun acknowledgeReceivedFileCleanup(receiptToken: String): Boolean = error("receipt cleanup unavailable")
     fun retryReceivedFiles(): List<ReceiveReceiptInfo> = pendingReceivedFiles()

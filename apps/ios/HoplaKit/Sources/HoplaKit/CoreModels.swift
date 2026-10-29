@@ -217,6 +217,12 @@ public struct ReceiveReceiptInfo: Equatable, Sendable {
 }
 
 /// Streaming Rust BLAKE3/length verifier, fed only bytes read back from the file.
+/// A snapshot issued only after a typed local full-length hash mismatch.
+public struct LocalReceiptRepairAction: Equatable, Sendable {
+    public let receipt: ReceiveReceiptInfo
+    let identityEpoch: UInt64
+}
+
 public protocol ReceiveFileVerifier: AnyObject {
     func update(_ bytes: Data) throws
     func finish() throws
@@ -373,6 +379,7 @@ public struct StoredMessageInfo: Equatable, Sendable {
 }
 
 public enum CoreError: Error, Equatable {
+    case localReceiveContentMismatch
     case wrongBackupPassword
     case invalid(String)
     case fileTooLarge(size: UInt64, max: UInt64)
@@ -537,6 +544,7 @@ public protocol OmcpCore: AnyObject {
     func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data
     func commitReceivedFile(_ receiptToken: String, path: String) throws
     func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier
+    func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo
     @discardableResult func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool
 
     /// Import `RestoredBackup.history` into the local store.
@@ -632,6 +640,7 @@ public extension OmcpCore {
     func retryReceivedFiles() throws -> [ReceiveReceiptInfo] { try pendingReceivedFiles() }
     func readReceivedFileBlock(_ receiptToken: String, index: UInt32) throws -> Data { throw CoreError.storageUnavailable("receipt blocks unavailable") }
     func commitReceivedFile(_ receiptToken: String, path: String) throws { throw CoreError.storageUnavailable("receipt commit unavailable") }
+    func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo { throw CoreError.storageUnavailable("repair validation unavailable") }
     func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier { throw CoreError.storageUnavailable("receipt verifier unavailable") }
     func markReceivedFileMissing(_ transferId: String, expectedPath: String) throws -> Bool { throw CoreError.storageUnavailable("missing-file transition unavailable") }
 

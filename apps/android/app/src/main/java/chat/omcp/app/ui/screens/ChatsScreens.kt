@@ -285,6 +285,7 @@ fun ChatThreadScreen(
         }
     }
     val receiveFailure by vm.repo.receiveFailure.collectAsState()
+    val repairableReceipts by vm.repo.repairableReceipts.collectAsState()
     val fileError by vm.fileError.collectAsState()
     if (fileError) {
         AlertDialog(
@@ -477,6 +478,9 @@ fun ChatThreadScreen(
                             peerName = contact?.displayName ?: "",
                             onCancel = { vm.cancelTransfer(m.id) },
                             onRetry = vm::retryFileFinalization,
+                            transferId = m.id,
+                            repairAction = repairableReceipts[m.id]?.actionId,
+                            onRepair = vm::repairLocalFile,
                             onOpen = {
                                 val path = f.localPath ?: return@FileBubble
                                 val app = ctx.applicationContext as chat.omcp.app.OmcpApplication
@@ -510,6 +514,9 @@ private fun FileBubble(
     onCancel: () -> Unit,
     onOpen: () -> Unit,
     onRetry: () -> Unit,
+    transferId: String,
+    repairAction: String?,
+    onRepair: (String, String) -> Unit,
 ) {
     val c = LocalOmcpColors.current
     val done = mb(f.doneBytes)
@@ -578,7 +585,10 @@ private fun FileBubble(
                     .semantics { contentDescription = progressLabel },
                 color = barColor,
             )
-            if (f.state == S.Finalizing) TextButton(onClick = onRetry) { Text(stringResource(R.string.file_retry_finalizing)) }
+            if (f.state == S.Finalizing) {
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.file_retry_finalizing)) }
+                if (repairAction != null) chat.omcp.app.ui.components.LocalFileRepairAction(transferId, repairAction, onRepair)
+            }
             meta?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = c.ink2, modifier = Modifier.padding(top = 4.dp)) }
         }
     }

@@ -380,9 +380,11 @@ struct ChatThreadView: View {
             Group {
                 if m.burn != nil { burnBubble(m) }
                 else if let f = m.file {
+                    let repair = model.repo.localReceiptRepairs[m.id]
                     FileBubble(file: f, mine: m.mine, peerName: model.repo.contact(contactId)?.displayName ?? "",
                                onCancel: { model.repo.cancelFile(contactId, transferId: m.id) },
                                onRetry: { model.repo.retryReceivedFiles() },
+                               onRepair: repair.map { action in { model.repo.repairLocalReceivedFile(action) } },
                                onOpen: { if let p = f.localPath {
                                    model.repo.prepareReceivedFileForOpening(m.id, path: p) { safe in
                                        if let safe { previewURL = URL(fileURLWithPath: safe) }
@@ -430,6 +432,9 @@ struct FileBubble: View {
     let peerName: String
     let onCancel: () -> Void
     let onRetry: () -> Void
+    let onRepair: (() -> Void)?
+    @State private var confirmingRepair = false
+    @State private var repairSnapshot: (() -> Void)?
     let onOpen: () -> Void
     @Environment(\.omcpColors) private var c
 
@@ -470,7 +475,6 @@ struct FileBubble: View {
                     Button(action: onCancel) { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
                         .accessibilityLabel(L(mine ? "file_cancel_a11y" : "file_cancel_receive_a11y", file.name))
                 case .finalizing:
-                    Button(L("file_retry_finalizing"), action: onRetry)
                     Button(action: onCancel) { Image(systemName: "xmark.circle").frame(minWidth: 44, minHeight: 44) }
                         .accessibilityLabel(L("file_cancel_receive_a11y", file.name))
                 case .integrityFailed:
@@ -483,6 +487,15 @@ struct FileBubble: View {
                 }
             }
             Text(line).font(.caption).foregroundStyle(file.state == .failed || file.state == .integrityFailed ? c.danger : c.ink2)
+            if file.state == .finalizing {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button(L("file_retry_finalizing"), action: onRetry).frame(minHeight: 44)
+                    if let onRepair {
+                        Button(L("file_repair_local")) { repairSnapshot = onRepair; confirmingRepair = true }
+                            .frame(minHeight: 44)
+                    }
+                }
+            }
             ProgressView(value: file.fraction).tint(tint)
                 .accessibilityValue(L("file_progress_a11y", Int(file.fraction * 100)))
             if file.state == .received { Text(L("file_integrity_checked")).font(.caption2).foregroundStyle(c.ink3) }
@@ -491,6 +504,10 @@ struct FileBubble: View {
         .frame(maxWidth: 300, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { if file.state == .received { onOpen() } }
+        .confirmationDialog(L("file_repair_local"), isPresented: $confirmingRepair, titleVisibility: .visible) {
+            Button(L("file_repair_confirm"), role: .destructive) { let action = repairSnapshot; repairSnapshot = nil; action?() }
+            Button(L("cancel"), role: .cancel) { repairSnapshot = nil }
+        } message: { Text(L("file_repair_explanation")) }
     }
 }
 

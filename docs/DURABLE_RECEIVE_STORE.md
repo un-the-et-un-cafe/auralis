@@ -83,11 +83,12 @@ regular, single-link same-generation file may be repaired after a fresh exact
 Pending capability check and pinned-directory/dev+inode validation under the
 repository's serialized mutation lock. Full-size hash mismatch, oversize,
 unknown read/verification/core-state errors and uncertain ownership preserve
-both existing file and encrypted spool. A full-size corrupt candidate is an
-explicit recovery limitation: Retry does not overwrite it, and cancellation
-retains the Failed tombstone rather than authorizing same-ID refetch. The sender
-can send a new attachment/new message ID; a dedicated user-authorized generation
-retirement/recovery action remains separate work. New creation never replaces
+both existing file and encrypted spool. Ordinary Retry never overwrites a
+full-size corrupt candidate. The separate, explicit **Repair local copy** action
+is described below; it is not startup/reconnect automation. Cancellation still
+retains the Failed tombstone rather than authorizing same-ID refetch. Once
+cancelled, requesting the same logical transfer again remains separate work;
+the sender can send a new attachment/new message ID. New creation never replaces
 an existing file. This is not a filesystem atomic-rename claim or protection against a
 hostile process sharing the app UID.
 
@@ -128,6 +129,29 @@ with an exact path compare-and-swap and no active reciprocal resend. Refetch
 gets a fresh random token and generation-specific path; old writers/ACKs cannot
 authorize that generation. Cancellation/transport failure during reciprocal
 resend does not delete the original Received bubble or its local file.
+
+## Explicit local-copy repair (candidate)
+
+A positively identified full-length native content mismatch is typed separately
+from every storage, capability, read/permission and incomplete-read error.
+The verifier checks the live Pending receipt's entire metadata snapshot before
+classifying a mismatch; changed metadata or stale/cancelled/completed tokens
+cannot authorize repair. An explicit user confirmation binds the exact receipt
+and current identity/lifecycle, not merely a message ID or display filename.
+
+Before unlinking any candidate, native code re-proves the local mismatch, checks
+no-follow regular/single-link/dev+inode ownership, validates the **entire**
+retained encrypted spool through a bounded core transaction, and rechecks fresh
+Pending metadata. The transaction ends before filesystem work. Only the same
+owned generation is replaced; generic exceptions never fall through to deletion.
+The rebuilt file must pass length/hash readback, file and directory sync, then
+token-bound commit. Failure retains the encrypted sole copy and no Received path
+is exposed. Ordinary Retry stays nondestructive for full-size mismatches.
+
+This action repairs a Pending local candidate using already verified bytes; it
+is not a network re-request, cancelled-generation retirement or import bypass.
+Explicit request-again after cancellation, physical-device interruption and
+cross-client interoperability remain separate validation/work items.
 
 ## Validation boundaries
 

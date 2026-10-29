@@ -48,6 +48,9 @@ final class ReceivedFiles: FileSink {
     func finalize(_ receipt: ReceiveReceiptInfo, readBlock: (UInt32) throws -> Data, verifier: ReceiveFileVerifier) throws -> String {
         try resolvedSink().finalize(receipt, readBlock: readBlock, verifier: verifier)
     }
+    func removeCorruptLocalCopy(_ receipt: ReceiveReceiptInfo, verifier: ReceiveFileVerifier, authorize: () throws -> Void) throws {
+        try resolvedSink().removeCorruptLocalCopy(receipt, verifier: verifier, authorize: authorize)
+    }
     func discardCancelled(_ receipt: ReceiveReceiptInfo) throws { try resolvedSink().discardCancelled(receipt) }
     func readForResend(_ path: String) throws -> Data? { try resolvedSink().readForResend(path) }
     func validatedPathForOpening(_ path: String) throws -> String? { try resolvedSink().validatedPathForOpening(path) }

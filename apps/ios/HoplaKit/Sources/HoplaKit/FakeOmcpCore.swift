@@ -25,6 +25,7 @@ public final class FakeOmcpCore: OmcpCore {
     }
 
     /// Test-only receipt model; no cryptographic claim. Production uses Rust.
+    public var repairValidationError: CoreError?
     public var receiptCommitError: CoreError?
     public var receiptCancelError: CoreError?
     public var receiptRetryError: CoreError?
@@ -59,6 +60,11 @@ public final class FakeOmcpCore: OmcpCore {
         let start = Int(index) * 65_536
         return bytes.subdata(in: start..<min(bytes.count, start + 65_536))
     }
+    public func validateReceivedFileForRepair(_ receiptToken: String) throws -> ReceiveReceiptInfo {
+        if let error = repairValidationError { throw error }
+        guard let (receipt, _) = receiptPayloads[receiptToken] else { throw CoreError.invalid("stale repair token") }
+        return receipt
+    }
     public func receivedFileVerifier(_ receiptToken: String) throws -> ReceiveFileVerifier {
         guard let (_, bytes) = receiptPayloads[receiptToken] else { throw CoreError.invalid("stale receipt") }
         return FakeReceiptVerifier(bytes)
@@ -75,14 +81,17 @@ public final class FakeOmcpCore: OmcpCore {
         return true
     }
     private final class FakeReceiptVerifier: ReceiveFileVerifier {
-        private let expected: Data; private var position = 0
+        private let expected: Data; private var position = 0; private var mismatch = false
         init(_ expected: Data) { self.expected = expected }
         func update(_ bytes: Data) throws {
-            guard bytes.count <= expected.count - position,
-                  expected.subdata(in: position..<(position + bytes.count)) == bytes else { throw CoreError.invalid("readback mismatch") }
+            guard bytes.count <= expected.count - position else { throw CoreError.invalid("readback length") }
+            mismatch = mismatch || expected.subdata(in: position..<(position + bytes.count)) != bytes
             position += bytes.count
         }
-        func finish() throws { guard position == expected.count else { throw CoreError.invalid("readback length") } }
+        func finish() throws {
+            guard position == expected.count else { throw CoreError.invalid("readback length") }
+            if mismatch { throw CoreError.localReceiveContentMismatch }
+        }
     }
 
     public init() {}

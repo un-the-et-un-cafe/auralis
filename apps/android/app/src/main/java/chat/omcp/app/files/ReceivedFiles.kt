@@ -17,6 +17,7 @@ class ReceivedFiles(private val context: Context) : FileSink, DurableReceiptSink
     private val receipts = AndroidReceiptFiles(context.filesDir)
     private val backups = AndroidReceiptFiles(context.filesDir, AndroidReceiptFiles.Namespace.Backup)
     override fun finalize(receipt: chat.omcp.app.core.ReceiveReceiptInfo, source: ReceiptSource): String = receipts.finalize(receipt, source)
+    override fun repair(receipt: chat.omcp.app.core.ReceiveReceiptInfo, source: ReceiptSource): String = receipts.repair(receipt, source)
     override fun discard(receipt: chat.omcp.app.core.ReceiveReceiptInfo) = receipts.discard(receipt)
     override fun isDefinitelyMissing(path: String): Boolean {
         return try {

@@ -383,4 +383,113 @@ final class DurableReceiveTests: XCTestCase {
         XCTAssertEqual(core.storedMessages(r.contactId).first?.file?.localPath, original)
     }
 
+    private func corruptCandidate(root: URL) throws -> (MeshRepository, FakeOmcpCore, ReceiveReceiptInfo, Data, URL, LocalReceiptRepairAction) {
+        let (repo, core, r, bytes) = try fixture(size: 8)
+        let path = root.appendingPathComponent(r.receiptToken + ".bin")
+        try Data(repeating: 9, count: 8).write(to: path)
+        repo.fileSink = DurableReceivedFiles(root: root)
+        repo.onFileReceived(r)
+        return (repo, core, r, bytes, path, try XCTUnwrap(repo.localReceiptRepairs[r.transferId]))
+    }
+
+    func testRepairRequiresExplicitActionAndNeverExposesCorruptCandidate() throws {
+        let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, core, r, bytes, path, action) = try corruptCandidate(root: root)
+        repo.retryReceivedFiles()
+        XCTAssertEqual(try Data(contentsOf: path), Data(repeating: 9, count: 8))
+        XCTAssertEqual(repo.messages[r.contactId]?.first?.file?.state, .finalizing)
+        XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+        XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+        repo.repairLocalReceivedFile(action)
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+        XCTAssertEqual(repo.messages[r.contactId]?.first?.file?.state, .received)
+        XCTAssertTrue(try core.pendingReceivedFiles().isEmpty)
+        XCTAssertNil(repo.localReceiptRepairs[r.transferId])
+        XCTAssertEqual(core.queuedFor(r.contactId), 0, "repair must not request network retransmission")
+        repo.repairLocalReceivedFile(action) // Already completed: no mutation.
+        XCTAssertEqual(try Data(contentsOf: path), bytes)
+    }
+
+    func testRepairSpoolValidationFailureNeverDeletesCandidate() throws {
+        for error in [CoreError.storageUnavailable("sealed storage locked"), .invalid("sealed hash mismatch"), .localReceiveContentMismatch] {
+            let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+            let (repo, core, r, _, path, action) = try corruptCandidate(root: root)
+            core.repairValidationError = error
+            repo.repairLocalReceivedFile(action)
+            XCTAssertEqual(try Data(contentsOf: path), Data(repeating: 9, count: 8))
+            XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+            XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+        }
+    }
+
+    func testRepairRejectsChangedLengthSymlinkAndSharedPublicationPair() throws {
+        for kind in ["length", "symlink", "hardlink"] {
+            let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+            let (repo, core, r, _, path, action) = try corruptCandidate(root: root)
+            if kind == "length" { try Data([9]).write(to: path) }
+            if kind == "symlink" {
+                try FileManager.default.removeItem(at: path)
+                try FileManager.default.createSymbolicLink(at: path, withDestinationURL: root.appendingPathComponent("absent"))
+            }
+            if kind == "hardlink" { try FileManager.default.linkItem(at: path, to: root.appendingPathComponent(r.receiptToken + ".part")) }
+            repo.repairLocalReceivedFile(action)
+            XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+            XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+            if kind == "symlink" { XCTAssertNoThrow(try FileManager.default.destinationOfSymbolicLink(atPath: path.path)) }
+            else { XCTAssertEqual(try Data(contentsOf: path), kind == "length" ? Data([9]) : Data(repeating: 9, count: 8)) }
+        }
+    }
+
+    func testRepairRejectsIdentityReloadCancellationAndReplacementInode() throws {
+        for kind in ["reload", "cancel", "inode"] {
+            let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+            let (repo, core, r, _, path, action) = try corruptCandidate(root: root)
+            if kind == "reload" { XCTAssertTrue(repo.restore()) }
+            repo.fileSink = DurableReceivedFiles(root: root, checkpoint: { checkpoint in
+                if checkpoint == .beforeRepairDelete {
+                    if kind == "cancel" { _ = try core.cancelFile(r.transferId) }
+                    if kind == "inode" { try Data(repeating: 7, count: 8).write(to: path, options: .atomic) }
+                }
+            })
+            repo.repairLocalReceivedFile(action)
+            XCTAssertEqual(try Data(contentsOf: path), Data(repeating: kind == "inode" ? 7 : 9, count: 8))
+            XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+        }
+    }
+
+    func testRepairCommitFailureAndInterruptedRemovalRecoverAfterRestart() throws {
+        for kind in ["commit", "after-delete"] {
+            let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+            let (repo, core, r, bytes, path, action) = try corruptCandidate(root: root)
+            if kind == "commit" { core.receiptCommitError = .storageUnavailable("commit interrupted") }
+            repo.fileSink = DurableReceivedFiles(root: root, checkpoint: { checkpoint in
+                if kind == "after-delete", checkpoint == .afterRepairDelete { throw CoreError.storageUnavailable("interrupted") }
+            })
+            repo.repairLocalReceivedFile(action)
+            XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+            XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+            core.receiptCommitError = nil
+            let restarted = MeshRepository(core: core, store: repo.store)
+            restarted.fileSink = DurableReceivedFiles(root: root)
+            XCTAssertTrue(restarted.restore())
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            XCTAssertEqual(restarted.messages[r.contactId]?.first?.file?.state, .received)
+        }
+    }
+
+    func testRepairDoesNotDeleteNowValidOrUnreadableCandidate() throws {
+        for unreadable in [false, true] {
+            if unreadable && getuid() == 0 { continue } // Root cannot model permission denial.
+            let root = try temporaryRoot(); defer { try? FileManager.default.removeItem(at: root) }
+            let (repo, core, r, bytes, path, action) = try corruptCandidate(root: root)
+            if unreadable { try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: path.path) }
+            else { try bytes.write(to: path) }
+            repo.repairLocalReceivedFile(action)
+            if unreadable { try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path) }
+            XCTAssertEqual(try Data(contentsOf: path), unreadable ? Data(repeating: 9, count: 8) : bytes)
+            XCTAssertEqual(try core.pendingReceivedFiles(), [r])
+            XCTAssertNil(repo.messages[r.contactId]?.first?.file?.localPath)
+        }
+    }
+
 }

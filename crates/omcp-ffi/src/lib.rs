@@ -108,8 +108,7 @@ fn pending_receipt(
 
 struct ReceiveVerification {
     hasher: Option<blake3::Hasher>,
-    hash: [u8; 32],
-    size: u64,
+    receipt: st::ReceivedFileReceipt,
     seen: u64,
 }
 /// A single-use, token-bound verifier for bounded native file readback.
@@ -128,7 +127,7 @@ impl ReceivedFileVerifier {
             .lock()
             .map_err(|_| invalid("verifier poisoned"))?;
         let next = state.seen.checked_add(bytes.len() as u64);
-        if bytes.len() > FILE_CHUNK_BYTES || next.is_none_or(|n| n > state.size) {
+        if bytes.len() > FILE_CHUNK_BYTES || next.is_none_or(|n| n > state.receipt.size) {
             state.hasher = None;
             return Err(invalid("file verification length"));
         }
@@ -152,12 +151,14 @@ impl ReceivedFileVerifier {
             .finalize();
         let node = self.node.lock();
         let receipt = pending_receipt(&node, &self.token)?;
-        if state.seen != state.size
-            || hash.as_bytes() != &state.hash
-            || receipt.hash != state.hash
-            || receipt.size != state.size
-        {
-            return Err(invalid("file verification hash or length"));
+        if state.seen != state.receipt.size || receipt != state.receipt {
+            return Err(invalid("file verification length or stale metadata"));
+        }
+        // Only a complete native readback with fresh Pending authority can be
+        // classified as local content mismatch. Store/spool failures never use
+        // this variant and cannot authorize destructive local repair.
+        if hash.as_bytes() != &state.receipt.hash {
+            return Err(FfiError::FileContentMismatch);
         }
         Ok(())
     }
@@ -207,6 +208,10 @@ pub enum FfiError {
     /// identity + device key (e.g. a QR from before a restore, RS2).
     #[error("safety number doesn't match")]
     VerificationFailed,
+    /// Full-length native file readback differs from the live Pending receipt.
+    /// Explicit local repair must separately validate the entire retained spool.
+    #[error("local received-file content does not match the pending receipt")]
+    FileContentMismatch,
 }
 
 impl From<omcp_core::OmcpError> for FfiError {
@@ -1563,6 +1568,21 @@ impl OmcpNode {
         node.db.commit_received_file(&token, &local_path)?;
         node.refresh_receive_budget()
     }
+    /// Validate the complete sealed spool before an explicit native-file repair.
+    /// This does not retire tokens, publish paths or hold a transaction over IO.
+    pub fn validate_received_file_for_repair(
+        &self,
+        receipt_token_hex: String,
+    ) -> Result<ReceivedFile, FfiError> {
+        let token = parse_receipt_token(&receipt_token_hex)?;
+        Ok(receipt_to_ffi(
+            self.inner
+                .lock()
+                .db
+                .validate_received_file_for_repair(&token)?,
+        ))
+    }
+
     pub fn received_file_verifier(
         &self,
         receipt_token_hex: String,
@@ -1574,8 +1594,7 @@ impl OmcpNode {
             token,
             state: Mutex::new(ReceiveVerification {
                 hasher: Some(blake3::Hasher::new()),
-                hash: receipt.hash,
-                size: receipt.size,
+                receipt,
                 seen: 0,
             }),
         }))

@@ -81,6 +81,34 @@ internal class AndroidReceiptFiles(
         dir.checkedPath(name)
     }
 
+    /** User-authorized repair only: normal finalize never deletes a full-size bad candidate. */
+    override fun repair(receipt: ReceiveReceiptInfo, source: ReceiptSource): String {
+        check(namespace == Namespace.Transport) { "backup files cannot authorize receipt repair" }
+        withDirectory { dir ->
+            validate(receipt)
+            check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+            val name = fileName(receipt)
+            val candidate = requireNotNull(dir.stat(name))
+            check(candidate.st_nlink == 1L && candidate.st_size == receipt.size) { "repair requires full-size private candidate" }
+            try {
+                verify(dir, name, receipt, source)
+                // Already valid (e.g. an earlier commit failed): do not remove it.
+                return@withDirectory
+            } catch (_: chat.omcp.app.core.ReceiveContentMismatch) {
+                // Only this typed positive mismatch permits the destructive repair path.
+            }
+            beforeOperation("repair-remove")
+            check(source.authorizeRepair()) { "sealed receipt repair validation failed" }
+            check(source.authorizeWrite(replacingIncomplete = false)) { "receipt no longer pending" }
+            val current = requireNotNull(dir.stat(name))
+            check(current.st_nlink == 1L && current.st_size == receipt.size &&
+                current.st_dev == candidate.st_dev && current.st_ino == candidate.st_ino) { "repair candidate changed" }
+            dir.removeMatching(name, candidate)
+            dir.sync()
+        }
+        return finalize(receipt, source)
+    }
+
     override fun discard(receipt: ReceiveReceiptInfo) = withDirectory { dir ->
         validate(receipt)
         val name = fileName(receipt)

@@ -6,6 +6,9 @@ import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 IOS = os.path.dirname(HERE)
 S = {
+ "file_repair_local": ("Repair local copy", "Réparer la copie locale"),
+ "file_repair_confirm": ("Replace damaged copy", "Remplacer la copie endommagée"),
+ "file_repair_explanation": ("Replace the damaged local copy using verified encrypted data already on this device. No network request will be sent.", "Remplacez la copie locale endommagée avec les données chiffrées vérifiées déjà présentes sur cet appareil. Aucune requête réseau ne sera envoyée."),
  "file_storage_pending": ("Some file storage operations need attention.", "Certaines opérations de stockage nécessitent votre attention."),
  "file_state_finalizing": ("Verified · waiting for durable storage", "Vérifié · en attente de stockage durable"),
  "file_retry_finalizing": ("Retry saving", "Réessayer l’enregistrement"),

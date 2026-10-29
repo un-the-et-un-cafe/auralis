@@ -9,7 +9,7 @@ import Glibc
 /// The caller serializes this with cancel/retry and commits the receipt only
 /// after this method returns. Filesystem errors never consume sealed bytes.
 public final class DurableReceivedFiles: FileSink {
-    public enum Checkpoint: Equatable { case beforeWrite, beforeReadback, beforeFileSync, beforeRename, afterRename, beforeUnlink, beforeDirectorySync }
+    public enum Checkpoint: Equatable { case beforeWrite, beforeReadback, beforeFileSync, beforeRename, afterRename, beforeUnlink, beforeDirectorySync, beforeRepairDelete, afterRepairDelete }
     private let root: URL
     private let trustedLexicalRoot: String?
     private let checkpoint: (Checkpoint) throws -> Void
@@ -183,7 +183,11 @@ public final class DurableReceivedFiles: FileSink {
             written += UInt64(bytes.count)
         }
         guard written == receipt.size else { throw invalid() }
-        try verify(fd, receipt: receipt, verifier: verifier)
+        do { try verify(fd, receipt: receipt, verifier: verifier) }
+        catch CoreError.localReceiveContentMismatch {
+            // A failed new temporary write is not an existing final-copy repair candidate.
+            throw CoreError.storageUnavailable("temporary received-file readback differs")
+        }
         try checkpoint(.beforeFileSync)
         guard fsync(fd) == 0 else { throw failure("sync private partial") }
         try checkpoint(.beforeRename)
@@ -204,6 +208,46 @@ public final class DurableReceivedFiles: FileSink {
         guard fsync(dir) == 0 else { throw failure("sync received directory") }
         try sameRoot(dir)
         return finalPath
+    }
+
+    /// Explicit repair only. Never used by normal retry/startup and never treats
+    /// generic I/O, length, symlink or store errors as permission to remove bytes.
+    public func removeCorruptLocalCopy(_ receipt: ReceiveReceiptInfo, verifier: ReceiveFileVerifier,
+                                      authorize: () throws -> Void) throws {
+        guard receipt.receiptToken.count == 96, receipt.transferId.count == 32,
+              receipt.receiptToken.hasPrefix(receipt.transferId),
+              receipt.receiptToken.unicodeScalars.allSatisfy(CharacterSet(charactersIn: "0123456789abcdef").contains) else { throw invalid() }
+        let dir = try directory(root.path, create: false); defer { close(dir) }
+        let name = receipt.receiptToken + ".bin"
+        let fd = openat(dir, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw failure("open repair candidate") }
+        defer { close(fd) }
+        let original = try fileInfo(fd) // Reject all shared links, including publication pairs.
+        var positivelyCorrupt = false
+        do { try verify(fd, receipt: receipt, verifier: verifier) }
+        catch CoreError.localReceiveContentMismatch { positivelyCorrupt = true }
+        guard positivelyCorrupt else { throw CoreError.invalid("local copy does not need repair") }
+        try checkpoint(.beforeRepairDelete)
+        try authorize() // Fresh exact Pending check after full sealed-spool validation.
+        try sameRoot(dir)
+        let current = try fileInfo(fd)
+        var entry = stat()
+        guard fstatat(dir, name, &entry, AT_SYMLINK_NOFOLLOW) == 0,
+              original.st_dev == current.st_dev, original.st_ino == current.st_ino,
+              original.st_size == current.st_size,
+              current.st_dev == entry.st_dev, current.st_ino == entry.st_ino,
+              entry.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), entry.st_nlink == 1 else { throw invalid() }
+        #if canImport(Darwin)
+        guard original.st_mtimespec.tv_sec == current.st_mtimespec.tv_sec, original.st_mtimespec.tv_nsec == current.st_mtimespec.tv_nsec,
+              original.st_ctimespec.tv_sec == current.st_ctimespec.tv_sec, original.st_ctimespec.tv_nsec == current.st_ctimespec.tv_nsec else { throw invalid() }
+        #else
+        guard original.st_mtim.tv_sec == current.st_mtim.tv_sec, original.st_mtim.tv_nsec == current.st_mtim.tv_nsec,
+              original.st_ctim.tv_sec == current.st_ctim.tv_sec, original.st_ctim.tv_nsec == current.st_ctim.tv_nsec else { throw invalid() }
+        #endif
+        guard unlinkat(dir, name, 0) == 0 else { throw failure("remove proven corrupt local candidate") }
+        try checkpoint(.afterRepairDelete)
+        guard fsync(dir) == 0 else { throw failure("sync local repair removal") }
+        try sameRoot(dir)
     }
 
     /// Compatibility for paths emitted by the previous client. The optional alias

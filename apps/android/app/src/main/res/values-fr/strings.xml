@@ -309,4 +309,6 @@
     <string name="file_state_finalizing">Enregistrement sécurisé…</string>
     <string name="file_retry_finalizing">Réessayer l’enregistrement</string>
     <string name="file_receive_retry_notice">Certains fichiers reçus attendent leur enregistrement. Touchez pour réessayer.</string>
+    <string name="file_repair_local">Réparer la copie locale</string>
+    <string name="file_repair_confirm">Remplacer la copie locale endommagée à partir de la copie chiffrée vérifiée sur cet appareil ? Aucun nouveau transfert ne sera demandé.</string>
 </resources>

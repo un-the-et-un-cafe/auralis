@@ -126,8 +126,8 @@
     {
       "path": "crates/omcp-ffi/src/lib.rs",
       "upstream_sha256": "007c6835f5da2c339446b50d01ba5451f5b111f25418d2289bcb8cb24a192c24",
-      "accepted_sha256": "ae76e1a5d609be40b608c8cee6e0543db608d1d3c610c589cd38a871e37f41e4",
-      "rationale": "Metadata-only durable receipts, bounded token-bound block reads and streaming verifier, authoritative cancellation/error propagation, explicit cleanup ACK and missing-path CAS; reject stale replay and legacy path bypass.",
+      "accepted_sha256": "4009140b493a54452b37b9126ca4358af63b8337b47a3f6356aa439a6eaac206",
+      "rationale": "Metadata-only durable receipts, bounded token-bound block reads and streaming verifier, authoritative cancellation/error propagation, explicit cleanup ACK and missing-path CAS; reject stale replay and legacy path bypass. Add read-only repair validation and a distinct native full-length content-mismatch error only after fresh complete receipt metadata checks; spool/storage/stale errors never authorize repair.",
       "evidence": [
         "handshake_rejects_malformed_order_counts_and_oversized_chunks_and_releases_buffers",
         "active_links_are_bounded_and_drop_shutdown_and_input_errors_release_slots",
@@ -141,7 +141,10 @@
         "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
         "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
-        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates",
+        "2026-10-29 exact hashes independently reviewed and parent conditionally approved; full workspace/Clippy and native source-review conditions met before update",
+        "cargo test --workspace --locked: 301 passed; crash-child fixture exercised by parent regression; cargo clippy --workspace --all-targets --locked -- -D warnings and fmt passed",
+        "docs/DURABLE_RECEIVE_STORE.md explicit Pending repair scope; native hosted/UI-gesture and cancelled-generation re-request gates remain separate"
       ]
     },
     {
@@ -165,8 +168,8 @@
     {
       "path": "crates/omcp-ffi/src/tests.rs",
       "upstream_sha256": "3fc9835a54f7042f5d474bb539d2481d4d0ee2a2bb80bfbccb29daf5c2190880",
-      "accepted_sha256": "98f828f0a7b6df452851d8ea373d25a3669abc4b6be704665ee6619eb07524cf",
-      "rationale": "Adapt receive assertions to metadata/token commit and add restart, failure retention/isolation, durable cleanup pagination/ACK, cancellation, stale-token, replay, own-sent refetch and peer-merge regressions.",
+      "accepted_sha256": "516823585b7d757738382a2d22134ec4b2272aa0de0ae7f26da74949e8f33960",
+      "rationale": "Adapt receive assertions to metadata/token commit and add restart, failure retention/isolation, durable cleanup pagination/ACK, cancellation, stale-token, replay, own-sent refetch and peer-merge regressions. Add six explicit repair validation/classification regressions covering corrupt spool, revocation, rekey metadata precedence, one-shot verifier and commit-failure restart without publication.",
       "evidence": [
         "cargo fmt --all -- --check",
         "cargo clippy --locked --workspace --all-targets -- -D warnings",
@@ -182,7 +185,10 @@
         "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
         "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
-        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates",
+        "2026-10-29 exact hashes independently reviewed and parent conditionally approved; full workspace/Clippy and native source-review conditions met before update",
+        "cargo test --workspace --locked: 301 passed; crash-child fixture exercised by parent regression; cargo clippy --workspace --all-targets --locked -- -D warnings and fmt passed",
+        "docs/DURABLE_RECEIVE_STORE.md explicit Pending repair scope; native hosted/UI-gesture and cancelled-generation re-request gates remain separate"
       ]
     },
     {
@@ -201,8 +207,8 @@
   "additions": [
     {
       "path": "crates/omcp-core/src/store/receipts.rs",
-      "accepted_sha256": "bf780057a90826a67cc437eadda6ce4d6ca5790b1b469caaf97a17387c017d04",
-      "rationale": "Explicit protected receipt module: token-bound finalization/refetch/resend authorization, retained cancellation tombstones and deleted-message cleanup, bounded durable pagination, authenticated v4 regroup, transactional live-budget checks. No wire change or power-loss guarantee.",
+      "accepted_sha256": "5df83aea8d8a9bfda8edc4d7084c5b31650960cba3301fa8cf49887484ca34b7",
+      "rationale": "Explicit protected receipt module: token-bound finalization/refetch/resend authorization, retained cancellation tombstones and deleted-message cleanup, bounded durable pagination, authenticated v4 regroup, transactional live-budget checks. No wire change or power-loss guarantee. Add token-bound Pending full-spool validation for an explicit native local-copy repair; no state/path/token mutation or transaction over filesystem work.",
       "evidence": [
         "cargo test --workspace --locked -- --test-threads=1: 279 passed; subprocess crash fixture invoked by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check",
@@ -212,7 +218,10 @@
         "2026-10-29 exact source hashes independently reviewed and explicitly approved by parent; no baseline/policy change",
         "cargo test --workspace --locked: 293 passed; one crash-child fixture ignored for direct invocation but exercised by parent regression",
         "cargo clippy --workspace --all-targets --locked -- -D warnings; cargo fmt --all --check; 60 Python helper tests passed",
-        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates"
+        "docs/DURABLE_RECEIVE_STORE.md; native portable/generated-host evidence separate from hosted Android/Apple and physical interoperability gates",
+        "2026-10-29 exact hashes independently reviewed and parent conditionally approved; full workspace/Clippy and native source-review conditions met before update",
+        "cargo test --workspace --locked: 301 passed; crash-child fixture exercised by parent regression; cargo clippy --workspace --all-targets --locked -- -D warnings and fmt passed",
+        "docs/DURABLE_RECEIVE_STORE.md explicit Pending repair scope; native hosted/UI-gesture and cancelled-generation re-request gates remain separate"
       ]
     }
   ]

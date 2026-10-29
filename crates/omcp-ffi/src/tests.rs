@@ -3328,3 +3328,262 @@ fn cancelled_receipt_cleanup_pages_survive_restart_and_ack_never_revives_tokens(
         .acknowledge_received_file_cleanup(receipts[0].receipt_token_hex.clone())
         .unwrap());
 }
+
+fn assert_not_local_content_mismatch<T: std::fmt::Debug>(result: Result<T, FfiError>) {
+    let error = result.expect_err("operation must fail closed");
+    assert!(
+        !matches!(error, FfiError::FileContentMismatch),
+        "non-repairable failure was misclassified: {error:?}"
+    );
+}
+
+#[test]
+fn explicit_repair_validation_is_read_only_and_survives_failed_commit_and_restart() {
+    let (a, b, la, lb, phrase, dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let bytes = vec![0x62; FILE_CHUNK_BYTES + 1];
+    let file = files::build_outgoing([141; 16], "repair", "binary", &bytes).unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let mut receipts = Vec::new();
+    for chunk in &file.chunks {
+        receipts.extend(deliver_receipt_test_content(&b, peer, chunk).unwrap().files);
+    }
+    let receipt = receipts.pop().unwrap();
+    let before = b.inner.lock().db().message(&file.id).unwrap().unwrap();
+    assert_eq!(before.file.as_ref().unwrap().state, st::FILE_FINALIZING);
+    assert!(before.file.as_ref().unwrap().local_path.is_none());
+    for _ in 0..2 {
+        assert_eq!(
+            b.validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+                .unwrap(),
+            receipt
+        );
+        assert_eq!(receipt_bytes(&b, &receipt), bytes);
+        assert_eq!(
+            b.inner.lock().db().message(&file.id).unwrap().unwrap(),
+            before
+        );
+        assert_eq!(b.pending_received_files().unwrap(), vec![receipt.clone()]);
+    }
+    let db = rusqlite::Connection::open(dir.path().join("omcp.db")).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_repair_commit BEFORE DELETE ON receive_blocks BEGIN SELECT RAISE(ABORT, 'injected repair commit failure'); END;").unwrap();
+    assert_not_local_content_mismatch(
+        b.commit_received_file(receipt.receipt_token_hex.clone(), "/private/repair".into()),
+    );
+    assert_eq!(
+        b.validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(
+        b.inner.lock().db().message(&file.id).unwrap().unwrap(),
+        before
+    );
+    db.execute_batch("DROP TRIGGER fail_repair_commit").unwrap();
+    drop((db, a, b, la, lb));
+    let b = open_node(&phrase, "Bob", dir.path());
+    assert_eq!(
+        b.validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(receipt_bytes(&b, &receipt), bytes);
+    assert_eq!(
+        b.inner.lock().db().message(&file.id).unwrap().unwrap(),
+        before
+    );
+}
+
+#[test]
+fn explicit_repair_validation_refuses_wrong_and_revoked_receipt_generations() {
+    for terminal in ["completed", "cancelled", "deleted"] {
+        let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+        let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+        let file = files::build_outgoing([142; 16], "repair", "binary", b"content").unwrap();
+        deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+        let receipt = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+            .unwrap()
+            .files
+            .remove(0);
+        let mut wrong = hex::decode(&receipt.receipt_token_hex).unwrap();
+        wrong[47] ^= 1;
+        assert_not_local_content_mismatch(b.validate_received_file_for_repair(hex::encode(wrong)));
+        assert_eq!(
+            b.validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+                .unwrap(),
+            receipt
+        );
+        match terminal {
+            "completed" => b
+                .commit_received_file(
+                    receipt.receipt_token_hex.clone(),
+                    "/private/complete".into(),
+                )
+                .unwrap(),
+            "cancelled" => assert!(b.cancel_file(receipt.transfer_id_hex.clone()).unwrap()),
+            "deleted" => b.inner.lock().db().delete_message(&file.id).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = b.inner.lock().db().message(&file.id).unwrap();
+        assert_not_local_content_mismatch(
+            b.validate_received_file_for_repair(receipt.receipt_token_hex.clone()),
+        );
+        assert_eq!(b.inner.lock().db().message(&file.id).unwrap(), before);
+        assert!(b.pending_received_files().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn explicit_repair_validation_never_classifies_damaged_spool_as_native_content_mismatch() {
+    for damage in ["missing", "corrupt"] {
+        let (a, b, _la, _lb, _phrase, dir) = disk_receiver_pair();
+        let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+        let file = files::build_outgoing([143; 16], "repair", "binary", b"original").unwrap();
+        deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+        let receipt = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+            .unwrap()
+            .files
+            .remove(0);
+        let before = b.inner.lock().db().message(&file.id).unwrap().unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("omcp.db")).unwrap();
+        db.execute_batch(if damage == "missing" {
+            "DELETE FROM receive_blocks"
+        } else {
+            "UPDATE receive_blocks SET ct=zeroblob(length(ct))"
+        })
+        .unwrap();
+        assert_not_local_content_mismatch(
+            b.validate_received_file_for_repair(receipt.receipt_token_hex.clone()),
+        );
+        assert_not_local_content_mismatch(
+            b.read_received_file_block(receipt.receipt_token_hex.clone(), 0),
+        );
+        assert_eq!(
+            b.inner.lock().db().message(&file.id).unwrap().unwrap(),
+            before
+        );
+        assert_eq!(b.pending_received_files().unwrap(), vec![receipt]);
+    }
+}
+
+#[test]
+fn native_verifier_content_mismatch_requires_live_generation_and_exact_length() {
+    let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+    let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+    let file = files::build_outgoing([144; 16], "repair", "binary", b"original").unwrap();
+    deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+    let receipt = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    let wrong = b
+        .received_file_verifier(receipt.receipt_token_hex.clone())
+        .unwrap();
+    wrong.update(b"modified".to_vec()).unwrap();
+    assert!(matches!(wrong.finish(), Err(FfiError::FileContentMismatch)));
+    assert_not_local_content_mismatch(wrong.finish());
+    assert_not_local_content_mismatch(wrong.update(Vec::new()));
+    let short = b
+        .received_file_verifier(receipt.receipt_token_hex.clone())
+        .unwrap();
+    short.update(b"short".to_vec()).unwrap();
+    assert_not_local_content_mismatch(short.finish());
+    assert_not_local_content_mismatch(short.finish());
+    let long = b
+        .received_file_verifier(receipt.receipt_token_hex.clone())
+        .unwrap();
+    assert_not_local_content_mismatch(long.update(b"too many bytes".to_vec()));
+    assert_not_local_content_mismatch(long.finish());
+    assert_eq!(
+        b.validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+            .unwrap(),
+        receipt
+    );
+    let valid = b
+        .received_file_verifier(receipt.receipt_token_hex.clone())
+        .unwrap();
+    valid.update(b"original".to_vec()).unwrap();
+    valid.finish().unwrap();
+    assert_not_local_content_mismatch(valid.finish());
+    assert_eq!(b.pending_received_files().unwrap(), vec![receipt]);
+}
+
+#[test]
+fn native_verifier_stale_generation_takes_precedence_over_wrong_content() {
+    for terminal in ["completed", "cancelled", "deleted"] {
+        let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+        let peer = parse_id(&a.identity().peer_id_hex).unwrap();
+        let file = files::build_outgoing([145; 16], "repair", "binary", b"original").unwrap();
+        deliver_receipt_test_content(&b, peer, &file.offer).unwrap();
+        let receipt = deliver_receipt_test_content(&b, peer, &file.chunks[0])
+            .unwrap()
+            .files
+            .remove(0);
+        let verifier = b
+            .received_file_verifier(receipt.receipt_token_hex.clone())
+            .unwrap();
+        verifier.update(b"modified".to_vec()).unwrap();
+        match terminal {
+            "completed" => b
+                .commit_received_file(
+                    receipt.receipt_token_hex.clone(),
+                    "/private/complete".into(),
+                )
+                .unwrap(),
+            "cancelled" => assert!(b.cancel_file(receipt.transfer_id_hex.clone()).unwrap()),
+            "deleted" => b.inner.lock().db().delete_message(&file.id).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = b.inner.lock().db().message(&file.id).unwrap();
+        assert_not_local_content_mismatch(verifier.finish());
+        assert_not_local_content_mismatch(verifier.finish());
+        assert_eq!(b.inner.lock().db().message(&file.id).unwrap(), before);
+    }
+}
+
+#[test]
+fn native_verifier_rekeyed_metadata_takes_precedence_over_wrong_content() {
+    let (a, b, _la, _lb, _phrase, _dir) = disk_receiver_pair();
+    let cert = a.inner.device().cert().unwrap();
+    let old = cert.dh;
+    let new = cert.peer_id;
+    assert_ne!(old, new);
+    b.restore_contact(hex::encode(old), "legacy Alice".into(), true)
+        .unwrap();
+    let file = files::build_outgoing([146; 16], "repair", "binary", b"original").unwrap();
+    deliver_receipt_test_content(&b, old, &file.offer).unwrap();
+    let receipt = deliver_receipt_test_content(&b, old, &file.chunks[0])
+        .unwrap()
+        .files
+        .remove(0);
+    let stale = b
+        .received_file_verifier(receipt.receipt_token_hex.clone())
+        .unwrap();
+    stale.update(b"modified".to_vec()).unwrap();
+    assert_eq!(b.inner.lock().resolve_peer(old, &cert).unwrap(), new);
+    assert_not_local_content_mismatch(stale.finish());
+    assert_not_local_content_mismatch(stale.finish());
+    let current = b
+        .validate_received_file_for_repair(receipt.receipt_token_hex.clone())
+        .unwrap();
+    assert_eq!(current.receipt_token_hex, receipt.receipt_token_hex);
+    assert_eq!(current.contact_id, hex::encode(new));
+    assert_ne!(current.contact_id, receipt.contact_id);
+    let mut expected = receipt;
+    expected.contact_id = hex::encode(new);
+    assert_eq!(
+        current, expected,
+        "rekey preserves the same content and receipt generation"
+    );
+    let fresh = b
+        .received_file_verifier(current.receipt_token_hex.clone())
+        .unwrap();
+    fresh.update(b"modified".to_vec()).unwrap();
+    assert!(matches!(fresh.finish(), Err(FfiError::FileContentMismatch)));
+    assert_eq!(receipt_bytes(&b, &current), b"original");
+    assert_eq!(b.pending_received_files().unwrap(), vec![current]);
+    let message = b.inner.lock().db().message(&file.id).unwrap().unwrap();
+    assert_eq!(message.peer, new);
+    assert_eq!(message.file.as_ref().unwrap().state, st::FILE_FINALIZING);
+    assert!(message.file.as_ref().unwrap().local_path.is_none());
+}
