@@ -68,7 +68,7 @@ are unavailable; it does not run `yes | sdkmanager --licenses`.
   flags; reject global Rust flags that would silently override them. Host bindgen
   and iOS flags are unchanged.
 - Android setup composite: SDK 36, existing pinned tooling, no blanket licenses.
-- Emulator script + API36 package XML: retain API31/35; add reviewed API36/16-KB
+- Emulator script + API 36 package XML: retain API 31/35; add reviewed API 36/16-KB
   image, exact page-size assertion and instrumentation page-size argument.
 - `NativePageSizeTest.kt`: real JNA/UniFFI phrase generation/validation, two
   identities, mutual QR contacts, safety-number and storage-key calls on the
@@ -87,8 +87,8 @@ are unavailable; it does not run `yes | sdkmanager --licenses`.
 - `check-ios-archive.py` and tests: inspect unsigned archive metadata, each
   relevant manifest and actual native symbol inventory; structural success is
   explicitly not privacy-review completion or store readiness.
-- CI/unsigned workflows: wire package checks, preserve API31/35 and iOS18.5,
-  add API36/16-KB + iOS26.2; record diagnostics per runtime. No new publication,
+- CI/unsigned workflows: wire package checks, preserve API 31/35 and iOS 18.5,
+  add API 36/16-KB + iOS26.2; record diagnostics per runtime. No new publication,
   tagging, signing credentials, provider configuration or deployment steps.
 - Release documentation: reconcile the already-merged durable finalization,
   repair/request-again checkpoint; keep physical/provider/privacy gates open.
@@ -118,6 +118,31 @@ and gesture-level flows. No signing/store upload is authorized by this work.
 - Gradle 8.11.1 `help`: pass with AGP 8.10.1/Kotlin 2.2.21 resolved from official
   registries through the executor's configured proxy. Used writable temporary
   user/cache directories and local JDK21; **not** an assemble/native/JDK17 pass.
-- JNA native ELF metadata: both ABIs pass. CLI19/official API36 image/emulator
+- JNA native ELF metadata: both ABIs pass. CLI19/official API 36 image/emulator
   package registration and disposable AVD creation: pass. No emulator boot,
   instrumentation, Android APK/AAB build, macOS archive or hosted CI run yet.
+
+### First hosted-run corrections (2026-10-29)
+
+CI [40851221613](https://github.com/un-the-et-un-cafe/auralis/actions/runs/40851221613)
+used PR merge tree `61ab248728b785da719ac7474f6eeb628cfccadf`, identical to reviewed
+head `52bf1f289551ecf0d7f51ee14066d57b5aadbe5d`. API 31/35 each passed 29 tests.
+API 36 observed `PAGE_SIZE=16384` and its real `NativePageSizeTest` passed, but the
+whole suite was **not green**: one UI smoke assertion failed after a single Back.
+Logcat shows Back routed to the already-hidden IME while the 2-GiB Google APIs
+image killed multiple background processes, including Gboard, under pressure.
+That correlation is a hypothesis, not proof of cause. The bounded infrastructure
+change allocates 4 GiB only to API 36, checks available host RAM with a 2 GiB reserve,
+and retains the identical single-Back/selection assertions. No runtime test is
+skipped or automatically retried and no paid runner tier is selected.
+
+The first artifact gate incorrectly rejected graphics-path 1.0.1's isolated
+RELRO segment using an unconditional end-modulus rule. The current
+[official guide](https://developer.android.com/guide/practices/page-sizes#check-the-relro-security-flag)
+explicitly allows an isolated RELRO LOAD with no writable-data overlap. Actual
+arm64/x86_64 library headers match that safe layout, including linker padding.
+The checker now verifies the dedicated owner LOAD and absence of other writable
+LOADs in the rounded protection range; fixtures retain failures for shared
+writable tails and overlapping LOADs. This is not a dependency upgrade or a
+blanket removal of RELRO checks. Actual bundle-derived unsigned verification
+remained unexecuted in the first run because this earlier check stopped the job.

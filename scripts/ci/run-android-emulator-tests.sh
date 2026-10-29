@@ -8,12 +8,13 @@ API=${1:?usage: run-android-emulator-tests.sh 31|35|36-16k}
 IMAGE_TAG=default
 IMAGE_REPOSITORY=android
 EXPECTED_PAGE_SIZE=4096
+EMULATOR_MEMORY_MB=2048
 case "$API" in
   31) IMAGE_REVISION=5; IMAGE_SHA256=f77492768c6449a20d101a2fc0f32865a0aca6067dae6de4e94073fbceda9bca ;;
   35) IMAGE_REVISION=2; IMAGE_SHA256=6dd7de33e63ef105cf2fabea6badda1dbe7665c96d8908e5f6e1407e63ff4556 ;;
   36-16k) API=36; IMAGE_TAG=google_apis_ps16k; IMAGE_REPOSITORY=google_apis
     IMAGE_REVISION=7; IMAGE_SHA256=56005e428f0d30105789bde96f60bbd32c5c62e710321abd7c10f9e591889ff7
-    EXPECTED_PAGE_SIZE=16384 ;;
+    EXPECTED_PAGE_SIZE=16384; EMULATOR_MEMORY_MB=4096 ;;
   *) echo 'Only reviewed API 31, 35 and 36-16k images are supported.'  >&2; exit 2 ;;
 esac
 : "${ANDROID_HOME:?}" "${ANDROID_AVDMANAGER:?}" "${RUNNER_TEMP:?}"
@@ -104,10 +105,21 @@ trap cleanup EXIT
 STAGE=adb-server
 # Start the transport before QEMU attempts its own post-boot ADB configuration.
 "$ADB" start-server
+STAGE=emulator-memory-preflight
+# Google APIs + 16-KB pages have a larger working set than the AOSP images.
+# Keep an explicit 2-GiB host reserve; never change runner tier or VM permissions.
+cat /proc/meminfo > "$REPORTS/host-memory.txt"
+AVAILABLE_KB=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+[[ "$AVAILABLE_KB" =~ ^[0-9]+$ ]]
+if (( AVAILABLE_KB < (EMULATOR_MEMORY_MB + 2048) * 1024 )); then
+  echo "Insufficient available host memory for ${EMULATOR_MEMORY_MB}MiB AVD + 2GiB reserve." >&2
+  exit 1
+fi
+printf 'AVD memory MiB: %s\n' "$EMULATOR_MEMORY_MB" >> "$REPORTS/host-memory.txt"
 STAGE=emulator-launch
 "$EMULATOR" -avd auralis-ci -port 5554 -accel on -gpu swiftshader \
   -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data \
-  -cores 2 -memory 2048 > "$REPORTS/emulator.log" 2>&1 &
+  -cores 2 -memory "$EMULATOR_MEMORY_MB" > "$REPORTS/emulator.log" 2>&1 &
 EMULATOR_PID=$!
 STAGE=android-readiness
 # A boot property can precede a transient ADB restart. Require stable transport

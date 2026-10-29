@@ -30,6 +30,19 @@ def elf(abi="arm64-v8a", alignment=16384, vaddr=0, relro=None):
     return result
 
 
+def elf_with_headers(headers, abi="arm64-v8a"):
+    """Program-header fixture; tuples are type, flags, off, vaddr, filesz, memsz, align."""
+    size = max(64 + 56 * len(headers), max(h[2] + h[4] for h in headers))
+    result = bytearray(size)
+    result[:16] = b"\x7fELF\x02\x01\x01" + b"\0" * 9
+    struct.pack_into("<HHIQQQIHHHHHH", result, 16, 3, android.MACHINES[abi], 1,
+                     0, 64, 0, 0, 64, 56, len(headers), 0, 0, 0)
+    for index, (kind, flags, offset, vaddr, filesz, memsz, align) in enumerate(headers):
+        struct.pack_into("<IIQQQQQQ", result, 64 + 56 * index,
+                         kind, flags, offset, vaddr, vaddr, filesz, memsz, align)
+    return result
+
+
 class ArtifactTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -143,6 +156,65 @@ class ArtifactTests(unittest.TestCase):
         android.check_elf(elf(relro=16384), "arm64-v8a", "lib")
         with self.assertRaisesRegex(android.InvalidArtifact, "GNU_RELRO"):
             android.check_elf(elf(relro=4096), "arm64-v8a", "lib")
+
+    def test_documented_own_load_relro_exception(self):
+        # Exact program header layout in Android's 16-KB page-size guide.
+        headers = [(1, 5, 0, 0, 0x680, 0x680, 0x4000),
+                   (1, 6, 0x680, 0x4680, 0x1d8, 0x980, 0x4000),
+                   (0x6474e552, 4, 0x680, 0x4680, 0x1d8, 0x980, 1)]
+        android.check_elf(elf_with_headers(headers), "arm64-v8a", "own-relro")
+
+    def test_actual_graphics_path_101_padded_relro_headers(self):
+        # Official graphics-path-1.0.1 AAR: same-file-coverage RW LOAD is wholly
+        # RELRO, with padding after its memory extent and a separate RW page.
+        for abi, first_end, size, relro_size, next_addr in (
+                ("arm64-v8a", 0x1c40, 0x390, 0x3c0, 0x9fd0),
+                ("x86_64", 0x1ec0, 0x3a8, 0x1140, 0xa268)):
+            headers = [(1, 5, 0, 0, first_end, first_end, 0x4000),
+                       (1, 6, first_end, first_end + 0x4000, size, size, 0x4000),
+                       (1, 6, first_end + size, next_addr, 0, 0x10, 0x4000),
+                       (0x6474e552, 4, first_end, first_end + 0x4000, size, relro_size, 1)]
+            with self.subTest(abi=abi):
+                android.check_elf(elf_with_headers(headers, abi), abi, "graphics-path")
+
+    def test_relro_shared_load_writable_tail_fails(self):
+        headers = [(1, 6, 0, 0x4000, 0x200, 0x1800, 0x4000),
+                   (0x6474e552, 4, 0, 0x4000, 0x200, 0x1000, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "no exclusive own LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "writable-tail")
+
+    def test_other_writable_load_in_rounded_relro_page_fails(self):
+        headers = [(1, 6, 0, 0x4000, 0x200, 0x1000, 0x4000),
+                   (1, 6, 0x2000, 0x6000, 0, 0x10, 0x4000),
+                   (0x6474e552, 4, 0, 0x4000, 0x200, 0x1000, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "overlaps other writable/executable LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "overlap")
+
+    def test_other_writable_load_in_rounded_relro_prefix_fails(self):
+        headers = [(1, 6, 0x680, 0x4680, 0x200, 0x980, 0x4000),
+                   (1, 6, 0, 0x4000, 0, 0x10, 0x4000),
+                   (0x6474e552, 4, 0x680, 0x4680, 0x200, 0x980, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "overlaps other writable/executable LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "prefix-overlap")
+
+    def test_other_executable_load_in_rounded_relro_page_fails(self):
+        headers = [(1, 6, 0, 0x4000, 0x200, 0x1000, 0x4000),
+                   (1, 5, 0x2000, 0x6000, 0x10, 0x10, 0x4000),
+                   (0x6474e552, 4, 0, 0x4000, 0x200, 0x1000, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "overlaps other writable/executable LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "executable-overlap")
+
+    def test_own_relro_load_cannot_be_executable(self):
+        headers = [(1, 7, 0, 0x4000, 0x200, 0x1000, 0x4000),
+                   (0x6474e552, 4, 0, 0x4000, 0x200, 0x1000, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "no exclusive own LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "executable-owner")
+
+    def test_own_relro_load_must_match_file_range(self):
+        headers = [(1, 6, 0, 0x4000, 0x200, 0x1000, 0x4000),
+                   (0x6474e552, 4, 0, 0x4000, 0x100, 0x1000, 1)]
+        with self.assertRaisesRegex(android.InvalidArtifact, "no exclusive own LOAD"):
+            android.check_elf(elf_with_headers(headers), "arm64-v8a", "mismatch")
 
     def test_program_headers_outside_file(self):
         data = elf()

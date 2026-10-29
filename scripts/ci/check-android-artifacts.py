@@ -43,15 +43,15 @@ def check_elf(data, abi, name):
     require(0 < phnum < 65535, f"{name}: missing/extended program header count")
     require(phoff >= ehsize and phoff + phsize * phnum <= len(data),
             f"{name}: program headers outside file")
-    loads = 0
-    relros = 0
+    loads = []
+    relros = []
     for index in range(phnum):
-        ptype, _, offset, vaddr, _, filesz, memsz, align = struct.unpack_from(
+        ptype, flags, offset, vaddr, _, filesz, memsz, align = struct.unpack_from(
             "<IIQQQQQQ", data, phoff + index * phsize)
         require(offset <= len(data) and filesz <= len(data) - offset,
                 f"{name}: segment {index} outside file")
         if ptype == 1:  # PT_LOAD
-            loads += 1
+            loads.append((flags, offset, vaddr, filesz, memsz))
             require(filesz <= memsz, f"{name}: PT_LOAD filesz exceeds memsz")
             require(align >= PAGE and align & (align - 1) == 0,
                     f"{name}: PT_LOAD alignment is not a power of two >= 16 KB")
@@ -59,11 +59,31 @@ def check_elf(data, abi, name):
                     f"{name}: PT_LOAD offset/address are incongruent")
             require(vaddr + memsz < 1 << 64, f"{name}: PT_LOAD address overflow")
         elif ptype == 0x6474E552:  # PT_GNU_RELRO
-            relros += 1
-            require(vaddr + memsz < 1 << 64 and (vaddr + memsz) % PAGE == 0,
-                    f"{name}: GNU_RELRO end is not 16 KB aligned")
-    require(loads > 0, f"{name}: no PT_LOAD segments")
-    return {"load_segments": loads, "relro_segments": relros}
+            require(vaddr + memsz < 1 << 64, f"{name}: GNU_RELRO address overflow")
+            relros.append((offset, vaddr, filesz, memsz))
+    require(loads, f"{name}: no PT_LOAD segments")
+    for offset, start, filesz, memsz in relros:
+        end = start + memsz
+        if end % PAGE == 0:
+            continue
+        # Android's documented own-LOAD exception: rounding RELRO protection up
+        # is safe only if that non-executable LOAD contains no writable tail
+        # and no other writable/executable LOAD intersects the protected pages.
+        # Bionic applies PROT_READ, removing both write and execute permissions. RELRO may include linker padding
+        # beyond its LOAD's memory extent (e.g. AndroidX graphics-path 1.0.1).
+        # Match file coverage as well as virtual start; unrelated/partial loads
+        # must not satisfy this exception merely because their addresses fit.
+        owners = [index for index, (flags, off, addr, size, memory) in enumerate(loads)
+                  if flags & 2 and not flags & 1 and off == offset and addr == start and size == filesz
+                  and 0 < memory <= memsz]
+        require(len(owners) == 1, f"{name}: GNU_RELRO unaligned end has no exclusive own LOAD")
+        protected_start = start - start % PAGE
+        protected_end = (end + PAGE - 1) // PAGE * PAGE
+        for index, (flags, _, addr, _, memory) in enumerate(loads):
+            if index != owners[0] and flags & 3 and memory:
+                require(addr + memory <= protected_start or addr >= protected_end,
+                        f"{name}: GNU_RELRO rounded protection overlaps other writable/executable LOAD")
+    return {"load_segments": len(loads), "relro_segments": len(relros)}
 
 
 def valid_entry(info):

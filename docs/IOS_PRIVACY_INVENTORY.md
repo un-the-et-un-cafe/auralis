@@ -138,3 +138,21 @@ Xcode build or archive validation.
 Its undocumented private-canvas reliance remains an unresolved product/security
 acceptance decision. Neither the SDK update nor these manifests establishes
 universal screenshot prevention or App Store acceptance.
+
+## First hosted simulator symbol evidence (2026-10-29)
+
+Normal CI 40851221613 built with Xcode 26.3/17C529. Its iOS 18.5 job passed 99 SwiftPM
+and 23 native tests plus UI smoke. Downloaded artifact 12888152379's embedded
+SHA256SUMS were verified; BUILD_INFO identifies PR merge SHA
+`e3d0f3ec36da9dd566d0ac0d6996f837404e8f7e`, whose tree exactly equals reviewed
+head 52bf1f2 (`61ab248728b785da719ac7474f6eeb628cfccadf`).
+
+`llvm-nm --undefined-only` on that actual simulator
+`Frameworks/OmcpFFI.framework/OmcpFFI` lists `_fstatfs`, `_statfs`, `_fstat`,
+`_fstatat`, `_lstat`, `_stat` and `_clock_gettime`. `_mach_absolute_time` was not
+an undefined import of this binary. This confirms that the filesystem-policy
+question is present in an Apple-compiled simulator artifact; it does **not**
+prove the final device archive's imports, whole-app API inventory or compliance.
+All expected app/HoplaKit/OmcpFFI manifests were present in the simulator bundle.
+The device-archive workflow has not been dispatched; its independent inventory
+and the unresolved SQLite approved-reason decision remain required.
