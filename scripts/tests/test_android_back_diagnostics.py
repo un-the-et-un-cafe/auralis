@@ -19,6 +19,25 @@ class AndroidBackDiagnosticSourceTests(unittest.TestCase):
         self.assertIn("compose.onNodeWithText(text(R.string.onb_display_name)).assertDoesNotExist()", smoke)
         self.assertIn("assertNull(app.repository.core.identity())", smoke)
 
+    def test_normal_smoke_does_not_construct_diagnostics_without_explicit_opt_in(self):
+        smoke = (TESTS / "AppSmokeTest.kt").read_text()
+        self.assertEqual(smoke.count("OnboardingBackDiagnostics(imeAnimations)"), 1)
+        self.assertRegex(smoke, r'val diagnostics = if \(InstrumentationRegistry.getArguments\(\)\s*'
+                         r'\.getString\("auralisBackDiagnostics"\) == "true"\) \{\s*'
+                         r'OnboardingBackDiagnostics\(imeAnimations\)\s*\} else null')
+        # No eager factory, fallback, unconditional request/drain or permissive parser.
+        self.assertNotIn("diagnostics.request(", smoke)
+        self.assertNotIn("diagnostics.close()", smoke)
+        self.assertIn("diagnostics?.close()", smoke)
+        self.assertNotIn("toBoolean", smoke)
+
+    def test_existing_ci_does_not_opt_into_diagnostic_observer(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        runner = (ROOT / "scripts/ci/run-android-emulator-tests.sh").read_text()
+        self.assertNotIn("auralisBackDiagnostics", workflow)
+        self.assertNotIn("auralisBackDiagnostics", runner)
+        self.assertIn("connectedDebugAndroidTest", runner)
+
     def test_snapshot_has_no_shell_raw_dump_or_idle_wait(self):
         source = (TESTS / "OnboardingBackDiagnostics.kt").read_text()
         for forbidden in ("executeShellCommand", "printToLog", "fetchSemanticsNodes(",

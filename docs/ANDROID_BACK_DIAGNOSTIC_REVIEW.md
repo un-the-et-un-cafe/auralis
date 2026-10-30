@@ -124,3 +124,36 @@ and strict scalar allowlisting with no persisted raw fallback.
   [EditorInfo dump](https://android.googlesource.com/platform/frameworks/base/+/main/core/java/android/view/inputmethod/EditorInfo.java),
   [WindowState dump](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/services/core/java/com/android/server/wm/WindowState.java).
   Framework sources explain exposure, not a byte-for-byte assertion about the pinned image.
+
+## Follow-up candidate: normal smoke without diagnostic observation (2026-10-30)
+
+CI43 passed all nine jobs on tree `62ffa235794770ba2c5bef74acfdf0baf91c585d`;
+API36 reported 36 tests and zero failures. Its asynchronous destination snapshot
+observed Welcome 108 ms after Back returned. The existing exact-one Welcome wait
+already accommodates this: no longer deadline, sleep, extra Back or production
+navigation change is warranted. CI41/42 failures remain unresolved evidence;
+diagnostic main-thread observation can perturb timing.
+
+This follow-up makes only the extra `OnboardingBackDiagnostics` observer opt-in.
+Normal CI omits the argument, constructs no diagnostic instance, posts no diagnostic
+snapshots and performs no diagnostic close/drain. The existing IME animation observer,
+500 ms stability gate, 10-second waits, one system Back, destination/identity and
+FLAG_SECURE assertions remain unchanged. This is **not instrumentation-free** and
+is not a production fix.
+
+For a separately authorized diagnostic experiment on a disposable test device,
+pass the exact instrumentation argument `auralisBackDiagnostics=true`, for example
+`-Pandroid.testInstrumentationRunnerArguments.auralisBackDiagnostics=true` to the
+existing Gradle instrumentation command. Omitted values, different case and other
+strings do not enable observation. Do not enable it in normal CI to obtain a pass.
+
+Local source guards verify default-off construction, nullable request/drain calls,
+unchanged one-Back/deadline/assertion contracts and absence of opt-in from the existing
+workflow/runner. These guards are not Kotlin compilation or native execution.
+A new normal-path native run is pending specific approval. The unchanged existing
+workflow starts the full matrix, not an Android-only dispatch. A single unobserved
+pass would be useful regression evidence, **not proof the intermittent race is fixed**.
+A failure must remain failing and be investigated without retries or weakened gates.
+
+Integration remains on `review/supported-ios-privacy`; PR20 and main are separate.
+Earlier status sections describe historical preparation and are not current authority.

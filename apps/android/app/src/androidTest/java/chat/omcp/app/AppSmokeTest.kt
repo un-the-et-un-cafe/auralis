@@ -159,7 +159,12 @@ class AppSmokeTest {
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText("Smoke Alice").assertExists()
         // Back from an interrupted profile must not create or replace an identity.
-        val diagnostics = OnboardingBackDiagnostics(imeAnimations)
+        // Explicit opt-in only: normal CI must exercise the original path without
+        // diagnostic main-thread posts, traversal or the post-outcome drain.
+        val diagnostics = if (InstrumentationRegistry.getArguments()
+                .getString("auralisBackDiagnostics") == "true") {
+            OnboardingBackDiagnostics(imeAnimations)
+        } else null
         try {
             back(diagnostics) // Exactly one system Back after measured keyboard dismissal.
             try {
@@ -167,15 +172,15 @@ class AppSmokeTest {
                     compose.onAllNodesWithText(text(R.string.onb_get_started)).fetchSemanticsNodes().size == 1
                 }
             } catch (failure: Throwable) {
-                diagnostics.request(OnboardingBackDiagnostics.Phase.DESTINATION_WAIT_FAILED)
+                diagnostics?.request(OnboardingBackDiagnostics.Phase.DESTINATION_WAIT_FAILED)
                 throw failure // Preserve the original exception and deadline, not a diagnostic failure.
             }
             compose.onNodeWithText(text(R.string.onb_display_name)).assertDoesNotExist()
             assertNull(app.repository.core.identity())
-            diagnostics.request(OnboardingBackDiagnostics.Phase.DESTINATION_ASSERTIONS_PASSED)
+            diagnostics?.request(OnboardingBackDiagnostics.Phase.DESTINATION_ASSERTIONS_PASSED)
         } finally {
             // Only after the original outcome: bounded best-effort drain, no retry or idle wait.
-            diagnostics.close()
+            diagnostics?.close()
         }
         clickText(R.string.onb_get_started)
         clickText(R.string.cta_continue)
