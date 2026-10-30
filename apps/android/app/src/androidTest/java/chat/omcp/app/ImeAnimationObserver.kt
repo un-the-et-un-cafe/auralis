@@ -14,7 +14,10 @@ import android.view.WindowInsetsAnimation
  * insets without replacing the app/Compose callbacks or consuming their events.
  * This observes prepared/running animations, NOT queued IME service transactions.
  */
-internal class ImeAnimationObserver(private val application: Application) :
+internal class ImeAnimationObserver(
+    private val application: Application,
+    private val observedActivityClass: Class<out Activity> = MainActivity::class.java,
+) :
     Application.ActivityLifecycleCallbacks {
     private val probes = mutableMapOf<Activity, Probe>()
 
@@ -46,7 +49,7 @@ internal class ImeAnimationObserver(private val application: Application) :
     data class Snapshot(val ready: Boolean, val active: Boolean, val generation: Long, val window: Any?)
 
     private fun install(activity: Activity) {
-        if (activity !is MainActivity || probes.containsKey(activity)) return
+        if (!observedActivityClass.isInstance(activity) || probes.containsKey(activity)) return
         val decor = activity.window.decorView as ViewGroup
         val probe = Probe(activity)
         probes[activity] = probe

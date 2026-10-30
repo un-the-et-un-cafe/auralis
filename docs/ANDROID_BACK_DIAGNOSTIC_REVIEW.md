@@ -157,3 +157,38 @@ A failure must remain failing and be investigated without retries or weakened ga
 
 Integration remains on `review/supported-ios-privacy`; PR20 and main are separate.
 Earlier status sections describe historical preparation and are not current authority.
+
+## Separate visible-to-hidden recreation control (local, unexecuted)
+
+CI44 reproduced the original destination timeout with extra observations disabled:
+API36 35/36 passed; the isolated no-IME dispatcher control passed. The original
+AppSmokeTest remains byte-for-byte unchanged by this new experiment.
+
+The additional `OnboardingImeRoundTripControlTest` uses production OnboardingFlow,
+a native Rust core and an isolated in-memory repository in ComponentActivity.
+It explicitly retains its test-owned view model across actual Activity recreation
+and reattaches production UI. This is **not MainActivity or persistent-store restore
+coverage**, and cannot replace that failing baseline. It does not clear app data or
+rely on test ordering. ImeAnimationObserver accepts an explicit Activity class for
+this control; its default MainActivity behavior remains unchanged.
+
+After confirming the exact restored synthetic draft, the control requests IME show
+once on the focused window and requires observed IME visibility within 10 seconds.
+It then uses the existing hide request and 500 ms stable-hidden gate (10-second
+readiness bound), sends exactly one real system Back, and requires exactly one
+Welcome node within the original 10-second destination bound. Identity-null and
+FLAG_SECURE are asserted throughout. Failure to observe visible IME is a failing
+precondition, never a skip. No snapshots, extra Back, fixed sleep, deadline increase,
+production navigation change or keyboard-disable flag is added.
+
+Falsifiable interpretation: a passing round-trip control with a failing baseline
+supports an input readiness hypothesis but does not establish a fix. Both failing
+would refute visibility round-trip as sufficient. A failed visible precondition
+redirects investigation to window/input connection setup, not destination assertions.
+No hosted run or publication is authorized by this local preparation.
+
+Android's official InputMethodManager reference deprecates ResultReceiver-based
+show/hide acknowledgement at API36 as unreliable and recommends observing insets.
+Visibility is a concrete observable; it is not proof all future IME work is drained.
+- https://developer.android.com/reference/android/view/inputmethod/InputMethodManager
+- https://developer.android.com/develop/ui/views/touch-and-input/keyboard-input/visibility

@@ -38,6 +38,27 @@ class AndroidBackDiagnosticSourceTests(unittest.TestCase):
         self.assertNotIn("auralisBackDiagnostics", runner)
         self.assertIn("connectedDebugAndroidTest", runner)
 
+    def test_round_trip_control_is_isolated_and_preserves_original_observer_default(self):
+        source = (TESTS / "OnboardingImeRoundTripControlTest.kt").read_text()
+        observer = (TESTS / "ImeAnimationObserver.kt").read_text()
+        self.assertIn("observedActivityClass: Class<out Activity> = MainActivity::class.java", observer)
+        self.assertIn("!observedActivityClass.isInstance(activity)", observer)
+        self.assertIn("MeshRepository(core, InMemoryAppStore())", source)
+        self.assertIn("compose.activityRule.scenario.recreate()", source)
+        self.assertIn("assertNotSame(previousActivity, it)", source)
+        self.assertEqual(source.count("device.pressBack()"), 1)
+        self.assertEqual(source.count("compose.waitUntil(10_000)"), 3)
+        self.assertIn("StableImeDismissal(stableForMs = 500)", source)
+        self.assertIn(".isVisible(WindowInsetsCompat.Type.ime()) == true", source)
+        self.assertLess(source.index(".show(WindowInsetsCompat.Type.ime())"),
+                        source.index(".hide(WindowInsetsCompat.Type.ime())"))
+        self.assertIn('hasExactEditableText("Round-trip Alice")', source)
+        self.assertEqual(source.count("assertNull(core.identity())"), 2)
+        self.assertEqual(source.count("WindowManager.LayoutParams.FLAG_SECURE != 0"), 2)
+        for forbidden in ("Thread.sleep", "assumeTrue", "Assume.", "OnboardingBackDiagnostics(",
+                          "onBackPressedDispatcher", "setSoftInputMode", "clearFlags", "clearPackageData"):
+            self.assertNotIn(forbidden, source)
+
     def test_snapshot_has_no_shell_raw_dump_or_idle_wait(self):
         source = (TESTS / "OnboardingBackDiagnostics.kt").read_text()
         for forbidden in ("executeShellCommand", "printToLog", "fetchSemanticsNodes(",
