@@ -71,7 +71,23 @@ class AppSmokeTest {
         Log.i("AppSmokeTest", "Restored composer attached after ${SystemClock.elapsedRealtime() - started} ms")
         assertDraft(expected)
     }
-    private fun back() { hideKeyboard(); device.pressBack(); compose.waitForIdle() }
+    private fun back(diagnostics: OnboardingBackDiagnostics? = null) {
+        diagnostics?.request(OnboardingBackDiagnostics.Phase.BEFORE_HIDE)
+        try {
+            hideKeyboard()
+            diagnostics?.request(OnboardingBackDiagnostics.Phase.IME_READY)
+            diagnostics?.request(OnboardingBackDiagnostics.Phase.BEFORE_SYSTEM_BACK)
+            // Keep lazy UiDevice initialization in the measured call, as before.
+            val started = SystemClock.elapsedRealtime()
+            val result = device.pressBack() // Exactly one system Back; never retry it.
+            diagnostics?.backReturned(result, SystemClock.elapsedRealtime() - started)
+            diagnostics?.request(OnboardingBackDiagnostics.Phase.AFTER_SYSTEM_BACK)
+            compose.waitForIdle()
+        } catch (failure: Throwable) {
+            diagnostics?.request(OnboardingBackDiagnostics.Phase.BACK_OR_READINESS_FAILED)
+            throw failure
+        }
+    }
     private fun hideKeyboard() {
         compose.runOnIdle {
             // A restored focused editor can enqueue a late IME show. Relinquish
@@ -143,12 +159,24 @@ class AppSmokeTest {
         compose.activityRule.scenario.recreate()
         compose.onNodeWithText("Smoke Alice").assertExists()
         // Back from an interrupted profile must not create or replace an identity.
-        back() // Exactly one system Back after measured keyboard dismissal.
-        compose.waitUntil(10_000) {
-            compose.onAllNodesWithText(text(R.string.onb_get_started)).fetchSemanticsNodes().size == 1
+        val diagnostics = OnboardingBackDiagnostics(imeAnimations)
+        try {
+            back(diagnostics) // Exactly one system Back after measured keyboard dismissal.
+            try {
+                compose.waitUntil(10_000) {
+                    compose.onAllNodesWithText(text(R.string.onb_get_started)).fetchSemanticsNodes().size == 1
+                }
+            } catch (failure: Throwable) {
+                diagnostics.request(OnboardingBackDiagnostics.Phase.DESTINATION_WAIT_FAILED)
+                throw failure // Preserve the original exception and deadline, not a diagnostic failure.
+            }
+            compose.onNodeWithText(text(R.string.onb_display_name)).assertDoesNotExist()
+            assertNull(app.repository.core.identity())
+            diagnostics.request(OnboardingBackDiagnostics.Phase.DESTINATION_ASSERTIONS_PASSED)
+        } finally {
+            // Only after the original outcome: bounded best-effort drain, no retry or idle wait.
+            diagnostics.close()
         }
-        compose.onNodeWithText(text(R.string.onb_display_name)).assertDoesNotExist()
-        assertNull(app.repository.core.identity())
         clickText(R.string.onb_get_started)
         clickText(R.string.cta_continue)
         clickText(R.string.backup_remind_later)
