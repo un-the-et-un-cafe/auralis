@@ -59,6 +59,21 @@ class AndroidBackDiagnosticSourceTests(unittest.TestCase):
                           "onBackPressedDispatcher", "setSoftInputMode", "clearFlags", "clearPackageData"):
             self.assertNotIn(forbidden, source)
 
+    def test_round_trip_back_result_does_not_replace_destination_assertions(self):
+        source = (TESTS / "OnboardingImeRoundTripControlTest.kt").read_text()
+        self.assertEqual(source.count("device.pressBack()"), 1)
+        self.assertIn("val backEventObserved = device.pressBack()", source)
+        self.assertIn('"backExpectedEventObserved=$backEventObserved"', source)
+        self.assertNotIn("System Back injection must succeed", source)
+        self.assertNotRegex(source, r"assert\w*\([^\n]*backEventObserved")
+        after_back = source[source.index("val backEventObserved = device.pressBack()") :]
+        self.assertIn("compose.waitUntil(10_000)", after_back)
+        self.assertIn("fetchSemanticsNodes().size == 1", after_back)
+        self.assertIn("assertDoesNotExist()", after_back)
+        self.assertIn("assertEquals(OnboardingStep.Welcome, vm.state.value.step)", after_back)
+        self.assertIn("assertNull(core.identity())", after_back)
+        self.assertIn("WindowManager.LayoutParams.FLAG_SECURE != 0", after_back)
+
     def test_snapshot_has_no_shell_raw_dump_or_idle_wait(self):
         source = (TESTS / "OnboardingBackDiagnostics.kt").read_text()
         for forbidden in ("executeShellCommand", "printToLog", "fetchSemanticsNodes(",

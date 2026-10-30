@@ -1,6 +1,7 @@
 package chat.omcp.app
 
 import android.os.SystemClock
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -115,7 +116,10 @@ class OnboardingImeRoundTripControlTest {
                     animation.ready, animation.active, animation.generation, animation.window)
             }
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-            assertTrue("System Back injection must succeed", device.pressBack()) // Exactly once.
+            // pressBack also waits for an accessibility content-change event. A false
+            // result can be that event wait timing out, not proof injection failed.
+            val backEventObserved = device.pressBack() // Exactly once; never retry.
+            Log.i("OnboardingImeControl", "backExpectedEventObserved=$backEventObserved")
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithText(text(R.string.onb_get_started)).fetchSemanticsNodes().size == 1
             }

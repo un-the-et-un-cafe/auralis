@@ -192,3 +192,27 @@ show/hide acknowledgement at API36 as unreliable and recommends observing insets
 Visibility is a concrete observable; it is not proof all future IME work is drained.
 - https://developer.android.com/reference/android/view/inputmethod/InputMethodManager
 - https://developer.android.com/develop/ui/views/touch-and-input/keyboard-input/visibility
+
+## CI45 outcome and return-semantics correction (local)
+
+CI45 on remote head `1519daf7197760bac736b7c88430b49845eee36c` failed.
+Rust, workflow lint, Android build and both iOS jobs passed. Android API31 ran
+37 tests with one failure; API35/API36 each ran 37 with two failures. The new
+round-trip control failed on all three at its newly added `pressBack()==true`
+assertion, before destination assertions. API36 logs show InteractionController's
+1000 ms expected-event timeout. Original API36 smoke timed out at its unchanged
+10-second Welcome wait. API35's original smoke instead raised StaleObjectException
+in UiObject2.getAccessibilityNodeInfo; this increment does not change that failure.
+
+The previous implementation and review incorrectly described the boolean as an
+injection-success verdict. Official UiDevice source invokes sendKeyAndWaitForEvent
+for Back with TYPE_WINDOW_CONTENT_CHANGED. False can indicate that expected-event
+wait timed out; it is not standalone proof that input injection failed. The new
+control now records this boolean as a scalar observation and proceeds to the
+existing exact destination, identity and secure-window assertions. Exceptions still
+propagate. It sends exactly one Back, with no retry or deadline change. The original
+AppSmokeTest is byte-identical. This corrects the experimental harness, not production
+navigation; the control's actual destination result remains unvalidated.
+
+Official source (implementation semantics, not proof of delivery on any one run):
+https://android.googlesource.com/platform/frameworks/support/+/6282021737797e63ee9f2707aa4740edcf24e4e4/test/uiautomator/uiautomator/src/main/java/androidx/test/uiautomator/UiDevice.java
