@@ -38,6 +38,11 @@ internal class ImeAnimationObserver(private val application: Application) :
         )
     }
 
+    // Diagnostic-only main-thread lookup: never wait on ActivityScenario or guess
+    // a window when recreation temporarily leaves zero/multiple resumed activities.
+    fun resumedActivity(): MainActivity? = probes.keys.filterIsInstance<MainActivity>()
+        .singleOrNull { it.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED }
+
     data class Snapshot(val ready: Boolean, val active: Boolean, val generation: Long, val window: Any?)
 
     private fun install(activity: Activity) {
